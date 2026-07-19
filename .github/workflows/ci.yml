@@ -10,18 +10,27 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with: {version: "0.8.3", enable-cache: true}
-      - run: uv sync --frozen
-      - run: uv run ruff check .
-      - run: uv run mypy src
-      - run: uv run pytest --cov=vectorless_rag --cov-report=term-missing
-      - run: uv run alembic upgrade head --sql > /tmp/migration.sql
+      - name: Install
+        run: make install
+      - name: Lint
+        run: make lint
+      - name: Typecheck
+        run: make typecheck
+      - name: Test
+        run: make test
+      - name: Check workflow syntax
+        run: make workflow-check
+      - name: Check migrations
+        run: make migration-check
 
   deployment:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
-      - run: docker compose config --quiet
-      - run: helm lint deploy/helm/vectorless-rag
-      - run: helm template test deploy/helm/vectorless-rag > /tmp/rendered.yaml
-      - run: docker build -t vectorless-rag:test .
+      - name: Validate Compose
+        run: make compose-check ENV_FILE=.env.example
+      - name: Validate Helm
+        run: make helm-check
+      - name: Build image
+        run: make docker-build

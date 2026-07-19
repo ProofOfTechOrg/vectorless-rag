@@ -4,6 +4,7 @@
 - {name: CLICKHOUSE_URL, value: "http://{{ include "vectorless-rag.clickhouseHost" . }}:{{ .Values.clickhouse.httpPort }}"}
 - {name: CLICKHOUSE_MIGRATION_URL, value: "clickhouse://{{ include "vectorless-rag.clickhouseHost" . }}:{{ .Values.clickhouse.nativePort }}"}
 - {name: CLICKHOUSE_USER, value: clickhouse}
+- {name: CLICKHOUSE_CLUSTER_ENABLED, value: {{ .Values.clickhouse.clusterEnabled | quote }}}
 - name: CLICKHOUSE_PASSWORD
   valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: clickhouse-password}}
 - {name: REDIS_HOST, value: {{ include "vectorless-rag.redisHost" . | quote }}}

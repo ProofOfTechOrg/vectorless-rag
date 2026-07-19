@@ -6,6 +6,8 @@ the expected route, document/page locators or SQL properties, and whether refusa
 `evaluation/release-v1.jsonl` contains these 85 deterministic cases, built from the local corpus
 by `scripts/build_evaluation_dataset.py`. `scripts/seed_evaluation.py` validates category counts
 before uploading it to Langfuse. Page expectations should be labeled after the ten-paper pilot.
+Use `make evaluation-build` to rebuild the file and `make evaluation-seed` to upload it through
+the configured API container. See the [command reference](commands.md) for overrides.
 
 Release requires all SQL attack tests to pass, every citation to resolve, route accuracy >= 90%,
 SQL answer accuracy >= 95%, pilot citation validity >= 90%, and zero unsupported claims in

@@ -18,10 +18,8 @@ start ingestion until an operator calls the synchronization endpoint with an API
 the `admin:ingest` scope:
 
 ```bash
-curl -X POST http://localhost:8000/v1/admin/ingestion/sync \
-  -H "X-API-Key: $VECTORLESS_RAG_ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"force": false}'
+export VECTORLESS_RAG_ADMIN_KEY=vrag_...
+make sync-corpus
 ```
 
 Synchronization scans only PDFs directly inside `ARXIV_PDF_DIR`; it does not recurse into
@@ -46,7 +44,7 @@ immediately; uploaded files do not require a subsequent directory sync.
 ## Pilot gate
 
 The default `PILOT_DOCUMENT_LIMIT=10` and `ALLOW_FULL_CORPUS_INDEX=false` enforce the first
-rollout. Run `vectorless-rag pilot-report` after all ten jobs reach terminal status. Review:
+rollout. Run `make pilot-report` after all ten jobs reach terminal status. Review:
 
 - extraction quality and unsupported diagnostics;
 - retrieval/citation evaluation scores;
@@ -65,7 +63,7 @@ sync again. Jobs remain resumable and failures are quarantined as `failed`/`unsu
 Create the first Vectorless RAG API key inside the running API container:
 
 ```bash
-docker compose exec api vectorless-rag bootstrap-key --name operator
+make bootstrap-key NAME=operator
 ```
 
 This invokes the service CLI inside the container, creates an API-key record named `operator`,
@@ -77,23 +75,21 @@ manager and pass it to API requests through the `X-API-Key` header.
 Create a least-privilege key by selecting scopes explicitly:
 
 ```bash
-docker compose exec api vectorless-rag bootstrap-key \
-  --name chat-client \
-  --scopes chat,documents:read
+make bootstrap-key NAME=chat-client SCOPES=chat,documents:read
 ```
 
 For non-interactive capture, disable Compose's pseudo-TTY:
 
 ```bash
 VECTORLESS_RAG_ADMIN_KEY="$(
-  docker compose exec -T api vectorless-rag bootstrap-key --name operator
+  make --no-print-directory bootstrap-key NAME=operator
 )"
 ```
 
-`API_KEY_PEPPER` is loaded from `.env` and participates in every stored key hash. Generate it
-before creating the first key, for example with `openssl rand -hex 32`, and never change it while
-keys remain active. Losing a plaintext key requires creating a replacement; it cannot be recovered
-from the database. Rotate by creating a replacement, updating clients, then setting the old
+`API_KEY_PEPPER` is loaded from `.env` and participates in every stored key hash. Generate it with
+`make secret-api-pepper` before creating the first key, and never change it while keys remain
+active. Losing a plaintext key requires creating a replacement; it cannot be recovered from the
+database. Rotate by creating a replacement, updating clients, then setting the old
 `agent.api_keys.disabled` flag through an audited operator procedure. Running `bootstrap-key`
 again creates another key; it does not replace or disable earlier keys.
 

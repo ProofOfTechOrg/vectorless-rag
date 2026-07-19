@@ -15,7 +15,7 @@ from vectorless_rag.db import Database
 from vectorless_rag.ingestion import build_pilot_report
 from vectorless_rag.models import ApiKey, IngestionJob
 
-app = typer.Typer(no_args_is_help=True)
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
 @app.command("migrate")

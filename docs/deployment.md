@@ -10,8 +10,7 @@ Compose automatically reads `.env` from the project directory. Start from the su
 and restrict access because it contains credentials:
 
 ```bash
-cp .env.example .env
-chmod 600 .env
+make env
 ```
 
 Replace every `change-me` value before exposing the services. The default PDF host directory is
@@ -36,8 +35,8 @@ the single source of truth and prevents development credentials from being selec
 | `DEEPSEEK_INPUT_COST_PER_MILLION_USD`, `DEEPSEEK_OUTPUT_COST_PER_MILLION_USD` | Optional; may be empty | Optional, but required for projected pilot spend |
 | `ARXIV_PDF_HOST_DIR`, `PILOT_DOCUMENT_LIMIT`, `ALLOW_FULL_CORPUS_INDEX` | Required; keep the pilot defaults initially | Required; enabling the full corpus still requires pilot approval |
 | `API_KEY_PEPPER` | Required before running `bootstrap-key`; a development value works locally | Required; generate a strong secret and keep it stable |
-| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `REDIS_PASSWORD` | Required for the bundled stack; development values are acceptable locally | Required and must be unique strong credentials when bundled services are used |
-| `POSTGRES_PORT`, `MINIO_CONSOLE_PORT` | Required; template ports are acceptable | Required; expose according to the deployment network policy |
+| `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUSE_CLUSTER_ENABLED`, `REDIS_PASSWORD` | Required for the bundled stack; keep ClickHouse clustering disabled for the supplied single-node service | Required; use unique strong credentials and match the clustering flag to the ClickHouse topology |
+| `POSTGRES_PORT`, `MINIO_CONSOLE_PORT`, `CLICKHOUSE_HTTP_PORT`, `CLICKHOUSE_NATIVE_PORT` | Required; template ports are acceptable when available | Required; expose according to the deployment network policy |
 | `LANGFUSE_DB_PASSWORD`, `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`, `NEXTAUTH_URL` | Required to run Langfuse; generated secrets are recommended | Required; generate all secrets, use the public HTTPS URL, and keep encryption values stable |
 | `LANGFUSE_INIT_ORG_ID`, `LANGFUSE_INIT_PROJECT_ID`, `LANGFUSE_INIT_PROJECT_PUBLIC_KEY`, `LANGFUSE_INIT_PROJECT_SECRET_KEY` | Required for headless project/API-key initialization; project keys may be empty only when configuring the project interactively | Required for this service's tracing; use stable deployment-specific values |
 | `LANGFUSE_INIT_ORG_NAME`, `LANGFUSE_INIT_PROJECT_NAME` | Optional descriptions, but must remain defined | Optional descriptions, but must remain defined |
@@ -50,7 +49,7 @@ than a Compose `.env` file.
 Then recreate the two application services:
 
 ```bash
-docker compose up -d --force-recreate api worker
+make restart-app
 ```
 
 `ARXIV_PDF_DIR` is fixed to the container path `/corpus`; `ARXIV_PDF_HOST_DIR` controls its host
@@ -78,8 +77,7 @@ organization and project names are optional. The public and secret values are in
 identifiers, not a mathematical key pair. Generate suitable values before placing them in `.env`:
 
 ```bash
-printf 'LANGFUSE_INIT_PROJECT_PUBLIC_KEY=lf_pk_%s\n' "$(openssl rand -hex 32)"
-printf 'LANGFUSE_INIT_PROJECT_SECRET_KEY=lf_sk_%s\n' "$(openssl rand -hex 32)"
+make secrets-langfuse
 ```
 
 To also create the first UI owner without interactive signup, set the initial user's email and
@@ -97,13 +95,8 @@ already initialized project, use the credentials shown in Langfuse project setti
 `LANGFUSE_INIT_*` values does not rotate existing resources.
 
 Langfuse also requires deployment secrets that are separate from headless resource initialization.
-Generate and set these `.env` values rather than using the development defaults:
-
-```bash
-printf 'LANGFUSE_NEXTAUTH_SECRET=%s\n' "$(openssl rand -hex 32)"
-printf 'LANGFUSE_SALT=%s\n' "$(openssl rand -hex 32)"
-printf 'LANGFUSE_ENCRYPTION_KEY=%s\n' "$(openssl rand -hex 32)"
-```
+The `make secrets-langfuse` output includes these values and a Compose-safe initial-user password;
+review and paste the assignments into `.env` rather than using the development defaults.
 
 `LANGFUSE_ENCRYPTION_KEY` must be exactly 64 hexadecimal characters. Also set a strong
 `LANGFUSE_DB_PASSWORD` and keep all persisted secret values stable. Do not double-quote
@@ -112,7 +105,7 @@ printf 'LANGFUSE_ENCRYPTION_KEY=%s\n' "$(openssl rand -hex 32)"
 After changing initialization values, recreate Langfuse and the application processes:
 
 ```bash
-docker compose up -d --force-recreate langfuse-web api worker
+make restart-observability
 ```
 
 ### Existing Compose installations
