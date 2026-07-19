@@ -1,0 +1,79 @@
+[project]
+name = "vectorless-rag"
+version = "0.1.0"
+description = "Self-hosted vectorless RAG over a local ArXiv corpus"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "alembic==1.16.4",
+  "boto3==1.39.12",
+  "fastapi==0.116.1",
+  "httpx==0.28.1",
+  "langchain==0.3.27",
+  "langchain-deepseek==0.1.4",
+  "langfuse==3.2.1",
+  "langgraph==0.6.5",
+  "langgraph-checkpoint-postgres==2.0.23",
+  "litellm==1.74.7",
+  "orjson==3.11.1",
+  "psycopg[binary,pool]==3.2.9",
+  "pydantic==2.11.7",
+  "pydantic-settings==2.10.1",
+  "pymupdf==1.26.4",
+  "pypdf2==3.0.1",
+  "python-dotenv==1.1.1",
+  "python-multipart==0.0.20",
+  "pyyaml==6.0.2",
+  "sqlalchemy[asyncio]==2.0.41",
+  "sqlglot==27.0.0",
+  "sse-starlette==2.4.1",
+  "tenacity==9.1.2",
+  "tiktoken==0.9.0",
+  "typer==0.16.0",
+  "uvicorn[standard]==0.35.0",
+]
+
+[project.scripts]
+vectorless-rag = "vectorless_rag.cli:app"
+
+[dependency-groups]
+dev = [
+  "mypy==1.17.0",
+  "pytest==8.4.1",
+  "pytest-asyncio==1.1.0",
+  "pytest-cov==6.2.1",
+  "ruff==0.12.4",
+  "types-boto3[s3]==1.39.12",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vectorless_rag"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers --strict-config"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["integration: requires local PostgreSQL and migrated schema"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
+ignore = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+packages = ["vectorless_rag"]
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["langfuse.*", "langgraph.*", "boto3.*", "botocore.*", "fitz.*"]
+ignore_missing_imports = true

@@ -1,0 +1,191 @@
+{{- if .Values.postgresql.bundled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vectorless-rag.fullname" . }}-postgres-init
+data:
+  00-init.sh: |
+    #!/bin/sh
+    set -eu
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<SQL
+      CREATE ROLE rag_owner LOGIN PASSWORD '$RAG_OWNER_PASSWORD';
+      CREATE ROLE rag_app LOGIN PASSWORD '$RAG_APP_PASSWORD';
+      CREATE ROLE rag_reader LOGIN PASSWORD '$RAG_READER_PASSWORD';
+      CREATE ROLE langfuse LOGIN PASSWORD '$LANGFUSE_DB_PASSWORD';
+      CREATE DATABASE rag OWNER rag_owner;
+      CREATE DATABASE langfuse OWNER langfuse;
+    SQL
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname rag <<SQL
+      GRANT CONNECT ON DATABASE rag TO rag_app, rag_reader;
+      GRANT CREATE ON SCHEMA public TO rag_app;
+    SQL
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "vectorless-rag.fullname" . }}-postgres
+spec:
+  serviceName: {{ include "vectorless-rag.fullname" . }}-postgres
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/component: postgres, app.kubernetes.io/instance: {{ .Release.Name }}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: postgres, app.kubernetes.io/instance: {{ .Release.Name }}}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17.5-alpine
+          ports: [{name: postgres, containerPort: 5432}]
+          env:
+            - {name: POSTGRES_USER, value: postgres}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: postgres-password}}
+            - name: RAG_OWNER_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: rag-owner-password}}
+            - name: RAG_APP_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: rag-app-password}}
+            - name: RAG_READER_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: rag-reader-password}}
+            - name: LANGFUSE_DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: langfuse-db-password}}
+          readinessProbe: {exec: {command: [pg_isready, -U, postgres]}, periodSeconds: 5}
+          livenessProbe: {exec: {command: [pg_isready, -U, postgres]}, initialDelaySeconds: 20, periodSeconds: 10}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: init, mountPath: /docker-entrypoint-initdb.d}
+      volumes:
+        - name: init
+          configMap: {name: {{ include "vectorless-rag.fullname" . }}-postgres-init, defaultMode: 0755}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: {{ .Values.postgresql.storage }}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "vectorless-rag.fullname" . }}-postgres}
+spec:
+  clusterIP: None
+  selector: {app.kubernetes.io/component: postgres, app.kubernetes.io/instance: {{ .Release.Name }}}
+  ports: [{name: postgres, port: 5432}]
+{{- end }}
+{{- if .Values.clickhouse.bundled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: {{ include "vectorless-rag.fullname" . }}-clickhouse}
+spec:
+  serviceName: {{ include "vectorless-rag.fullname" . }}-clickhouse
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/component: clickhouse, app.kubernetes.io/instance: {{ .Release.Name }}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: clickhouse, app.kubernetes.io/instance: {{ .Release.Name }}}
+    spec:
+      securityContext: {fsGroup: 101}
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:25.6.3.116
+          ports: [{name: http, containerPort: 8123}, {name: native, containerPort: 9000}]
+          env:
+            - {name: CLICKHOUSE_USER, value: clickhouse}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: clickhouse-password}}
+          readinessProbe: {httpGet: {path: /ping, port: http}, periodSeconds: 5}
+          volumeMounts: [{name: data, mountPath: /var/lib/clickhouse}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: {{ .Values.clickhouse.storage }}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "vectorless-rag.fullname" . }}-clickhouse}
+spec:
+  clusterIP: None
+  selector: {app.kubernetes.io/component: clickhouse, app.kubernetes.io/instance: {{ .Release.Name }}}
+  ports: [{name: http, port: 8123}, {name: native, port: 9000}]
+{{- end }}
+{{- if .Values.redis.bundled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: {{ include "vectorless-rag.fullname" . }}-redis}
+spec:
+  serviceName: {{ include "vectorless-rag.fullname" . }}-redis
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/component: redis, app.kubernetes.io/instance: {{ .Release.Name }}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: redis, app.kubernetes.io/instance: {{ .Release.Name }}}
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.4.5-alpine
+          command: [sh, -c, 'exec redis-server --requirepass "$REDIS_PASSWORD" --maxmemory-policy noeviction']
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: redis-password}}
+          ports: [{name: redis, containerPort: 6379}]
+          readinessProbe: {tcpSocket: {port: redis}, periodSeconds: 5}
+          volumeMounts: [{name: data, mountPath: /data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: {{ .Values.redis.storage }}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "vectorless-rag.fullname" . }}-redis}
+spec:
+  clusterIP: None
+  selector: {app.kubernetes.io/component: redis, app.kubernetes.io/instance: {{ .Release.Name }}}
+  ports: [{name: redis, port: 6379}]
+{{- end }}
+{{- if .Values.s3.bundled }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: {{ include "vectorless-rag.fullname" . }}-minio}
+spec:
+  serviceName: {{ include "vectorless-rag.fullname" . }}-minio
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/component: minio, app.kubernetes.io/instance: {{ .Release.Name }}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/component: minio, app.kubernetes.io/instance: {{ .Release.Name }}}
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+          command: [sh, -c, 'mkdir -p /data/vectorless-rag /data/langfuse && exec minio server /data']
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: s3-access-key}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: s3-secret-key}}
+          ports: [{name: s3, containerPort: 9000}]
+          readinessProbe: {httpGet: {path: /minio/health/ready, port: s3}, periodSeconds: 5}
+          volumeMounts: [{name: data, mountPath: /data}]
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: {{ .Values.s3.storage }}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "vectorless-rag.fullname" . }}-minio}
+spec:
+  clusterIP: None
+  selector: {app.kubernetes.io/component: minio, app.kubernetes.io/instance: {{ .Release.Name }}}
+  ports: [{name: s3, port: 9000}]
+{{- end }}
+

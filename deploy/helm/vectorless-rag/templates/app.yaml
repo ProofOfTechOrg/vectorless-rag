@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vectorless-rag.fullname" . }}-api
+  labels: {{- include "vectorless-rag.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {app.kubernetes.io/component: api, app.kubernetes.io/instance: {{ .Release.Name }}}
+  template:
+    metadata:
+      labels:
+        {{- include "vectorless-rag.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001}
+      initContainers:
+        - name: migrate
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["vectorless-rag", "migrate"]
+          env: {{- include "vectorless-rag.appEnv" . | nindent 12 }}
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{name: http, containerPort: 8000}]
+          env: {{- include "vectorless-rag.appEnv" . | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /health/ready, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources.api | nindent 12 }}
+          volumeMounts:
+            - {name: corpus, mountPath: {{ .Values.corpus.mountPath }}, readOnly: true}
+            - {name: work, mountPath: /workspaces}
+      volumes:
+        - name: corpus
+          persistentVolumeClaim: {claimName: {{ required "corpus.existingClaim is required" .Values.corpus.existingClaim }}}
+        - name: work
+          emptyDir: {sizeLimit: 10Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vectorless-rag.fullname" . }}-worker
+  labels: {{- include "vectorless-rag.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.workerReplicaCount }}
+  selector:
+    matchLabels: {app.kubernetes.io/component: worker, app.kubernetes.io/instance: {{ .Release.Name }}}
+  template:
+    metadata:
+      labels:
+        {{- include "vectorless-rag.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001}
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "vectorless_rag.worker"]
+          env: {{- include "vectorless-rag.appEnv" . | nindent 12 }}
+          resources: {{- toYaml .Values.resources.worker | nindent 12 }}
+          volumeMounts:
+            - {name: corpus, mountPath: {{ .Values.corpus.mountPath }}, readOnly: true}
+            - {name: work, mountPath: /workspaces}
+      volumes:
+        - name: corpus
+          persistentVolumeClaim: {claimName: {{ .Values.corpus.existingClaim }}}
+        - name: work
+          emptyDir: {sizeLimit: 20Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vectorless-rag.fullname" . }}-api
+  labels: {{- include "vectorless-rag.labels" . | nindent 4 }}
+spec:
+  selector: {app.kubernetes.io/component: api, app.kubernetes.io/instance: {{ .Release.Name }}}
+  ports: [{name: http, port: {{ .Values.service.port }}, targetPort: http}]
+
+{{- define "vectorless-rag.appEnv" }}
+- {name: ENVIRONMENT, value: "kubernetes"}
+- {name: RELEASE, value: {{ .Values.release | quote }}}
+- name: DATABASE_URL
+  valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: database-url}}
+- name: DATABASE_ADMIN_URL
+  valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: database-admin-url}}
+- name: SQL_DATABASE_URL
+  valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: sql-database-url}}
+- name: DEEPSEEK_API_KEY
+  valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: deepseek-api-key}}
+- {name: DEEPSEEK_MODEL, value: {{ .Values.deepseekModel | quote }}}
+- {name: DEEPSEEK_INPUT_COST_PER_MILLION_USD, value: {{ .Values.deepseekInputCostPerMillionUsd | quote }}}
+- {name: DEEPSEEK_OUTPUT_COST_PER_MILLION_USD, value: {{ .Values.deepseekOutputCostPerMillionUsd | quote }}}
+- {name: PAGEINDEX_MODEL, value: {{ .Values.pageindexModel | quote }}}
+- {name: ARXIV_PDF_DIR, value: {{ .Values.corpus.mountPath | quote }}}
+- {name: OBJECT_STORE_ENDPOINT, value: {{ include "vectorless-rag.s3Endpoint" . | quote }}}
+- name: OBJECT_STORE_ACCESS_KEY
+  valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: s3-access-key}}
+- name: OBJECT_STORE_SECRET_KEY
+  valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: s3-secret-key}}
+- {name: OBJECT_STORE_BUCKET, value: vectorless-rag}
+- {name: LANGFUSE_HOST, value: "http://{{ include "vectorless-rag.fullname" . }}-langfuse:3000"}
+- name: LANGFUSE_PUBLIC_KEY
+  valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: langfuse-public-key}}
+- name: LANGFUSE_SECRET_KEY
+  valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: langfuse-secret-key}}
+- name: API_KEY_PEPPER
+  valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: api-key-pepper}}
+- {name: PILOT_DOCUMENT_LIMIT, value: {{ .Values.pilotDocumentLimit | quote }}}
+- {name: ALLOW_FULL_CORPUS_INDEX, value: {{ .Values.allowFullCorpusIndex | quote }}}
+{{- end }}

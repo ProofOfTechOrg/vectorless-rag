@@ -1,0 +1,27 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: {version: "0.8.3", enable-cache: true}
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run mypy src
+      - run: uv run pytest --cov=vectorless_rag --cov-report=term-missing
+      - run: uv run alembic upgrade head --sql > /tmp/migration.sql
+
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: docker compose config --quiet
+      - run: helm lint deploy/helm/vectorless-rag
+      - run: helm template test deploy/helm/vectorless-rag > /tmp/rendered.yaml
+      - run: docker build -t vectorless-rag:test .

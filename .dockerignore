@@ -1,0 +1,7 @@
+.git
+.venv
+arxiv-pdfs
+pageindex-workspaces
+__pycache__
+.pytest_cache
+

@@ -1,0 +1,3 @@
+The API service is {{ include "vectorless-rag.fullname" . }}-api.
+Create secret {{ .Values.existingSecret }} with the keys documented in docs/deployment.md.
+Full corpus ingestion remains disabled until allowFullCorpusIndex is explicitly set to true.
