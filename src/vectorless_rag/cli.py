@@ -5,10 +5,10 @@ import json
 from typing import Annotated
 
 import typer
+from alembic.config import Config
 from sqlalchemy import select
 
 from alembic import command
-from alembic.config import Config
 from vectorless_rag.auth import generate_api_key, hash_api_key, validate_scopes
 from vectorless_rag.config import get_settings
 from vectorless_rag.db import Database

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import enum
 import uuid
 from datetime import date, datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
@@ -28,7 +28,7 @@ class Base(DeclarativeBase):
     pass
 
 
-class DocumentStatus(str, enum.Enum):
+class DocumentStatus(StrEnum):
     discovered = "discovered"
     queued = "queued"
     indexing = "indexing"
@@ -37,7 +37,7 @@ class DocumentStatus(str, enum.Enum):
     failed = "failed"
 
 
-class JobStatus(str, enum.Enum):
+class JobStatus(StrEnum):
     queued = "queued"
     running = "running"
     completed = "completed"
@@ -45,7 +45,7 @@ class JobStatus(str, enum.Enum):
     unsupported = "unsupported"
 
 
-class RunRoute(str, enum.Enum):
+class RunRoute(StrEnum):
     sql = "sql"
     documents = "documents"
     hybrid = "hybrid"

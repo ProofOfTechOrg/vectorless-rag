@@ -5,7 +5,7 @@ import json
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, cast
 
-from langfuse import Langfuse  # type: ignore[attr-defined]
+from langfuse import Langfuse
 
 from vectorless_rag.config import Settings
 
@@ -61,8 +61,9 @@ class Observability:
     ) -> AbstractContextManager[Any]:
         if self.client is None:
             return nullcontext()
-        context = self.client.start_as_current_span(
+        context = self.client.start_as_current_observation(
             name=name,
+            as_type="span",
             trace_context={"trace_id": trace_id},
             input=mask_payload(input),
             metadata=mask_payload(metadata or {}),

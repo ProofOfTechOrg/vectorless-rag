@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import ORJSONResponse, Response
+from fastapi.responses import Response
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import and_, desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -94,7 +94,6 @@ app = FastAPI(
     title="Vectorless ArXiv RAG",
     version=__version__,
     description="API-only reasoning-based RAG with PageIndex and guarded Text-to-SQL.",
-    default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
 

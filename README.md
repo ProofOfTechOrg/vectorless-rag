@@ -74,6 +74,22 @@ The top-level graph follows:
 
 PDF text is always treated as untrusted content, never as instructions.
 
+## Questions this system is designed to answer
+
+The exact answers depend on the PDFs you provide, but the service is built for questions that require more than finding a paragraph with similar wording:
+
+| Example question | Route | Why it is difficult |
+| --- | --- | --- |
+| “Across the indexed papers published from 2023 through 2025, compare how retrieval faithfulness is defined and measured. Where do the reported metrics disagree? Cite every definition and result by page.” | Documents | It must identify several relevant papers, follow their internal structure, reconcile different terminology, and preserve page-level provenance for each comparison. |
+| “Which papers by a given author or on a given topic were submitted after 2024, and which of those report methods that avoid embeddings? Compare their stated accuracy, latency, and cost tradeoffs.” | Hybrid | SQL applies exact catalog constraints first; PageIndex then reads the selected papers to answer the substantive methodological part. |
+| “Reconstruct the experimental setup, baselines, ablations, main findings, and limitations of this paper. Clearly separate author claims from measured results.” | Documents | The evidence is usually scattered across methods, results, appendices, and limitations rather than contained in one chunk. |
+| “Which indexed papers evaluate on HotpotQA, and how do their retrieval strategies, evaluation protocols, and reported failure modes differ?” | Hybrid | Dataset mentions help identify candidate papers, but a defensible comparison requires reading multiple sections across multiple documents. |
+| “Paper A claims an improvement over Paper B. Are the results actually comparable given their datasets, baseline definitions, metrics, and experimental settings?” | Documents | It requires cross-paper reasoning and must avoid treating differently defined numbers as directly comparable. |
+| “How many documents are ready, failed, or unsupported, and when was each status most recently updated?” | SQL | The answer is an aggregate over the curated ingestion-summary view, not a semantic PDF search, and includes a query audit ID. |
+| “What did private peer reviewers say about these papers?” | Refusal | Private reviews are not present in the supplied corpus, so the grounded response is an explicit insufficiency result rather than a plausible-sounding answer. |
+
+These examples are deliberately multi-step. The agent can combine exact metadata filtering, catalog aggregation, structure-aware page retrieval, evidence sufficiency checks, and cited synthesis in one request. It is not a general web-search system: claims must be supported by the indexed corpus or the curated catalog views.
+
 ## Included components
 
 - FastAPI with JSON, SSE streaming, health, document, ingestion, thread, and feedback APIs

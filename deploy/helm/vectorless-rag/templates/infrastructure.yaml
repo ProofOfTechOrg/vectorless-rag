@@ -35,7 +35,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:17.5-alpine
+          image: postgres:17.9-alpine
           ports: [{name: postgres, containerPort: 5432}]
           env:
             - {name: POSTGRES_USER, value: postgres}
@@ -88,7 +88,7 @@ spec:
       securityContext: {fsGroup: 101}
       containers:
         - name: clickhouse
-          image: clickhouse/clickhouse-server:25.6.3.116
+          image: clickhouse/clickhouse-server:25.8.28.1
           ports: [{name: http, containerPort: 8123}, {name: native, containerPort: 9000}]
           env:
             - {name: CLICKHOUSE_USER, value: clickhouse}
@@ -126,7 +126,7 @@ spec:
     spec:
       containers:
         - name: redis
-          image: redis:7.4.5-alpine
+          image: redis:7.4.9-alpine
           command: [sh, -c, 'exec redis-server --requirepass "$REDIS_PASSWORD" --maxmemory-policy noeviction']
           env:
             - name: REDIS_PASSWORD
@@ -164,7 +164,7 @@ spec:
     spec:
       containers:
         - name: minio
-          image: minio/minio:RELEASE.2025-07-23T15-54-02Z
+          image: minio/minio:RELEASE.2025-09-07T16-13-09Z
           command: [sh, -c, 'mkdir -p /data/vectorless-rag /data/langfuse && exec minio server /data']
           env:
             - name: MINIO_ROOT_USER
@@ -188,4 +188,3 @@ spec:
   selector: {app.kubernetes.io/component: minio, app.kubernetes.io/instance: {{ .Release.Name }}}
   ports: [{name: s3, port: 9000}]
 {{- end }}
-

@@ -1,5 +1,5 @@
-FROM ghcr.io/astral-sh/uv:0.8.3 AS uv
-FROM python:3.12.11-slim AS runtime
+FROM ghcr.io/astral-sh/uv:0.11.29 AS uv
+FROM python:3.12.13-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 UV_COMPILE_BYTECODE=1
 RUN apt-get update && apt-get install -y --no-install-recommends git libmagic1 && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /uvx /bin/

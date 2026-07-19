@@ -7,9 +7,9 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with: {version: "0.8.3", enable-cache: true}
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with: {version: "0.11.29", enable-cache: true}
       - name: Install
         run: make install
       - name: Lint
@@ -26,8 +26,8 @@ jobs:
   deployment:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
       - name: Validate Compose
         run: make compose-check ENV_FILE=.env.example
       - name: Validate Helm
