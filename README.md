@@ -101,7 +101,7 @@ These examples are deliberately multi-step. The agent can combine exact metadata
 - Self-hosted Langfuse with ClickHouse, Redis, and S3-compatible storage
 - Alembic migrations, Pydantic contracts, SQLAlchemy/psycopg, and SQLGlot SQL policies
 - Docker Compose for a single host and an umbrella Helm chart for Kubernetes
-- Ruff, strict mypy, pytest, Docker, migration, Compose, and Helm checks in GitHub Actions
+- Ruff, strict whole-repository Basedpyright, pytest, Docker, migration, Compose, and Helm checks in GitHub Actions
 
 ## Quick start
 
@@ -248,13 +248,13 @@ make test
 make check
 ```
 
-`make typecheck` runs strict mypy analysis; Pydantic separately validates settings, requests, structured model output, and responses at runtime. `make ci` reproduces the full GitHub Actions validation locally, including the production image build:
+`make typecheck` runs strict Basedpyright analysis over every repository-owned Python file; Pydantic separately validates settings, requests, structured model output, and responses at runtime. `make ci` reproduces the full GitHub Actions validation locally, including the production image build:
 
 ```bash
 make ci
 ```
 
-The CI workflow runs Ruff lint/format checks, strict mypy, pytest with coverage, workflow parsing, offline Alembic rendering, Compose validation, Helm lint/template, and a Docker build. See the [command reference](docs/commands.md) for all lifecycle, operator, evaluation, and secret-generation targets.
+The CI workflow runs Ruff lint/format checks, strict whole-repository Basedpyright, pytest with coverage, workflow parsing, offline Alembic rendering, Compose validation, Helm lint/template, and a Docker build. See the [command reference](docs/commands.md) for all lifecycle, operator, evaluation, and secret-generation targets.
 
 ## Repository layout
 

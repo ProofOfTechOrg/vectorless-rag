@@ -25,12 +25,17 @@ SENSITIVE_KEYS = frozenset(
 
 def mask_payload(value: Any, *, maximum_string: int = 500) -> Any:
     if isinstance(value, dict):
+        payload = cast(dict[object, object], value)
         return {
-            key: "[REDACTED]" if key.lower() in SENSITIVE_KEYS else mask_payload(item)
-            for key, item in value.items()
+            key: (
+                "[REDACTED]"
+                if isinstance(key, str) and key.lower() in SENSITIVE_KEYS
+                else mask_payload(item)
+            )
+            for key, item in payload.items()
         }
     if isinstance(value, list):
-        return [mask_payload(item) for item in value]
+        return [mask_payload(item) for item in cast(list[object], value)]
     if isinstance(value, str) and len(value) > maximum_string:
         digest = hashlib.sha256(value.encode()).hexdigest()
         return {"sha256": digest, "bytes": len(value.encode()), "preview": value[:120]}

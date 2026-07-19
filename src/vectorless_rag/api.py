@@ -5,7 +5,7 @@ import base64
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -67,7 +67,7 @@ def _checkpoint_url(url: str) -> str:
 
 
 @asynccontextmanager
-async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     database = Database(settings)
     sql_engine = make_engine(settings.sql_database_url, pool_size=5)
@@ -179,10 +179,11 @@ async def _execute_chat(
     run.citations = [item.model_dump(mode="json") for item in citations]
     run.insufficient = result.get("insufficient", False)
     run.latency_ms = round((time.monotonic() - started) * 1000)
-    sql_audit_id = uuid.UUID(result["sql_audit_id"]) if result.get("sql_audit_id") else None
+    sql_audit_value = result.get("sql_audit_id")
+    sql_audit_id = uuid.UUID(sql_audit_value) if sql_audit_value else None
     runtime.observability.score(trace_id, "request_success", 1)
     return ChatResponse(
-        answer=run.answer,
+        answer=result["answer"],
         thread_id=thread_id,
         route=route,
         trace_id=trace_id,

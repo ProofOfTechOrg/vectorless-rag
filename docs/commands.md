@@ -2,7 +2,7 @@
 
 The repository Makefile is the supported interface for development, CI, deployment validation,
 Compose lifecycle operations, and routine operator tasks. Run `make help` for the same target list.
-Direct `uv`, Ruff, mypy, pytest, Docker, Helm, Alembic, and service-CLI commands are implementation
+Direct `uv`, Ruff, Basedpyright, pytest, Docker, Helm, Alembic, and service-CLI commands are implementation
 details behind these targets.
 
 Local prerequisites are GNU Make, `uv`, Docker with Compose v2, Helm 3, curl, and OpenSSL. GitHub
@@ -18,7 +18,7 @@ writable global user cache.
 | `make install` | Install the frozen Python development environment |
 | `make format` | Format Python and apply safe Ruff fixes |
 | `make lint` | Check Ruff lint and formatting rules |
-| `make typecheck` | Run strict mypy checks |
+| `make typecheck` | Run strict Basedpyright checks over every repository-owned Python file |
 | `make test` | Run all available tests with coverage; unconfigured integration tests skip |
 | `make test-unit` | Run tests that require no external infrastructure |
 | `make test-integration` | Run PostgreSQL integration tests using exported test database URLs |

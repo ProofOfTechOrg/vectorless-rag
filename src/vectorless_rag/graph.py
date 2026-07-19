@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, TypedDict, cast
+from typing import Any, NotRequired, Required, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
 from pydantic import TypeAdapter
@@ -24,8 +24,22 @@ from vectorless_rag.schemas import (
 from vectorless_rag.sql_guard import DatabaseAdapter, SQLRejected, SQLResult, validate_sql
 
 
-class GraphState(TypedDict, total=False):
-    question: str
+class GraphState(TypedDict):
+    question: Required[str]
+    route: NotRequired[str]
+    route_reason: NotRequired[str]
+    clarification: NotRequired[str]
+    evidence: NotRequired[list[dict[str, Any]]]
+    retrieval: NotRequired[dict[str, Any]]
+    sql_rows: NotRequired[list[dict[str, Any]]]
+    sql_audit_id: NotRequired[str]
+    sql_document_ids: NotRequired[list[str]]
+    answer: NotRequired[str]
+    citations: NotRequired[list[dict[str, Any]]]
+    insufficient: NotRequired[bool]
+
+
+class GraphUpdate(TypedDict, total=False):
     route: str
     route_reason: str
     clarification: str
@@ -37,6 +51,21 @@ class GraphState(TypedDict, total=False):
     answer: str
     citations: list[dict[str, Any]]
     insufficient: bool
+
+
+class GraphResult(TypedDict):
+    route: str
+    answer: str
+    citations: list[dict[str, Any]]
+    insufficient: bool
+    sql_audit_id: NotRequired[str]
+
+
+def _selected_route(state: GraphState) -> str:
+    selected = state.get("route")
+    if selected is None:
+        raise RuntimeError("graph state has no selected route")
+    return selected
 
 
 class GraphRunner:
@@ -61,10 +90,10 @@ class GraphRunner:
         session: AsyncSession,
         request: ChatRequest,
         run: QueryRun,
-    ) -> GraphState:
+    ) -> GraphResult:
         builder: StateGraph[GraphState] = StateGraph(GraphState)
 
-        async def route(state: GraphState) -> GraphState:
+        async def route(state: GraphState) -> GraphUpdate:
             decision = await self.llm.structured(
                 RouteDecision,
                 """Route the request: sql for catalog counts/lists/status, documents for paper
@@ -79,7 +108,7 @@ when essential intent is missing. Do not answer the question.""",
                 "clarification": decision.clarification_question or "",
             }
 
-        async def sql_node(state: GraphState) -> GraphState:
+        async def sql_node(state: GraphState) -> GraphUpdate:
             result, audit_id = await self._run_sql(session, run, state["question"])
             document_ids: list[str] = []
             for row in result.rows:
@@ -102,7 +131,7 @@ when essential intent is missing. Do not answer the question.""",
                 "evidence": [evidence.model_dump(mode="json")],
             }
 
-        async def documents_node(state: GraphState) -> GraphState:
+        async def documents_node(state: GraphState) -> GraphUpdate:
             restrict = [uuid.UUID(value) for value in state.get("sql_document_ids", [])]
             result = await self.retriever.retrieve(
                 session,
@@ -111,7 +140,9 @@ when essential intent is missing. Do not answer the question.""",
                 restrict_ids=restrict or None,
             )
             await self._audit_retrieval(session, run, result)
-            existing = state.get("evidence", []) if state["route"] == RunRoute.hybrid.value else []
+            existing = (
+                state.get("evidence", []) if _selected_route(state) == RunRoute.hybrid.value else []
+            )
             return {
                 "evidence": existing + [item.model_dump(mode="json") for item in result.evidence],
                 "retrieval": {
@@ -123,8 +154,9 @@ when essential intent is missing. Do not answer the question.""",
                 "insufficient": not result.sufficient,
             }
 
-        async def synthesize(state: GraphState) -> GraphState:
-            if state["route"] == RunRoute.clarify.value:
+        async def synthesize(state: GraphState) -> GraphUpdate:
+            selected_route = _selected_route(state)
+            if selected_route == RunRoute.clarify.value:
                 return {
                     "answer": state.get("clarification") or "Please clarify what you want to know.",
                     "citations": [],
@@ -132,7 +164,7 @@ when essential intent is missing. Do not answer the question.""",
                 }
             evidence = TypeAdapter(list[Evidence]).validate_python(state.get("evidence", []))
             if not evidence or (
-                state["route"] in {RunRoute.documents.value, RunRoute.hybrid.value}
+                selected_route in {RunRoute.documents.value, RunRoute.hybrid.value}
                 and state.get("insufficient", False)
             ):
                 return {
@@ -187,12 +219,15 @@ when essential intent is missing. Do not answer the question.""",
                         )
                     )
                 else:
+                    sql_audit_id = state.get("sql_audit_id")
+                    if sql_audit_id is None:
+                        raise RuntimeError("SQL evidence has no audit identifier")
                     citations.append(
                         Citation(
                             source_type="sql",
                             source_id=item.source_id,
                             title=item.title,
-                            sql_audit_id=uuid.UUID(state["sql_audit_id"]),
+                            sql_audit_id=uuid.UUID(sql_audit_id),
                         )
                     )
             if not citations and not synthesis.insufficient:
@@ -208,7 +243,7 @@ when essential intent is missing. Do not answer the question.""",
             }
 
         def after_route(state: GraphState) -> str:
-            return state["route"]
+            return _selected_route(state)
 
         builder.add_node("route", route)
         builder.add_node("sql", sql_node)
@@ -227,7 +262,7 @@ when essential intent is missing. Do not answer the question.""",
         )
 
         def after_sql(state: GraphState) -> str:
-            return "documents" if state["route"] == RunRoute.hybrid.value else "synthesize"
+            return "documents" if _selected_route(state) == RunRoute.hybrid.value else "synthesize"
 
         builder.add_conditional_edges(
             "sql", after_sql, {"documents": "documents", "synthesize": "synthesize"}
@@ -244,7 +279,7 @@ when essential intent is missing. Do not answer the question.""",
         ):
             initial: GraphState = {"question": request.message}
             result = await cast(Any, graph).ainvoke(initial, config=cast(Any, config))
-        return cast(GraphState, result)
+        return TypeAdapter(GraphResult).validate_python(result)
 
     async def _run_sql(
         self, session: AsyncSession, run: QueryRun, question: str

@@ -7,6 +7,7 @@ import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal, Protocol, cast
 
 import fitz
 from sqlalchemy import func, select
@@ -32,6 +33,10 @@ class UnsupportedPDF(ValueError):
     pass
 
 
+class _TextPage(Protocol):
+    def get_text(self, option: Literal["text"]) -> str: ...
+
+
 def arxiv_id_from_filename(filename: str) -> str | None:
     match = ARXIV_FILENAME.match(Path(filename).name)
     return match.group("id") if match else None
@@ -53,7 +58,10 @@ def sha256_bytes(data: bytes) -> str:
 def extract_first_pages(data: bytes, count: int = 3) -> tuple[str, int, float]:
     try:
         with fitz.open(stream=data, filetype="pdf") as pdf:
-            texts = [pdf[index].get_text("text") for index in range(min(count, len(pdf)))]
+            texts = [
+                cast(_TextPage, pdf[index]).get_text("text")
+                for index in range(min(count, len(pdf)))
+            ]
             page_count = len(pdf)
     except Exception as exc:
         raise UnsupportedPDF(f"PDF parsing failed: {exc}") from exc

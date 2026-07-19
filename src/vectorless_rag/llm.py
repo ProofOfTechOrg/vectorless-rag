@@ -7,7 +7,7 @@ import openai
 from langchain_core.runnables import RunnableConfig
 from langchain_deepseek import ChatDeepSeek
 from langfuse.langchain import CallbackHandler
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
 from vectorless_rag.config import Settings
@@ -26,7 +26,7 @@ class DeepSeekLLM:
         if settings.deepseek_api_key is None:
             raise RuntimeError("DEEPSEEK_API_KEY is required for LLM operations")
         self.settings = settings
-        self.api_key = settings.deepseek_api_key.get_secret_value()
+        self.api_key: SecretStr = settings.deepseek_api_key
         self.callback = (
             CallbackHandler()
             if settings.langfuse_public_key and settings.langfuse_secret_key
@@ -34,18 +34,16 @@ class DeepSeekLLM:
         )
 
     def _client(self, thinking: bool) -> ChatDeepSeek:
-        extra_body = {
+        extra_body: dict[str, object] = {
             "thinking": {"type": "enabled" if thinking else "disabled"},
         }
-        kwargs: dict[str, object] = {
-            "model": self.settings.deepseek_model,
-            "api_key": self.api_key,
-            "max_retries": 0,
-            "extra_body": extra_body,
-        }
-        if thinking:
-            kwargs["reasoning_effort"] = "high"
-        return ChatDeepSeek(**kwargs)  # type: ignore[arg-type]
+        return ChatDeepSeek(
+            model=self.settings.deepseek_model,
+            api_key=self.api_key,
+            max_retries=0,
+            extra_body=extra_body,
+            reasoning_effort="high" if thinking else None,
+        )
 
     @retry(
         stop=stop_after_attempt(3),

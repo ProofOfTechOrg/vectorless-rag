@@ -9,7 +9,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Protocol, cast
 
 import fitz
 
@@ -18,6 +18,10 @@ from vectorless_rag.config import Settings
 
 class PageIndexError(RuntimeError):
     pass
+
+
+class _TextPage(Protocol):
+    def get_text(self, option: Literal["text"]) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -43,9 +47,9 @@ def _walk_nodes(raw_nodes: list[dict[str, Any]]) -> list[ArtifactNode]:
                 page_end=max(start, end),
             )
         )
-        children = node.get("nodes") or node.get("children") or []
+        children: object = node.get("nodes") or node.get("children") or []
         if isinstance(children, list):
-            result.extend(_walk_nodes(children))
+            result.extend(_walk_nodes(cast(list[dict[str, Any]], children)))
     return result
 
 
@@ -56,11 +60,11 @@ def normalize_artifact(
         nodes = raw_tree
         description = ""
     else:
-        nodes = raw_tree.get("structure") or raw_tree.get("nodes") or []
+        nodes: object = raw_tree.get("structure") or raw_tree.get("nodes") or []
         description = str(raw_tree.get("doc_description") or "")
     if not isinstance(nodes, list):
         raise PageIndexError("PageIndex artifact has no valid node list")
-    normalized_nodes = [node.__dict__ for node in _walk_nodes(nodes)]
+    normalized_nodes = [node.__dict__ for node in _walk_nodes(cast(list[dict[str, Any]], nodes))]
     return {
         "schema_version": 1,
         "metadata": metadata,
@@ -72,7 +76,7 @@ def normalize_artifact(
 
 def extract_pdf_pages(path: Path) -> list[str]:
     with fitz.open(path) as document:
-        return [page.get_text("text") for page in document]
+        return [cast(_TextPage, page).get_text("text") for page in document]
 
 
 class PageIndexAdapter:
@@ -121,7 +125,10 @@ class PageIndexAdapter:
                 raise PageIndexError(
                     f"PageIndex produced no artifact: {stdout.decode(errors='replace')[-1000:]}"
                 )
-            raw_tree = json.loads(result_path.read_text(encoding="utf-8"))
+            raw_tree = cast(
+                dict[str, Any] | list[dict[str, Any]],
+                json.loads(result_path.read_text(encoding="utf-8")),
+            )
             pages = await asyncio.to_thread(extract_pdf_pages, local_pdf)
             artifact = normalize_artifact(raw_tree, pages, metadata=metadata)
             return json.dumps(artifact, ensure_ascii=False, separators=(",", ":")).encode()

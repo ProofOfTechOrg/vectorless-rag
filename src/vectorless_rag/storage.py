@@ -7,6 +7,7 @@ from typing import Protocol
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
+from types_boto3_s3 import S3Client
 
 from vectorless_rag.config import Settings
 
@@ -20,7 +21,7 @@ class ObjectStore(Protocol):
 class S3ObjectStore:
     def __init__(self, settings: Settings) -> None:
         self.bucket = settings.object_store_bucket
-        self.client = boto3.client(
+        self.client: S3Client = boto3.client(  # pyright: ignore[reportUnknownMemberType]
             "s3",
             endpoint_url=settings.object_store_endpoint,
             aws_access_key_id=settings.object_store_access_key.get_secret_value(),

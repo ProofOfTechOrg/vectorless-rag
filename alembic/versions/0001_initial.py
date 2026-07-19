@@ -1,6 +1,7 @@
 """Initial application schema and curated SQL views."""
 
 from collections.abc import Sequence
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -38,7 +39,7 @@ run_route = postgresql.ENUM(
 )
 
 
-def timestamps() -> list[sa.Column]:
+def timestamps() -> list[sa.Column[Any]]:
     return [
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -74,7 +75,7 @@ def upgrade() -> None:
         sa.Column("topics", postgresql.ARRAY(sa.Text), server_default="{}", nullable=False),
         sa.Column("search_vector", postgresql.TSVECTOR),
         sa.Column("submitted_date", sa.Date),
-        sa.Column("status", document_status, server_default="discovered", nullable=False),
+        sa.Column[Any]("status", document_status, server_default="discovered", nullable=False),
         sa.Column("diagnostic", sa.Text),
         sa.Column("page_count", sa.Integer),
         sa.Column("active_index_version_id", postgresql.UUID(as_uuid=True)),
@@ -110,8 +111,8 @@ def upgrade() -> None:
         sa.Column("model_name", sa.String(128), nullable=False),
         sa.Column("artifact_object_key", sa.String(1024), nullable=False),
         sa.Column("artifact_sha256", sa.String(64), nullable=False),
-        sa.Column("extraction_quality", sa.Float),
-        sa.Column("elapsed_seconds", sa.Float),
+        sa.Column("extraction_quality", sa.Float()),
+        sa.Column("elapsed_seconds", sa.Float()),
         sa.Column("input_tokens", sa.Integer),
         sa.Column("output_tokens", sa.Integer),
         *timestamps(),
@@ -136,7 +137,7 @@ def upgrade() -> None:
             sa.ForeignKey("agent.documents.id"),
             nullable=False,
         ),
-        sa.Column("status", job_status, server_default="queued", nullable=False),
+        sa.Column[Any]("status", job_status, server_default="queued", nullable=False),
         sa.Column("force", sa.Boolean, server_default=sa.false(), nullable=False),
         sa.Column("attempts", sa.Integer, server_default="0", nullable=False),
         sa.Column("worker_id", sa.String(128)),
@@ -171,7 +172,7 @@ def upgrade() -> None:
             sa.ForeignKey("agent.api_keys.id"),
             nullable=False,
         ),
-        sa.Column("route", run_route),
+        sa.Column[Any]("route", run_route),
         sa.Column("question", sa.Text, nullable=False),
         sa.Column("answer", sa.Text),
         sa.Column("citations", postgresql.JSONB, server_default="[]", nullable=False),
@@ -197,7 +198,7 @@ def upgrade() -> None:
         sa.Column("normalized_sql", sa.Text),
         sa.Column("allowed", sa.Boolean, nullable=False),
         sa.Column("rejection_reason", sa.Text),
-        sa.Column("explain_cost", sa.Float),
+        sa.Column("explain_cost", sa.Float()),
         sa.Column("row_count", sa.Integer),
         sa.Column("payload_bytes", sa.Integer),
         sa.Column("result_hash", sa.String(64)),

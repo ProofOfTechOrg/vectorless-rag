@@ -44,8 +44,8 @@ lint: ## Check Ruff lint and formatting rules without modifying files.
 	$(UV) run ruff check .
 	$(UV) run ruff format --check .
 
-typecheck: ## Run strict mypy checks.
-	$(UV) run mypy src
+typecheck: ## Run strict whole-repository Basedpyright checks.
+	$(UV) run basedpyright
 
 test: ## Run the test suite with coverage; integration tests skip without their URLs.
 	$(UV) run pytest --cov=vectorless_rag --cov-report=term-missing

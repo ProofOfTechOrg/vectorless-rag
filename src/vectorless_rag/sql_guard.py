@@ -9,6 +9,7 @@ import sqlglot
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlglot import exp
+from sqlglot.errors import ParseError
 
 from vectorless_rag.config import Settings
 
@@ -82,7 +83,7 @@ def validate_sql(sql: str, maximum_limit: int = 200) -> ValidatedSQL:
         raise SQLRejected("SQL comments are not allowed")
     try:
         statements = sqlglot.parse(stripped, read="postgres")
-    except sqlglot.errors.ParseError as exc:
+    except ParseError as exc:
         raise SQLRejected(f"invalid PostgreSQL syntax: {exc}") from exc
     if len(statements) != 1:
         raise SQLRejected("exactly one SQL statement is required")
@@ -170,7 +171,10 @@ class PostgreSQLAdapter:
                     )
                 cursor = await connection.execute(text(query.normalized))
                 columns = list(cursor.keys())
-                rows = [dict(row._mapping) for row in cursor.fetchall()]
+                rows = [
+                    dict(row._mapping)  # pyright: ignore[reportPrivateUsage]
+                    for row in cursor.fetchall()
+                ]
                 serialized = json.dumps(rows, default=str, separators=(",", ":")).encode()
                 if len(serialized) > self.settings.sql_payload_limit_bytes:
                     raise SQLRejected("SQL result payload exceeds configured limit")
