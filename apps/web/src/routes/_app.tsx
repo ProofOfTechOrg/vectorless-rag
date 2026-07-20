@@ -5,7 +5,7 @@ import { CommandPalette } from '@astryxdesign/core/CommandPalette'
 import { SideNav, SideNavItem, SideNavSection } from '@astryxdesign/core/SideNav'
 import { TopNav, TopNavHeading } from '@astryxdesign/core/TopNav'
 import { createStaticSource } from '@astryxdesign/core/Typeahead'
-import { createFileRoute, Outlet, redirect, useRouterState } from '@tanstack/react-router'
+import { createFileRoute, Outlet, redirect, useNavigate, useRouterState } from '@tanstack/react-router'
 import { FileUp, Library, MessageSquare, Search, Settings } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { Identity } from '../lib/contracts'
@@ -24,11 +24,12 @@ const destinations = [
   { id: '/chat', label: 'Chat', icon: MessageSquare, requiredScope: 'chat' },
   { id: '/documents', label: 'Documents', icon: Library, requiredScope: 'documents:read' },
   { id: '/ingestion', label: 'Ingestion', icon: FileUp, requiredScope: 'admin:ingest' },
-  { id: '/settings', label: 'Settings', icon: Settings },
-] satisfies Array<{ id: string; label: string; icon: typeof MessageSquare; requiredScope?: Identity['scopes'][number] }>
+  { id: '/settings', label: 'Settings', icon: Settings, requiredScope: undefined },
+] as const satisfies ReadonlyArray<{ id: string; label: string; icon: typeof MessageSquare; requiredScope?: Identity['scopes'][number] }>
 
 function OperatorShell() {
   const { session } = Route.useRouteContext()
+  const navigate = useNavigate()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [ready, setReady] = useState<boolean | null>(null)
@@ -94,7 +95,8 @@ function OperatorShell() {
         searchSource={source}
         onValueChange={(path) => {
           setPaletteOpen(false)
-          window.location.assign(path)
+          const destination = allowedDestinations.find((item) => item.id === path)
+          if (destination) void navigate({ to: destination.id })
         }}
         emptyBootstrapText={`Connected as ${session.name}`}
       />

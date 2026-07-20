@@ -27,8 +27,10 @@ test('connects through the UI and exercises the operator workflows', async ({ pa
   )
   await page.getByRole('button', { name: 'Helpful', exact: true }).click()
 
-  await page.goto('/documents')
-  await waitForHydration(page)
+  await page.evaluate(() => Object.assign(window, { __vectorlessSpaMarker: true }))
+  await page.getByRole('link', { name: 'Documents', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible()
+  expect(await page.evaluate(() => '__vectorlessSpaMarker' in window)).toBe(true)
   const fixtureDocument = page.getByRole('link', { name: 'Deterministic Vectorless Retrieval' })
   await expect(fixtureDocument).toBeVisible()
   await expect(fixtureDocument).toHaveAttribute('href', /\/documents\/[0-9a-f-]+$/)

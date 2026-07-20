@@ -1,4 +1,5 @@
-import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
+import { LinkProvider } from '@astryxdesign/core/Link'
+import { HeadContent, Link, Scripts, createRootRoute } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { AppearanceProvider } from '../components/AppearanceProvider'
 
@@ -39,8 +40,10 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <AppearanceProvider>
-          <HydrationMarker />
-          {children}
+          <LinkProvider component={Link}>
+            <HydrationMarker />
+            {children}
+          </LinkProvider>
         </AppearanceProvider>
         <Scripts />
       </body>

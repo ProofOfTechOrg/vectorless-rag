@@ -5,7 +5,7 @@ import { Button } from '@astryxdesign/core/Button'
 import { Card } from '@astryxdesign/core/Card'
 import { FileInput } from '@astryxdesign/core/FileInput'
 import { ProgressBar } from '@astryxdesign/core/ProgressBar'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { jobSchema, type Job } from '../lib/contracts'
 import { getJob, syncCorpus } from '../server/functions'
@@ -112,7 +112,7 @@ function IngestionPage() {
           <div className="stack">
             <div className="inline"><h2>Job</h2><Badge label={job.status} variant={job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'info'} /></div>
             {!TERMINAL_JOB_STATUSES.has(job.status) && <ProgressBar value={job.status === 'running' ? 60 : 20} label="Processing document" />}
-            <p>Attempts: {job.attempts} · Document: <a href={`/documents/${job.document_id}`}>{job.document_id}</a></p>
+            <p>Attempts: {job.attempts} · Document: <Link to="/documents/$documentId" params={{ documentId: job.document_id }}>{job.document_id}</Link></p>
             {job.diagnostic && <Banner status={job.status === 'failed' ? 'error' : 'info'} title="Diagnostic" description={job.diagnostic} />}
             {Object.keys(job.metrics).length > 0 && <pre>{JSON.stringify(job.metrics, null, 2)}</pre>}
           </div>

@@ -223,9 +223,15 @@ export function ChatWorkspace({
             {message.citations && message.citations.length > 0 && (
               <div className="citation-list">
                 {message.citations.map((citation, citationIndex) => (
-                  <a key={`${citation.source_id}-${citationIndex}`} href={citation.source_type === 'document' ? `/documents/${citation.source_id}` : undefined}>
-                    <CitationChip source={{ title: `${citation.title}${pageLabel(citation)}` }} number={citationIndex + 1} />
-                  </a>
+                  citation.source_type === 'document' ? (
+                    <Link key={`${citation.source_id}-${citationIndex}`} to="/documents/$documentId" params={{ documentId: citation.source_id }}>
+                      <CitationChip source={{ title: `${citation.title}${pageLabel(citation)}` }} number={citationIndex + 1} />
+                    </Link>
+                  ) : (
+                    <span key={`${citation.source_id}-${citationIndex}`}>
+                      <CitationChip source={{ title: `${citation.title}${pageLabel(citation)}` }} number={citationIndex + 1} />
+                    </span>
+                  )
                 ))}
               </div>
             )}

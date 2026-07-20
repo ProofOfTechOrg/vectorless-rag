@@ -3,7 +3,7 @@ import { Button } from '@astryxdesign/core/Button'
 import { Card } from '@astryxdesign/core/Card'
 import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Table, proportional } from '@astryxdesign/core/Table'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { getDocuments } from '../server/functions'
 
 export const Route = createFileRoute('/_app/documents/')({
@@ -20,6 +20,8 @@ export const Route = createFileRoute('/_app/documents/')({
 function DocumentsPage() {
   const page = Route.useLoaderData()
   const search = Route.useSearch()
+  const navigate = Route.useNavigate()
+  const nextCursor = page.next_cursor ?? undefined
   const rows = page.items.map((document) => ({
     ...document,
     displayTitle: document.title ?? document.arxiv_id ?? document.id,
@@ -40,7 +42,7 @@ function DocumentsPage() {
             <Table
               data={rows}
               columns={[
-                { key: 'displayTitle', header: 'Document', width: proportional(2), renderCell: (row) => <a href={`/documents/${row.id}`}>{row.displayTitle}</a> },
+                { key: 'displayTitle', header: 'Document', width: proportional(2), renderCell: (row) => <Link to="/documents/$documentId" params={{ documentId: row.id }}>{row.displayTitle}</Link> },
                 { key: 'authorsText', header: 'Authors', width: proportional(2) },
                 { key: 'status', header: 'Status', width: proportional(1), renderCell: (row) => <Badge label={row.status} variant={statusVariant(row.status)} /> },
                 { key: 'topicsText', header: 'Topics', width: proportional(2) },
@@ -55,7 +57,7 @@ function DocumentsPage() {
             {rows.map((document) => (
               <Card key={document.id} padding={4}>
                 <div className="stack">
-                  <a href={`/documents/${document.id}`}><strong>{document.displayTitle}</strong></a>
+                  <Link to="/documents/$documentId" params={{ documentId: document.id }}><strong>{document.displayTitle}</strong></Link>
                   <span className="muted">{document.authorsText}</span>
                   <div className="inline"><Badge label={document.status} variant={statusVariant(document.status)} /><span>{document.page_count ?? '—'} pages</span></div>
                   {document.diagnostic && <span>{document.diagnostic}</span>}
@@ -67,7 +69,7 @@ function DocumentsPage() {
       )}
       <div className="inline">
         {search.cursor && <Button label="First page" href="/documents" />}
-        {page.next_cursor && <Button label="Next page" onClick={() => window.location.assign(`/documents?cursor=${encodeURIComponent(page.next_cursor!)}`)} />}
+        {nextCursor && <Button label="Next page" onClick={() => navigate({ to: '/documents', search: { cursor: nextCursor } })} />}
       </div>
     </section>
   )
