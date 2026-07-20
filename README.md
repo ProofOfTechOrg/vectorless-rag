@@ -1,10 +1,14 @@
+<!-- Content type: Landing -->
+
 # Vectorless RAG
 
-A self-hosted research application for asking grounded questions across a local PDF corpus without embeddings or a vector database. The browser-first Vectorless RAG Operator Console is built with ASTRYX and runs on TanStack Start; its server-side BFF holds the API key in an encrypted HttpOnly cookie and calls the FastAPI service. PostgreSQL narrows the corpus, DeepSeek selects papers, PageIndex retrieves structure-aware page evidence, and responses include resolvable citations.
+A self-hosted research application for asking grounded questions across a local PDF corpus without embeddings or a vector database. The browser-first Vectorless RAG Operator Console uses ASTRYX and TanStack Start. Its server-side BFF stores the API key in an encrypted HttpOnly cookie and calls FastAPI.
+
+PostgreSQL narrows the corpus, DeepSeek selects papers, and PageIndex retrieves structure-aware page evidence. Responses include resolvable citations.
 
 ## Quick start
 
-Requirements: Docker Compose v2 and GNU Make. Local package development additionally uses Python 3.12, `uv`, Node 22, pnpm, and Helm 3.
+Requirements: Docker Compose v2 and GNU Make. Local package development also uses Python 3.12, `uv`, Node 22, and pnpm. Helm 3 is required only to validate or deploy the Kubernetes chart.
 
 Run `make download-corpus` before `make up` if you want the full test corpus. The download is optional and requires Bash, `curl`, and approximately 1.5 GB of free space.
 
@@ -90,13 +94,15 @@ make web-dev          # web on :3001 against the live Compose API on :8000
 make api-check
 make web-check
 make deploy-check ENV_FILE=.env.example
+make playwright-install # install Chromium and its operating-system dependencies
 make playwright       # deterministic mock-upstream browser suite
-make playwright-live  # authorized disposable live stack
 make docker-build
 make ci               # local CI equivalent
 ```
 
-Use `make help` or the [command reference](docs/commands.md) for every target. `make restart-app` rebuilds API and worker from `apps/api` without removing named volumes; `make restart-web` rebuilds only the frontend.
+Use `make help` or the [command reference](docs/commands.md) for every target. Follow the [live verification workflow](docs/operator-guide.md#verify-a-disposable-live-stack) before running `make playwright-live`.
+
+`make restart-app` rebuilds API and worker from `apps/api` without removing named volumes. `make restart-web` rebuilds only the frontend.
 
 ## Ingestion safety
 

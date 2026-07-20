@@ -58,7 +58,7 @@ services:
     command: ["sh", "-c", "vectorless-rag migrate && uvicorn vectorless_rag.api:app --host 0.0.0.0 --port 8000"]
     environment: *app-env
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ${ARXIV_PDF_HOST_DIR}:/corpus:ro
       - pageindex_work:/workspaces
@@ -203,7 +203,7 @@ services:
       PORT: 3001
       HOST: 0.0.0.0
     ports:
-      - "${FRONTEND_PORT}:3001"
+      - "${FRONTEND_PORT:-3001}:3001"
     depends_on:
       api:
         condition: service_healthy

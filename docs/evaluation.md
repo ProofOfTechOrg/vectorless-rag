@@ -1,6 +1,8 @@
-# Evaluation
+<!-- Content type: How-to -->
 
-The deterministic release dataset lives at `apps/api/evaluation/release-v1.jsonl`; its builders are under `apps/api/scripts`.
+# Run evaluation workflows
+
+Use this page to build or seed the deterministic release dataset and choose between mocked and live frontend verification. The dataset lives at `apps/api/evaluation/release-v1.jsonl`; its builders are under `apps/api/scripts`.
 
 ```bash
 make evaluation-build

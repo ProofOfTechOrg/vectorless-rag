@@ -1,72 +1,81 @@
 import { expect, test } from '@playwright/test'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const liveKey = process.env.PLAYWRIGHT_API_KEY
-test.skip(!process.env.PLAYWRIGHT_LIVE || !liveKey, 'Requires PLAYWRIGHT_LIVE and a process-only API key')
+test.skip(!process.env.PLAYWRIGHT_LIVE, 'Requires PLAYWRIGHT_LIVE')
 test.describe.configure({ mode: 'serial' })
 
 test('verifies the authorized live stack through the operator console', async ({ page }) => {
   test.setTimeout(10 * 60_000)
+  if (!liveKey) throw new Error('PLAYWRIGHT_API_KEY is required in live mode')
+
   const uniquePhrase = `cobalt orbit ${Date.now().toString(36)}`
   const filename = `vectorless-live-${Date.now().toString(36)}.pdf`
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), 'vectorless-live-'))
+  const fixturePath = join(temporaryDirectory, filename)
 
-  await page.goto('/connect')
-  const connectButton = page.getByRole('button', { name: 'Connect' })
-  await expect(connectButton).toBeEnabled()
-  await page.getByLabel('API key').fill(liveKey!)
-  await connectButton.click()
-  await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
+  try {
+    await writeFile(fixturePath, textPdf(`Evidence phrase: ${uniquePhrase}.`))
 
-  await page.goto('/ingestion')
-  await waitForHydration(page)
-  await page.locator('input[type="file"]').setInputFiles({
-    name: filename,
-    mimeType: 'application/pdf',
-    buffer: textPdf(`Evidence phrase: ${uniquePhrase}.`),
-  })
-  await page.getByRole('button', { name: 'Upload and queue' }).click()
-  const completed = page.getByText('completed', { exact: true })
-  const terminalFailure = page.getByText(/^(failed|unsupported)$/)
-  const uploadError = page.getByRole('alert').filter({ hasText: 'Ingestion attention required' })
-  await expect(completed.or(terminalFailure).or(uploadError)).toBeVisible({ timeout: 4 * 60_000 })
-  await expect(uploadError).toHaveCount(0)
-  const ingestionCompleted = await completed.isVisible()
-  if (!ingestionCompleted) await expect(page.getByText('Diagnostic', { exact: true })).toBeVisible()
+    await page.goto('/connect')
+    const connectButton = page.getByRole('button', { name: 'Connect' })
+    await expect(connectButton).toBeEnabled()
+    await page.getByLabel('API key').fill(liveKey)
+    await connectButton.click()
+    await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
 
-  const documentLink = page.getByText('Document:').locator('..').getByRole('link')
-  const documentHref = await documentLink.getAttribute('href')
-  expect(documentHref).toMatch(/^\/documents\/[0-9a-f-]+$/)
-
-  if (ingestionCompleted) {
-    await page.goto('/chat')
+    await page.goto('/ingestion')
     await waitForHydration(page)
-    const question = `Which document contains the exact phrase "${uniquePhrase}"? Cite its page.`
-    await page.getByLabel('Message input').fill(question)
-    await page.getByLabel('Message input').press('Enter')
-    await expect(page.getByRole('status')).toContainText('Completed', { timeout: 3 * 60_000 })
-    await expect(page.locator('.citation-list a').first()).toHaveAttribute('href', documentHref!)
-    await page.getByRole('button', { name: 'Helpful', exact: true }).click()
+    await page.locator('input[type="file"]').setInputFiles(fixturePath)
+    await page.getByRole('button', { name: 'Upload and queue' }).click()
+    const completed = page.getByText('completed', { exact: true })
+    const terminalFailure = page.getByText(/^(failed|unsupported)$/)
+    const uploadError = page.getByRole('alert').filter({ hasText: 'Ingestion attention required' })
+    await expect(completed.or(terminalFailure).or(uploadError)).toBeVisible({ timeout: 4 * 60_000 })
+    await expect(uploadError).toHaveCount(0)
+    const ingestionCompleted = await completed.isVisible()
+    if (!ingestionCompleted) await expect(page.getByText('Diagnostic', { exact: true })).toBeVisible()
+
+    const documentLink = page.getByText('Document:').locator('..').getByRole('link')
+    const documentHref = await documentLink.getAttribute('href')
+    expect(documentHref).toMatch(/^\/documents\/[0-9a-f-]+$/)
+
+    if (ingestionCompleted) {
+      await page.goto('/chat')
+      await waitForHydration(page)
+      const question = `Which document contains the exact phrase "${uniquePhrase}"? Cite its page.`
+      await page.getByLabel('Message input').fill(question)
+      await page.getByLabel('Message input').press('Enter')
+      await expect(page.getByRole('status')).toContainText('Completed', { timeout: 3 * 60_000 })
+      await expect(page.locator('.citation-list a').first()).toHaveAttribute('href', documentHref!)
+      await page.getByRole('button', { name: 'Helpful', exact: true }).click()
+    }
+
+    await page.goto(documentHref!)
+    await expect(page.getByText('Citation landing page')).toBeVisible()
+    await expect(page.locator('dt', { hasText: 'Pages' }).locator('xpath=following-sibling::dd[1]')).toContainText('1')
+
+    if (ingestionCompleted) {
+      await page.goto('/chat')
+      await expect(page.getByLabel('Recent threads')).toContainText(uniquePhrase)
+    }
+
+    await page.goto('/settings')
+    await waitForHydration(page)
+    await expect(page.getByText('codex-ui-dev', { exact: true })).toBeVisible()
+    await expect(page.getByText('chat', { exact: true })).toBeVisible()
+    await expect(page.getByText('documents:read', { exact: true })).toBeVisible()
+    await expect(page.getByText('admin:ingest', { exact: true })).toBeVisible()
+    await page.getByLabel('Color mode').click()
+    await page.getByText('Dark', { exact: true }).click()
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('vectorless:appearance'))).toBe('dark')
+    await page.getByRole('button', { name: 'Log out' }).click()
+    await expect(page.getByRole('heading', { name: 'Connect to Vectorless RAG' })).toBeVisible()
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true })
   }
-
-  await page.goto(documentHref!)
-  await expect(page.getByText('Citation landing page')).toBeVisible()
-  await expect(page.locator('dt', { hasText: 'Pages' }).locator('xpath=following-sibling::dd[1]')).toContainText('1')
-
-  if (ingestionCompleted) {
-    await page.goto('/chat')
-    await expect(page.getByLabel('Recent threads')).toContainText(uniquePhrase)
-  }
-
-  await page.goto('/settings')
-  await waitForHydration(page)
-  await expect(page.getByText('codex-ui-dev', { exact: true })).toBeVisible()
-  await expect(page.getByText('chat', { exact: true })).toBeVisible()
-  await expect(page.getByText('documents:read', { exact: true })).toBeVisible()
-  await expect(page.getByText('admin:ingest', { exact: true })).toBeVisible()
-  await page.getByLabel('Color mode').click()
-  await page.getByText('Dark', { exact: true }).click()
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('vectorless:appearance'))).toBe('dark')
-  await page.getByRole('button', { name: 'Log out' }).click()
-  await expect(page.getByRole('heading', { name: 'Connect to Vectorless RAG' })).toBeVisible()
 })
 
 async function waitForHydration(page: import('@playwright/test').Page) {

@@ -1,6 +1,10 @@
-# Backup and restore
+<!-- Content type: How-to -->
 
-Persistent state remains in the Compose volumes `postgres_data`, `clickhouse_data`, `clickhouse_logs`, `redis_data`, `minio_data`, and `pageindex_work`. The repository move does not rename or remove them. `make down` preserves volumes.
+# Back up and restore Vectorless RAG
+
+Use this page to identify persistent state, back it up, restore consistent data and credentials, and validate recovery. Persistent state remains in the Compose volumes `postgres_data`, `clickhouse_data`, `clickhouse_logs`, `redis_data`, `minio_data`, and `pageindex_work`.
+
+The repository move does not rename or remove these volumes. `make down` preserves them.
 
 Back up PostgreSQL with `pg_dump`, MinIO with an S3-compatible replication/copy tool, and Langfuse/ClickHouse according to the deployed topology. Corpus PDFs mounted from `arxiv-pdfs` or another host path are user-owned and must be backed up separately.
 

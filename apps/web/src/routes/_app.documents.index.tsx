@@ -8,7 +8,7 @@ import { getDocuments } from '../server/functions'
 
 export const Route = createFileRoute('/_app/documents/')({
   validateSearch: (search: Record<string, unknown>) => ({
-    cursor: typeof search.cursor === 'string' ? search.cursor : null,
+    cursor: typeof search.cursor === 'string' ? search.cursor : undefined,
   }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
   loader: ({ deps }) => getDocuments({ data: deps }),

@@ -9,7 +9,8 @@ import { connect, getSession } from '../server/functions'
 
 export const Route = createFileRoute('/connect')({
   beforeLoad: async () => {
-    if (await getSession()) throw redirect({ to: '/chat' })
+    const identity = await getSession()
+    if (identity) throw redirect({ to: homeForScopes(identity.scopes) })
   },
   component: ConnectPage,
 })

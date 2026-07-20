@@ -1,4 +1,8 @@
+<!-- Content type: Reference -->
+
 # Deferred hardening
+
+This page records accepted hardening work that remains outside the current implementation scope.
 
 ## Adopt Basedpyright recommended mode
 

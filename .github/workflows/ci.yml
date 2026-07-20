@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-node@v7
         with: {node-version: 22, cache: pnpm}
       - run: make web-install
-      - run: pnpm --filter @vectorless-rag/web exec playwright install --with-deps chromium
+      - run: make playwright-install
       - run: make web-lint
       - run: make web-typecheck
       - run: make web-test

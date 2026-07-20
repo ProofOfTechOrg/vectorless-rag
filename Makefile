@@ -26,7 +26,7 @@ export UV_CACHE_DIR
 
 .PHONY: help env install api-install web-install format api-format web-format lint api-lint web-lint \
 	typecheck api-typecheck web-typecheck test api-test web-test test-unit test-integration \
-	api-build web-build playwright playwright-live react-doctor react-doctor-diff astryx-doctor workflow-check migration-check \
+	api-build web-build playwright-install playwright playwright-live react-doctor react-doctor-diff astryx-doctor workflow-check migration-check \
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
@@ -47,29 +47,29 @@ web-install: ## Install the frozen root pnpm workspace.
 	$(PNPM) install --frozen-lockfile
 
 format: api-format web-format ## Format API and web sources.
-api-format:
+api-format: ## Format and autofix Python sources.
 	$(UV) run --project $(API_DIR) ruff format $(API_DIR)
 	$(UV) run --project $(API_DIR) ruff check --fix $(API_DIR)
-web-format:
+web-format: ## Autofix lint findings in web sources.
 	$(PNPM) --filter @vectorless-rag/web exec eslint . --fix
 
 lint: api-lint web-lint ## Lint API and web sources.
-api-lint:
+api-lint: ## Lint and check formatting for Python sources.
 	$(UV) run --project $(API_DIR) ruff check $(API_DIR)
 	$(UV) run --project $(API_DIR) ruff format --check $(API_DIR)
-web-lint:
+web-lint: ## Lint web sources.
 	$(PNPM) --filter @vectorless-rag/web lint
 
 typecheck: api-typecheck web-typecheck ## Typecheck API and web sources.
-api-typecheck:
+api-typecheck: ## Typecheck the Python package with Basedpyright.
 	cd $(API_DIR) && $(UV) run basedpyright
-web-typecheck:
+web-typecheck: ## Typecheck the web package with TypeScript.
 	$(PNPM) --filter @vectorless-rag/web typecheck
 
 test: api-test web-test ## Run API and web unit tests.
-api-test:
+api-test: ## Run API tests with coverage.
 	$(UV) run --project $(API_DIR) pytest $(API_DIR)/tests --cov=vectorless_rag --cov-report=term-missing
-web-test:
+web-test: ## Run web unit tests.
 	$(PNPM) --filter @vectorless-rag/web test
 test-unit: ## Run Python tests that require no external infrastructure.
 	$(UV) run --project $(API_DIR) pytest $(API_DIR)/tests -m 'not integration'
@@ -82,9 +82,13 @@ api-build: ## Build the Python distribution.
 	$(UV) build --project $(API_DIR)
 web-build: ## Build the TanStack Start production bundle.
 	$(PNPM) --filter @vectorless-rag/web build
+playwright-install: ## Install Chromium and its operating-system dependencies for Playwright.
+	$(PNPM) --filter @vectorless-rag/web exec playwright install --with-deps chromium
 playwright: ## Run deterministic Playwright against the local mock upstream.
 	$(PNPM) --filter @vectorless-rag/web test:e2e
-playwright-live: ## Run Playwright against PLAYWRIGHT_BASE_URL and a live stack.
+playwright-live: ## Run Playwright against a live stack with an explicit URL and process-only key.
+	@test -n "$${PLAYWRIGHT_BASE_URL:-}" || { echo "PLAYWRIGHT_BASE_URL is required" >&2; exit 2; }
+	@test -n "$${PLAYWRIGHT_API_KEY:-}" || { echo "PLAYWRIGHT_API_KEY is required" >&2; exit 2; }
 	PLAYWRIGHT_LIVE=1 $(PNPM) --filter @vectorless-rag/web test:e2e
 react-doctor: ## Run the authoritative full React Doctor 100/100 gate.
 	$(PNPM) --filter @vectorless-rag/web react-doctor
@@ -100,9 +104,9 @@ migration-check: ## Render the complete Alembic migration offline.
 compose-check: ## Validate Compose using ENV_FILE (default .env).
 	@test -f "$(ENV_FILE)" || { echo "$(ENV_FILE) does not exist; run make env" >&2; exit 2; }
 	$(COMPOSE) --env-file "$(ENV_FILE)" config --quiet
-helm-lint:
+helm-lint: ## Lint the Helm chart.
 	$(HELM) lint $(CHART)
-helm-template:
+helm-template: ## Render the Helm chart with default values.
 	$(HELM) template test $(CHART) >/dev/null
 helm-check: helm-lint helm-template ## Lint and render the Helm chart.
 docker-build-api: ## Build the production FastAPI image.
@@ -116,7 +120,7 @@ web-check: web-lint web-typecheck web-test react-doctor web-build astryx-doctor 
 deploy-check: workflow-check compose-check helm-check ## Validate CI and deployment manifests.
 check: api-check web-check deploy-check ## Validate the full repository without browser or image builds.
 ci: ENV_FILE := .env.example
-ci: check playwright docker-build ## Run the complete CI-equivalent validation.
+ci: check playwright-install playwright docker-build ## Run the complete CI-equivalent validation.
 
 up: ## Build and start the complete Compose stack without removing volumes.
 	$(COMPOSE) up --build -d
@@ -130,13 +134,13 @@ restart-app: ## Rebuild and recreate API and worker without removing volumes.
 	$(COMPOSE) up -d --build --force-recreate api worker
 restart-web: ## Rebuild and recreate only the frontend.
 	$(COMPOSE) up -d --build --force-recreate web
-restart-langfuse:
+restart-langfuse: ## Recreate the Langfuse web and worker services.
 	$(COMPOSE) up -d --force-recreate langfuse-web langfuse-worker
-restart-observability:
+restart-observability: ## Recreate Langfuse, API, and worker services.
 	$(COMPOSE) up -d --force-recreate langfuse-web langfuse-worker api worker
-ps:
+ps: ## Show Compose service status.
 	$(COMPOSE) ps
-logs:
+logs: ## Follow Compose logs, optionally limited by SERVICE and TAIL.
 	$(COMPOSE) logs --follow --tail="$(TAIL)" $(SERVICE)
 health: ## Check frontend, API, and Langfuse public health endpoints.
 	curl --fail --silent --show-error http://127.0.0.1:$${FRONTEND_PORT:-3001}/healthz
@@ -148,36 +152,36 @@ health: ## Check frontend, API, and Langfuse public health endpoints.
 web-dev: ## Run web locally against the live Compose API.
 	VECTORLESS_API_URL=http://127.0.0.1:8000 APP_ORIGIN=http://localhost:3001 $(PNPM) --filter @vectorless-rag/web dev
 
-migrate:
+migrate: ## Apply database migrations in the API container.
 	$(COMPOSE) exec -T api vectorless-rag migrate
-bootstrap-key:
+bootstrap-key: ## Mint an API key with NAME and SCOPES in the API container.
 	@$(COMPOSE) exec -T api vectorless-rag bootstrap-key --name "$(NAME)" --scopes "$(SCOPES)"
 download-corpus: ## Download missing PDFs from the tracked arXiv corpus.
 	apps/api/scripts/download-arxiv-pdfs.sh "$(ARXIV_PDF_HOST_DIR)"
-sync-corpus:
+sync-corpus: ## Queue mounted corpus PDFs with VECTORLESS_RAG_ADMIN_KEY.
 	@test -n "$${VECTORLESS_RAG_ADMIN_KEY:-}" || { echo "VECTORLESS_RAG_ADMIN_KEY is required" >&2; exit 2; }
 	@if [[ "$(FORCE)" != "true" && "$(FORCE)" != "false" ]]; then echo "FORCE must be true or false" >&2; exit 2; fi
 	@curl --fail --silent --show-error -X POST http://127.0.0.1:8000/v1/admin/ingestion/sync -H "X-API-Key: $${VECTORLESS_RAG_ADMIN_KEY}" -H "Content-Type: application/json" -d '{"force": $(FORCE)}'
 	@printf '\n'
-upload-document:
+upload-document: ## Upload PDF through FastAPI with VECTORLESS_RAG_ADMIN_KEY.
 	@test -n "$(PDF)" || { echo "PDF=/path/to/file.pdf is required" >&2; exit 2; }
 	@test -f "$(PDF)" || { echo "PDF does not exist: $(PDF)" >&2; exit 2; }
 	@test -n "$${VECTORLESS_RAG_ADMIN_KEY:-}" || { echo "VECTORLESS_RAG_ADMIN_KEY is required" >&2; exit 2; }
 	@curl --fail --silent --show-error -X POST http://127.0.0.1:8000/v1/admin/documents -H "X-API-Key: $${VECTORLESS_RAG_ADMIN_KEY}" -F "file=@$(PDF)"
 	@printf '\n'
-pilot-report:
+pilot-report: ## Print the ten-document pilot report from the API container.
 	@$(COMPOSE) exec -T api vectorless-rag pilot-report
-evaluation-build:
+evaluation-build: ## Build the deterministic evaluation dataset.
 	$(UV) run --project $(API_DIR) python $(API_DIR)/scripts/build_evaluation_dataset.py
-evaluation-seed:
+evaluation-seed: ## Seed DATASET into the running API container.
 	@test -f "$(DATASET)" || { echo "DATASET does not exist: $(DATASET)" >&2; exit 2; }
 	$(COMPOSE) exec -T api python scripts/seed_evaluation.py /dev/stdin --name "$(DATASET_NAME)" < "$(DATASET)"
 
-secret-api-pepper:
+secret-api-pepper: ## Print a generated API_KEY_PEPPER assignment.
 	@printf 'API_KEY_PEPPER=%s\n' "$$(openssl rand -hex 32)"
 secret-session: ## Print a generated 32-byte SESSION_SECRET assignment.
 	@printf 'SESSION_SECRET=%s\n' "$$(openssl rand -hex 32)"
-secrets-langfuse:
+secrets-langfuse: ## Print generated Langfuse secret assignments.
 	@printf 'LANGFUSE_INIT_PROJECT_PUBLIC_KEY=lf_pk_%s\n' "$$(openssl rand -hex 32)"
 	@printf 'LANGFUSE_INIT_PROJECT_SECRET_KEY=lf_sk_%s\n' "$$(openssl rand -hex 32)"
 	@printf 'LANGFUSE_NEXTAUTH_SECRET=%s\n' "$$(openssl rand -hex 32)"

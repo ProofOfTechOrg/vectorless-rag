@@ -5,6 +5,7 @@ import { URL } from 'node:url'
 
 const documentId = '11111111-1111-4111-8111-111111111111'
 const identity = { name: 'playwright-full', scopes: ['chat', 'documents:read', 'admin:ingest'] }
+const documentsOnlyIdentity = { name: 'playwright-documents-only', scopes: ['documents:read'] }
 const document = {
   id: documentId,
   arxiv_id: '2607.00001',
@@ -30,9 +31,11 @@ function json(response, status, value) {
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1:8010')
   if (url.pathname === '/health/ready') return json(response, 200, { status: 'ready' })
-  if (!request.headers['x-api-key']) return json(response, 401, { detail: 'missing API key' })
-  if (request.headers['x-api-key'] !== 'vrag_test_full') return json(response, 401, { detail: 'invalid API key' })
-  if (url.pathname === '/v1/auth/me') return json(response, 200, identity)
+  const apiKey = request.headers['x-api-key']
+  if (!apiKey) return json(response, 401, { detail: 'missing API key' })
+  if (apiKey !== 'vrag_test_full' && apiKey !== 'mock-documents-only') return json(response, 401, { detail: 'invalid API key' })
+  const requestIdentity = apiKey === 'mock-documents-only' ? documentsOnlyIdentity : identity
+  if (url.pathname === '/v1/auth/me') return json(response, 200, requestIdentity)
   if (url.pathname === '/v1/threads') return json(response, 200, { items: [{ thread_id: 'thread-1', title: 'Cobalt lantern question', run_count: 1, last_activity_at: '2026-07-20T00:02:00Z' }], next_cursor: null })
   if (url.pathname === '/v1/threads/thread-1') return json(response, 200, {
     thread_id: 'thread-1',

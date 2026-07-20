@@ -58,3 +58,15 @@ test('redirects protected routes to connect without a session', async ({ page })
   await page.goto('/documents')
   await expect(page).toHaveURL(/\/connect$/)
 })
+
+test('returns an existing documents-only session to its scoped home', async ({ page }) => {
+  await page.goto('/connect')
+  await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled()
+  await page.getByLabel('API key').fill('mock-documents-only')
+  await page.getByRole('button', { name: 'Connect' }).click()
+  await expect(page).toHaveURL(/\/documents$/)
+  await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible()
+
+  await page.goto('/connect')
+  await expect(page).toHaveURL(/\/documents$/)
+})
