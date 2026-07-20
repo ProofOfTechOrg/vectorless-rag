@@ -1,9 +1,21 @@
 import { Badge } from '@astryxdesign/core/Badge'
 import { Button } from '@astryxdesign/core/Button'
 import { Card } from '@astryxdesign/core/Card'
-import { ChatComposer, ChatMessage, ChatMessageBubble, ChatMessageMetadata } from '@astryxdesign/core/Chat'
+import {
+  ChatComposer,
+  ChatLayout,
+  ChatMessage,
+  ChatMessageBubble,
+  ChatMessageList,
+  ChatMessageMetadata,
+} from '@astryxdesign/core/Chat'
 import { Citation as CitationChip } from '@astryxdesign/core/Citation'
+import { EmptyState } from '@astryxdesign/core/EmptyState'
+import { Heading } from '@astryxdesign/core/Heading'
+import { HStack } from '@astryxdesign/core/HStack'
 import { Markdown } from '@astryxdesign/core/Markdown'
+import { Text } from '@astryxdesign/core/Text'
+import { VStack } from '@astryxdesign/core/VStack'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { useRef, useState } from 'react'
 import {
@@ -175,88 +187,146 @@ export function ChatWorkspace({
   }
 
   return (
-    <div className="page chat-layout">
-      <div className="chat-scroll" aria-live="polite">
-        <header className="page-header">
-          <div>
-            <h1>Grounded research chat</h1>
-            <p className="muted">Answers stay tied to indexed documents and page ranges.</p>
-          </div>
-          <Button label="New thread" href="/chat" variant="secondary" />
-        </header>
-        {threads.length > 0 && (
-          <Card padding={3}>
-            <div className="inline" aria-label="Recent threads">
-              <strong>Recent</strong>
-              {threads.slice(0, 5).map((thread) => (
-                <Link key={thread.thread_id} to="/chat/$threadId" params={{ threadId: thread.thread_id }}>
-                  {thread.title} ({thread.run_count})
-                </Link>
-              ))}
-            </div>
-          </Card>
-        )}
-        {messages.length === 0 && (
-          <Card padding={6}><p>Ask a catalog question or request a cited comparison across your indexed papers.</p></Card>
-        )}
-        {messages.map((message, index) => (
-          <ChatMessage key={`${index}-${message.sender}`} sender={message.sender} name={message.sender === 'assistant' ? 'Vectorless RAG' : 'You'}>
-            <ChatMessageBubble>
-              {message.sender === 'assistant' ? (
-                <Markdown isStreaming={message.streaming} headingLevelStart={3} autolink="gfm">{message.text || '…'}</Markdown>
-              ) : message.text}
-            </ChatMessageBubble>
-            {message.failureCode && (
-              <div className="inline">
-                <ChatMessageMetadata status="error" />
-                {message.retryQuestion && (
-                  <Button
-                    label="Retry"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => send(message.retryQuestion!)}
-                  />
-                )}
-              </div>
-            )}
-            {message.route && <Badge label={message.route} variant="info" />}
-            {message.citations && message.citations.length > 0 && (
-              <div className="citation-list">
-                {message.citations.map((citation, citationIndex) => (
-                  citation.source_type === 'document' ? (
-                    <Link key={`${citation.source_id}-${citationIndex}`} to="/documents/$documentId" params={{ documentId: citation.source_id }}>
-                      <CitationChip source={{ title: `${citation.title}${pageLabel(citation)}` }} number={citationIndex + 1} />
+    <main className="chat-page" data-testid="chat-page">
+      <div className="chat-intro">
+        <VStack className="chat-column" data-testid="chat-intro-column" gap={4}>
+          <HStack align="start" gap={3} justify="between" wrap="wrap">
+            <VStack gap={1}>
+              <Heading level={1}>Grounded research chat</Heading>
+              <Text as="p" display="block" type="supporting">
+                Answers stay tied to indexed documents and page ranges.
+              </Text>
+            </VStack>
+            <Button label="New thread" href="/chat" variant="secondary" />
+          </HStack>
+          {threads.length > 0 && (
+            <Card padding={3}>
+              <VStack aria-label="Recent threads" gap={2}>
+                <Text type="label">Recent</Text>
+                <HStack gap={2} wrap="wrap">
+                  {threads.slice(0, 5).map((thread) => (
+                    <Link key={thread.thread_id} to="/chat/$threadId" params={{ threadId: thread.thread_id }}>
+                      {thread.title} ({thread.run_count})
                     </Link>
-                  ) : (
-                    <span key={`${citation.source_id}-${citationIndex}`}>
-                      <CitationChip source={{ title: `${citation.title}${pageLabel(citation)}` }} number={citationIndex + 1} />
-                    </span>
-                  )
-                ))}
-              </div>
-            )}
-            {message.traceId && !message.failureCode && (
-              <div className="inline">
-                <span className="muted">Was this grounded?</span>
-                <Button label="Helpful" size="sm" variant="ghost" clickAction={async () => { await submitFeedback({ data: { traceId: message.traceId!, value: 1 } }) }} />
-                <Button label="Not helpful" size="sm" variant="ghost" clickAction={async () => { await submitFeedback({ data: { traceId: message.traceId!, value: -1 } }) }} />
-              </div>
-            )}
-          </ChatMessage>
-        ))}
-        <p className="status-line" role="status">{status}</p>
+                  ))}
+                </HStack>
+              </VStack>
+            </Card>
+          )}
+        </VStack>
       </div>
-      <div className="chat-composer">
-        <ChatComposer
-          value={composer}
-          onChange={setComposer}
-          onSubmit={send}
-          onStop={() => abortRef.current?.abort()}
-          isStopShown={isStreaming}
-          placeholder="Ask about the indexed corpus…"
-        />
-      </div>
-    </div>
+      <ChatLayout
+        className="chat-conversation"
+        data-testid="chat-layout"
+        density="spacious"
+        emptyState={(
+          <div className="chat-column chat-empty-state">
+            <EmptyState
+              description="Ask a catalog question or request a cited comparison across your indexed papers."
+              headingLevel={2}
+              title="Ask the indexed corpus"
+            />
+          </div>
+        )}
+        composer={(
+          <ChatComposer
+            className="chat-column"
+            data-testid="chat-composer"
+            density="spacious"
+            value={composer}
+            onChange={setComposer}
+            onSubmit={send}
+            onStop={() => abortRef.current?.abort()}
+            isStopShown={isStreaming}
+            footerActions={(
+              <Text className="chat-status" role="status" type="supporting">
+                {status}
+              </Text>
+            )}
+            placeholder="Ask about the indexed corpus…"
+          />
+        )}
+      >
+        {messages.length > 0 ? (
+          <ChatMessageList
+            className="chat-column"
+            data-testid="chat-message-list"
+            density="spacious"
+            isStreaming={isStreaming}
+          >
+            {messages.map((message, index) => {
+              const hasMetadata = !!(
+                message.failureCode
+                || message.route
+                || message.citations?.length
+                || (message.traceId && !message.failureCode)
+              )
+
+              return (
+                <ChatMessage key={`${index}-${message.sender}`} sender={message.sender}>
+                  <ChatMessageBubble
+                    className={message.sender === 'assistant' ? 'chat-answer-bubble' : undefined}
+                    data-testid={`${message.sender}-bubble`}
+                    name={(
+                      <Text type="supporting" weight="semibold">
+                        {message.sender === 'assistant' ? 'Vectorless RAG' : 'You'}
+                      </Text>
+                    )}
+                    variant={message.sender === 'assistant' ? 'ghost' : 'filled'}
+                    metadata={hasMetadata ? (
+                      <VStack className="chat-message-metadata" gap={2}>
+                        {message.failureCode ? (
+                          <HStack align="center" gap={2} wrap="wrap">
+                            <ChatMessageMetadata status="error" />
+                            {message.retryQuestion ? (
+                              <Button
+                                label="Retry"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => send(message.retryQuestion!)}
+                              />
+                            ) : null}
+                          </HStack>
+                        ) : null}
+                        {message.route ? <Badge label={message.route} variant="info" /> : null}
+                        {message.citations && message.citations.length > 0 ? (
+                          <HStack className="citation-list" gap={2} wrap="wrap">
+                            {message.citations.map((citation, citationIndex) => (
+                              citation.source_type === 'document' ? (
+                                <Link key={`${citation.source_id}-${citationIndex}`} to="/documents/$documentId" params={{ documentId: citation.source_id }}>
+                                  <CitationChip source={{ title: `${citation.title}${pageLabel(citation)}` }} number={citationIndex + 1} />
+                                </Link>
+                              ) : (
+                                <span key={`${citation.source_id}-${citationIndex}`}>
+                                  <CitationChip source={{ title: `${citation.title}${pageLabel(citation)}` }} number={citationIndex + 1} />
+                                </span>
+                              )
+                            ))}
+                          </HStack>
+                        ) : null}
+                        {message.traceId && !message.failureCode ? (
+                          <HStack align="center" gap={2} wrap="wrap">
+                            <Text type="supporting">Was this grounded?</Text>
+                            <Button label="Helpful" size="sm" variant="ghost" clickAction={async () => { await submitFeedback({ data: { traceId: message.traceId!, value: 1 } }) }} />
+                            <Button label="Not helpful" size="sm" variant="ghost" clickAction={async () => { await submitFeedback({ data: { traceId: message.traceId!, value: -1 } }) }} />
+                          </HStack>
+                        ) : null}
+                      </VStack>
+                    ) : undefined}
+                  >
+                    {message.sender === 'assistant' ? (
+                      <Markdown contentWidth="100%" isStreaming={message.streaming} headingLevelStart={3} autolink="gfm">
+                        {message.text || '…'}
+                      </Markdown>
+                    ) : message.text}
+                  </ChatMessageBubble>
+                </ChatMessage>
+              )
+            })}
+          </ChatMessageList>
+        ) : null}
+      </ChatLayout>
+    </main>
   )
 }
 

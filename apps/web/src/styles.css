@@ -21,11 +21,19 @@
   .muted { color: var(--color-text-secondary); }
   .table-wrap { overflow-x: auto; }
   .document-list { display: none; }
-  .chat-layout { min-height: calc(100dvh - 9rem); display: grid; grid-template-rows: 1fr auto; gap: var(--spacing-3); }
-  .chat-scroll { overflow: auto; display: grid; align-content: start; gap: var(--spacing-3); padding-block: var(--spacing-3); }
-  .chat-composer { position: sticky; bottom: 0; background: var(--color-background-body); padding-block: var(--spacing-2); }
+  .chat-page {
+    --text-body-size: var(--font-size-lg);
+    --text-supporting-size: var(--font-size-base);
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+  .chat-intro { flex: none; padding: var(--spacing-6) var(--spacing-6) var(--spacing-2); }
+  .chat-column { width: 100%; max-width: 42rem; margin-inline: auto; }
+  .chat-conversation { flex: 1; min-height: 0; }
+  .chat-answer-bubble { max-width: 100%; }
   .citation-list { display: flex; gap: var(--spacing-2); flex-wrap: wrap; }
-  .status-line { min-height: 1.5rem; color: var(--color-text-secondary); }
   .metadata { display: grid; grid-template-columns: minmax(9rem, 0.3fr) 1fr; gap: var(--spacing-2); }
   .mobile-only { display: none; }
   @media (max-width: 720px) {
