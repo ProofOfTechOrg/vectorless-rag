@@ -57,6 +57,24 @@ const server = createServer(async (request, response) => {
     return json(response, 200, { id: '22222222-2222-4222-8222-222222222222', document_id: documentId, status: 'queued', attempts: 0, diagnostic: null, metrics: {}, created_at: '2026-07-20T00:00:00Z', updated_at: '2026-07-20T00:00:00Z' })
   }
   if (url.pathname.endsWith('/feedback')) {
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    let payload
+    try {
+      payload = JSON.parse(Buffer.concat(chunks).toString())
+    } catch {
+      return json(response, 400, { detail: 'feedback body must be JSON' })
+    }
+    if (
+      request.method !== 'POST'
+      || request.headers['content-type'] !== 'application/json'
+      || url.pathname !== '/v1/runs/trace-1/feedback'
+      || !Number.isInteger(payload.value)
+      || ![-1, 1].includes(payload.value)
+    ) {
+      return json(response, 422, { detail: 'invalid feedback request' })
+    }
+    if (payload.value === -1) return json(response, 503, { detail: 'feedback unavailable' })
     response.writeHead(204)
     return response.end()
   }

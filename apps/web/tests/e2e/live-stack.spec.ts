@@ -49,7 +49,8 @@ test('verifies the authorized live stack through the operator console', async ({
     await expect(page.locator('.citation-list a').first()).toHaveAttribute('href', documentHref!, {
       timeout: 3 * 60_000,
     })
-    await page.getByRole('button', { name: 'Helpful', exact: true }).click()
+    await page.getByRole('button', { name: 'Mark answer as helpful', exact: true }).click()
+    await expect(page.getByText('Marked helpful', { exact: true })).toBeVisible()
 
     await page.goto(documentHref!)
     await expect(page.getByText('Citation landing page')).toBeVisible()

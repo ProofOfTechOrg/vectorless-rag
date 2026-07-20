@@ -3,7 +3,8 @@ import { Button } from '@astryxdesign/core/Button'
 import { Card } from '@astryxdesign/core/Card'
 import { TextInput } from '@astryxdesign/core/TextInput'
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
-import { useState, useSyncExternalStore } from 'react'
+import { useState } from 'react'
+import { useHydrated } from '../hooks/use-hydrated'
 import { homeForScopes } from '../lib/scopes'
 import { connect, getSession } from '../server/functions'
 
@@ -20,7 +21,7 @@ function ConnectPage() {
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
-  const hydrated = useSyncExternalStore(emptySubscribe, () => true, () => false)
+  const hydrated = useHydrated()
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -69,8 +70,4 @@ function ConnectPage() {
       </Card>
     </main>
   )
-}
-
-function emptySubscribe() {
-  return () => {}
 }

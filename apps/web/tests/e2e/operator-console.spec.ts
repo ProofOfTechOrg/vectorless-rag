@@ -5,8 +5,8 @@ test.skip(!!process.env.PLAYWRIGHT_LIVE, 'Deterministic mock coverage is separat
 const key = process.env.PLAYWRIGHT_API_KEY ?? 'vrag_test_full'
 const shellWidth = 80 * 16
 const operationalWidth = 64 * 16
-const readingWidth = 42 * 16
-const chatWidth = 48 * 16
+const readingWidth = 60 * 16
+const chatWidth = 60 * 16
 
 async function waitForHydration(page: import('@playwright/test').Page) {
   await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true')
@@ -18,6 +18,7 @@ async function connectToChat(page: import('@playwright/test').Page) {
   await page.getByLabel('API key').fill(key)
   await page.getByRole('button', { name: 'Connect' }).click()
   await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
+  await waitForHydration(page)
 }
 
 async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
@@ -225,6 +226,7 @@ test('connects through the UI and exercises the operator workflows', async ({ pa
   await page.getByLabel('API key').fill(key)
   await connectButton.click()
   await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
+  await waitForHydration(page)
 
   await page.getByLabel('Message input').fill('What does the cobalt lantern fixture prove?')
   await page.getByLabel('Message input').press('Enter')
@@ -235,7 +237,8 @@ test('connects through the UI and exercises the operator workflows', async ({ pa
     'href',
     '/documents/11111111-1111-4111-8111-111111111111',
   )
-  await page.getByRole('button', { name: 'Helpful', exact: true }).click()
+  await page.getByRole('button', { name: 'Mark answer as helpful', exact: true }).click()
+  await expect(page.getByText('Marked helpful', { exact: true })).toBeVisible()
 
   await page.evaluate(() => Object.assign(window, { __vectorlessSpaMarker: true }))
   await page.getByRole('link', { name: 'Documents', exact: true }).click()
@@ -331,8 +334,9 @@ test('keeps the chat on one centered reading axis at desktop and mobile sizes', 
     'href',
     '/documents/11111111-1111-4111-8111-111111111111',
   )
-  await expect(assistantMessage.getByRole('button', { name: 'Helpful', exact: true })).toBeVisible()
-  await expect(assistantMessage.getByRole('button', { name: 'Not helpful', exact: true })).toBeVisible()
+  await expect(assistantMessage.getByText('Rate answer', { exact: true })).toBeVisible()
+  await expect(assistantMessage.getByRole('button', { name: 'Mark answer as helpful', exact: true })).toBeVisible()
+  await expect(assistantMessage.getByRole('button', { name: 'Mark answer as not helpful', exact: true })).toBeVisible()
   await expect(page.locator('.chat-status')).toHaveText('Ready')
   await expectAlignedChatColumns(page)
 
@@ -361,6 +365,22 @@ test('keeps the chat on one centered reading axis at desktop and mobile sizes', 
   })
   expect(mobileBounds.bottomGap).toBeLessThanOrEqual(1)
   expect(mobileBounds.rightOverflow).toBe(0)
+})
+
+test('surfaces feedback failures and allows a retry', async ({ page }) => {
+  await connectToChat(page)
+  await page.getByLabel('Message input').fill('What does the cobalt lantern fixture prove?')
+  await page.getByLabel('Message input').press('Enter')
+
+  const assistantMessage = page.locator('article[data-sender="assistant"]').last()
+  await expect(assistantMessage.getByText(/cobalt lantern retrieval/)).toBeVisible()
+  await assistantMessage.getByRole('button', { name: 'Mark answer as not helpful', exact: true }).click()
+  await expect(assistantMessage.getByText('Feedback wasn’t saved. Try again.', { exact: true })).toBeVisible()
+
+  const retry = assistantMessage.getByRole('button', { name: 'Mark answer as helpful', exact: true })
+  await expect(retry).toBeEnabled()
+  await retry.click()
+  await expect(assistantMessage.getByText('Marked helpful', { exact: true })).toBeVisible()
 })
 
 test('centers operational, reading, connection, and navigation surfaces app-wide', async ({ page }) => {
@@ -414,11 +434,7 @@ test('returns an existing documents-only session to its scoped home', async ({ p
 })
 
 test('persists a failed stream with a safe retryable message', async ({ page }) => {
-  await page.goto('/connect')
-  await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled()
-  await page.getByLabel('API key').fill(key)
-  await page.getByRole('button', { name: 'Connect' }).click()
-
+  await connectToChat(page)
   await page.getByLabel('Message input').fill('Make this fail')
   await page.getByLabel('Message input').press('Enter')
 

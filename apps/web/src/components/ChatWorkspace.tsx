@@ -13,11 +13,14 @@ import { Citation as CitationChip } from '@astryxdesign/core/Citation'
 import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Heading } from '@astryxdesign/core/Heading'
 import { HStack } from '@astryxdesign/core/HStack'
+import { IconButton } from '@astryxdesign/core/IconButton'
 import { Markdown } from '@astryxdesign/core/Markdown'
 import { Text } from '@astryxdesign/core/Text'
 import { VStack } from '@astryxdesign/core/VStack'
 import { Link, useNavigate } from '@tanstack/react-router'
+import { ThumbsDown, ThumbsUp } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { useHydrated } from '../hooks/use-hydrated'
 import {
   chatErrorSchema,
   chatResponseSchema,
@@ -69,6 +72,7 @@ export function ChatWorkspace({
 }) {
   const navigate = useNavigate()
   const abortRef = useRef<AbortController | null>(null)
+  const hydrated = useHydrated()
   const [composer, setComposer] = useState('')
   const [status, setStatus] = useState('Ready')
   const [messages, setMessages] = useState<Message[]>(() =>
@@ -237,6 +241,7 @@ export function ChatWorkspace({
             onChange={setComposer}
             onSubmit={send}
             onStop={() => abortRef.current?.abort()}
+            isDisabled={!hydrated}
             isStopShown={isStreaming}
             footerActions={(
               <Text className="chat-status" role="status" type="supporting">
@@ -305,11 +310,7 @@ export function ChatWorkspace({
                           </HStack>
                         ) : null}
                         {message.traceId && !message.failureCode ? (
-                          <HStack align="center" gap={2} wrap="wrap">
-                            <Text type="supporting">Was this grounded?</Text>
-                            <Button label="Helpful" size="sm" variant="ghost" clickAction={async () => { await submitFeedback({ data: { traceId: message.traceId!, value: 1 } }) }} />
-                            <Button label="Not helpful" size="sm" variant="ghost" clickAction={async () => { await submitFeedback({ data: { traceId: message.traceId!, value: -1 } }) }} />
-                          </HStack>
+                          <AnswerFeedback traceId={message.traceId} />
                         ) : null}
                       </VStack>
                     ) : undefined}
@@ -327,6 +328,62 @@ export function ChatWorkspace({
         ) : null}
       </ChatLayout>
     </main>
+  )
+}
+
+type FeedbackValue = -1 | 1
+type FeedbackStatus = 'idle' | 'submitting' | 'saved' | 'error'
+
+function AnswerFeedback({ traceId }: { traceId: string }) {
+  const [value, setValue] = useState<FeedbackValue | null>(null)
+  const [feedbackStatus, setFeedbackStatus] = useState<FeedbackStatus>('idle')
+
+  async function saveFeedback(nextValue: FeedbackValue) {
+    if (feedbackStatus === 'submitting' || feedbackStatus === 'saved') return
+    setValue(nextValue)
+    setFeedbackStatus('submitting')
+    try {
+      await submitFeedback({ data: { traceId, value: nextValue } })
+      setFeedbackStatus('saved')
+    } catch {
+      setValue(null)
+      setFeedbackStatus('error')
+    }
+  }
+
+  const isLocked = feedbackStatus === 'submitting' || feedbackStatus === 'saved'
+  const statusLabel = feedbackStatus === 'submitting'
+    ? 'Saving feedback…'
+    : feedbackStatus === 'saved'
+      ? value === 1 ? 'Marked helpful' : 'Marked not helpful'
+      : feedbackStatus === 'error'
+        ? 'Feedback wasn’t saved. Try again.'
+        : 'Rate answer'
+
+  return (
+    <HStack aria-label="Answer feedback" align="center" gap={1} wrap="wrap">
+      <Text role="status" type="supporting">{statusLabel}</Text>
+      <IconButton
+        icon={<ThumbsUp aria-hidden="true" size={16} />}
+        isDisabled={isLocked}
+        isLoading={feedbackStatus === 'submitting' && value === 1}
+        label="Mark answer as helpful"
+        onClick={() => void saveFeedback(1)}
+        size="sm"
+        tooltip="Helpful"
+        variant={value === 1 ? 'secondary' : 'ghost'}
+      />
+      <IconButton
+        icon={<ThumbsDown aria-hidden="true" size={16} />}
+        isDisabled={isLocked}
+        isLoading={feedbackStatus === 'submitting' && value === -1}
+        label="Mark answer as not helpful"
+        onClick={() => void saveFeedback(-1)}
+        size="sm"
+        tooltip="Not helpful"
+        variant={value === -1 ? 'secondary' : 'ghost'}
+      />
+    </HStack>
   )
 }
 
