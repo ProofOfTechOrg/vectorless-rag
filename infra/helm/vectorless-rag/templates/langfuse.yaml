@@ -9,6 +9,7 @@
   valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: clickhouse-password}}
 - {name: REDIS_HOST, value: {{ include "vectorless-rag.redisHost" . | quote }}}
 - {name: REDIS_PORT, value: {{ .Values.redis.port | quote }}}
+- {name: REDIS_SOCKET_TIMEOUT_MS, value: "0"}
 - name: REDIS_AUTH
   valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: redis-password}}
 - {name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET, value: langfuse}
