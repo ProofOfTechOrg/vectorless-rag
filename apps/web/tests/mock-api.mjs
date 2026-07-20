@@ -54,6 +54,10 @@ const server = createServer(async (request, response) => {
     thread_id: 'thread-failed',
     runs: [{ trace_id: 'trace-failed', route: null, question: 'Make this fail', answer: null, citations: [], insufficient: true, status: 'failed', failure_code: 'request_failed', created_at: '2026-07-20T00:03:00Z' }],
   })
+  if (url.pathname === '/v1/threads/thread-delayed') return json(response, 200, {
+    thread_id: 'thread-delayed',
+    runs: [{ trace_id: 'trace-delayed', route: null, question: 'Hold the response', answer: null, citations: [], insufficient: true, status: 'failed', failure_code: 'request_failed', created_at: '2026-07-20T00:04:00Z' }],
+  })
   if (url.pathname === '/v1/documents') return json(response, 200, { items: [document, failedDocument], next_cursor: null })
   if (url.pathname === `/v1/documents/${documentId}`) return json(response, 200, document)
   if (url.pathname === `/v1/documents/${failedDocumentId}`) return json(response, 200, failedDocument)
@@ -98,6 +102,12 @@ const server = createServer(async (request, response) => {
     for await (const chunk of request) chunks.push(chunk)
     const payload = JSON.parse(Buffer.concat(chunks).toString())
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+    if (payload.message === 'Hold the response') {
+      response.flushHeaders()
+      await delay(2_000)
+      response.write('event: error\ndata: {"code":"request_failed","message":"Delayed test response","thread_id":"thread-delayed","trace_id":"trace-delayed"}\n\n')
+      return response.end()
+    }
     if (payload.message === 'Make this fail') {
       response.write('event: run.started\ndata: {"thread_id":"thread-failed","trace_id":"trace-failed"}\n\n')
       response.write('event: error\ndata: {"code":"request_failed","message":"The API could not complete this run.","thread_id":"thread-failed","trace_id":"trace-failed"}\n\n')

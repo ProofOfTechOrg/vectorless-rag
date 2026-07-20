@@ -4,6 +4,7 @@ import { Card } from '@astryxdesign/core/Card'
 import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Table, proportional } from '@astryxdesign/core/Table'
 import { createFileRoute, Link } from '@tanstack/react-router'
+import { RouteError } from '../components/RouteError'
 import { getDocuments } from '../server/functions'
 
 export const Route = createFileRoute('/_app/documents/')({
@@ -13,7 +14,7 @@ export const Route = createFileRoute('/_app/documents/')({
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
   loader: ({ deps }) => getDocuments({ data: deps }),
   pendingComponent: () => <div className="page"><p>Loading documents…</p></div>,
-  errorComponent: ({ error }) => <div className="page"><h1>Documents unavailable</h1><p>{error.message}</p></div>,
+  errorComponent: ({ error }) => <RouteError error={error} title="Documents unavailable" />,
   component: DocumentsPage,
 })
 

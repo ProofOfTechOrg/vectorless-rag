@@ -53,6 +53,26 @@
   .chat-column { width: 100%; max-width: var(--app-chat-width); margin-inline: auto; }
   .chat-conversation { flex: 1; min-height: 0; }
   .chat-answer-bubble { max-width: 100%; }
+  .chat-waiting {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1lh;
+    color: var(--color-text-secondary);
+  }
+  .chat-waiting-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1);
+  }
+  .chat-waiting-dot {
+    width: var(--spacing-1);
+    height: var(--spacing-1);
+    border-radius: 50%;
+    background: currentColor;
+    animation: chat-waiting-bounce 1.2s ease-in-out infinite;
+  }
+  .chat-waiting-dot:nth-child(2) { animation-delay: 150ms; }
+  .chat-waiting-dot:nth-child(3) { animation-delay: 300ms; }
   .citation-list { display: flex; gap: var(--spacing-2); flex-wrap: wrap; }
   .metadata { display: grid; grid-template-columns: minmax(9rem, 0.3fr) 1fr; gap: var(--spacing-2); }
   .mobile-only { display: none; }
@@ -77,5 +97,13 @@
     .document-list { display: grid; gap: var(--spacing-3); }
     .mobile-only { display: block; }
     .metadata { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chat-waiting-dot { animation: none; opacity: 0.65; }
+  }
+
+  @keyframes chat-waiting-bounce {
+    0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(calc(var(--spacing-1) * -1)); }
   }
 }

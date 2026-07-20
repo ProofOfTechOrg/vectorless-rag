@@ -5,13 +5,14 @@ import { Button } from '@astryxdesign/core/Button'
 import { Card } from '@astryxdesign/core/Card'
 import { createFileRoute } from '@tanstack/react-router'
 import { useState } from 'react'
+import { RouteError } from '../components/RouteError'
 import type { Job } from '../lib/contracts'
 import { getDocument, retryDocument } from '../server/functions'
 
 export const Route = createFileRoute('/_app/documents/$documentId')({
   loader: ({ params }) => getDocument({ data: { documentId: params.documentId } }),
   pendingComponent: () => <div className="page page-reading"><p>Loading document…</p></div>,
-  errorComponent: ({ error }) => <div className="page page-reading"><h1>Document unavailable</h1><p>{error.message}</p></div>,
+  errorComponent: ({ error }) => <RouteError error={error} title="Document unavailable" />,
   component: DocumentDetail,
 })
 

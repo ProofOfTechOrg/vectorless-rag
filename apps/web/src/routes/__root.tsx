@@ -2,6 +2,7 @@ import { LinkProvider } from '@astryxdesign/core/Link'
 import { HeadContent, Link, Scripts, createRootRoute } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { AppearanceProvider } from '../components/AppearanceProvider'
+import { RouteError } from '../components/RouteError'
 
 import appCss from '../styles.css?url'
 
@@ -28,6 +29,7 @@ export const Route = createRootRoute({
       },
     ],
   }),
+  errorComponent: ({ error }) => <RouteError error={error} title="Unable to load the console" fullPage />,
   shellComponent: RootDocument,
 })
 

@@ -317,10 +317,12 @@ export function ChatWorkspace({
                       </VStack>
                     ) : undefined}
                   >
-                    {message.sender === 'assistant' ? (
+                    {message.sender === 'assistant' && message.text ? (
                       <Markdown contentWidth="100%" isStreaming={message.streaming} headingLevelStart={3} autolink="gfm">
-                        {message.text || '…'}
+                        {message.text}
                       </Markdown>
+                    ) : message.sender === 'assistant' && message.streaming ? (
+                      <WaitingForResponse />
                     ) : message.text}
                   </ChatMessageBubble>
                 </ChatMessage>
@@ -330,6 +332,18 @@ export function ChatWorkspace({
         ) : null}
       </ChatLayout>
     </main>
+  )
+}
+
+function WaitingForResponse() {
+  return (
+    <span aria-label="Waiting for response" className="chat-waiting" role="status">
+      <span aria-hidden="true" className="chat-waiting-dots">
+        <span className="chat-waiting-dot" />
+        <span className="chat-waiting-dot" />
+        <span className="chat-waiting-dot" />
+      </span>
+    </span>
   )
 }
 

@@ -12,6 +12,22 @@ async function waitForHydration(page: import('@playwright/test').Page) {
   await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true')
 }
 
+async function captureWaitingIndicator(page: import('@playwright/test').Page) {
+  const handle = await page.waitForFunction(() => {
+    const indicator = document.querySelector<HTMLElement>('.chat-waiting')
+    if (!indicator) return false
+    const dots = [...indicator.querySelectorAll<HTMLElement>('.chat-waiting-dot')]
+    return {
+      animationName: dots[0] ? getComputedStyle(dots[0]).animationName : '',
+      count: dots.length,
+      label: indicator.getAttribute('aria-label'),
+    }
+  })
+  const snapshot = await handle.jsonValue()
+  if (!snapshot) throw new Error('Waiting indicator did not render')
+  return snapshot
+}
+
 async function connectToChat(page: import('@playwright/test').Page) {
   await page.goto('/connect')
   await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled()
@@ -365,6 +381,34 @@ test('keeps the chat on one centered reading axis at desktop and mobile sizes', 
   })
   expect(mobileBounds.bottomGap).toBeLessThanOrEqual(1)
   expect(mobileBounds.rightOverflow).toBe(0)
+})
+
+test('animates the assistant waiting indicator while a response is pending', async ({ page }) => {
+  await connectToChat(page)
+
+  await page.getByLabel('Message input').fill('Hold the response')
+  const animatedSnapshot = captureWaitingIndicator(page)
+  await page.getByLabel('Message input').press('Enter')
+  expect(await animatedSnapshot).toEqual({
+    animationName: 'chat-waiting-bounce',
+    count: 3,
+    label: 'Waiting for response',
+  })
+  await expect(page).toHaveURL(/\/chat\/thread-delayed$/)
+  await expect(page.getByText('The API could not complete this run.')).toBeVisible()
+  await expect(page.locator('.chat-waiting')).toHaveCount(0)
+
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await page.getByLabel('Message input').fill('Hold the response')
+  const reducedMotionSnapshot = captureWaitingIndicator(page)
+  await page.getByLabel('Message input').press('Enter')
+  expect(await reducedMotionSnapshot).toEqual({
+    animationName: 'none',
+    count: 3,
+    label: 'Waiting for response',
+  })
+  await expect(page.getByText('Delayed test response')).toBeVisible()
+  await expect(page.locator('.chat-waiting')).toHaveCount(0)
 })
 
 test('surfaces feedback failures and allows a retry', async ({ page }) => {
