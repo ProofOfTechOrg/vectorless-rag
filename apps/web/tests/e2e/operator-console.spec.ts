@@ -383,6 +383,22 @@ test('surfaces feedback failures and allows a retry', async ({ page }) => {
   await expect(assistantMessage.getByText('Marked helpful', { exact: true })).toBeVisible()
 })
 
+test('retries a failed document from its detail page', async ({ page }) => {
+  await connectToChat(page)
+  await page.goto('/documents/71309511-00aa-4d06-a60b-728e1fdd3269')
+  await waitForHydration(page)
+
+  await expect(page.getByRole('heading', { name: 'Failed PageIndex Fixture' })).toBeVisible()
+  await expect(page.getByText('Ingestion failed', { exact: true })).toBeVisible()
+  const retry = page.getByRole('button', { name: 'Retry ingestion', exact: true })
+  await expect(retry).toBeEnabled()
+  await retry.click()
+
+  await expect(page.getByRole('status').filter({ hasText: 'Retry queued' })).toBeVisible()
+  await expect(page.getByText('queued', { exact: true })).toBeVisible()
+  await expect(retry).toHaveCount(0)
+})
+
 test('centers operational, reading, connection, and navigation surfaces app-wide', async ({ page }) => {
   test.slow()
   await page.setViewportSize({ width: 1440, height: 1000 })

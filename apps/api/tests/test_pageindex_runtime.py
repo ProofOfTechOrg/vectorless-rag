@@ -90,8 +90,10 @@ def test_strict_json_parsing_allows_fences_and_narrow_repairs() -> None:
 
 
 def test_sync_valid_json_and_length_continuation() -> None:
+    calls: list[dict[str, object]] = []
+
     def valid_completion(**kwargs: object) -> object:
-        del kwargs
+        calls.append(kwargs)
         return _response('{"ok": true}')
 
     def length_completion(**kwargs: object) -> object:
@@ -100,6 +102,7 @@ def test_sync_valid_json_and_length_continuation() -> None:
 
     valid = _runtime(valid_completion)
     assert valid.complete("provider/model", "prompt", expect_json=True) == '{"ok": true}'
+    assert calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
 
     length = _runtime(length_completion)
     assert length.complete(
@@ -217,9 +220,10 @@ def test_authentication_and_bad_request_errors_are_not_retried(
 
 async def test_async_invalid_then_valid() -> None:
     responses = iter([_response("bad"), _response('{"answer": "yes"}')])
+    calls: list[dict[str, object]] = []
 
     async def completion(**kwargs: object) -> object:
-        del kwargs
+        calls.append(kwargs)
         return next(responses)
 
     def unused_sync(**kwargs: object) -> object:
@@ -230,3 +234,4 @@ async def test_async_invalid_then_valid() -> None:
     assert await runtime.acomplete("provider/model", "prompt", expect_json=True) == (
         '{"answer": "yes"}'
     )
+    assert all(call["extra_body"] == {"thinking": {"type": "disabled"}} for call in calls)

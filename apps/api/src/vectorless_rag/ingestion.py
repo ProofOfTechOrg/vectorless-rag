@@ -8,9 +8,10 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol, cast
+from uuid import UUID
 
 import fitz
-from sqlalchemy import func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vectorless_rag.config import Settings
@@ -231,6 +232,19 @@ async def retry_failed_ingestion(session: AsyncSession, failed_job: IngestionJob
     document.diagnostic = None
     await session.flush()
     return replacement
+
+
+async def retry_latest_document_ingestion(session: AsyncSession, document_id: UUID) -> IngestionJob:
+    latest_job = await session.scalar(
+        select(IngestionJob)
+        .where(IngestionJob.document_id == document_id)
+        .order_by(desc(IngestionJob.created_at), desc(IngestionJob.id))
+        .with_for_update()
+        .limit(1)
+    )
+    if latest_job is None:
+        raise IngestionRetryConflict("the document has no ingestion work to retry")
+    return await retry_failed_ingestion(session, latest_job)
 
 
 class IngestionProcessor:

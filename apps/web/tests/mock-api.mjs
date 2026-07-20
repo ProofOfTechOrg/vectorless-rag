@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { URL } from 'node:url'
 
 const documentId = '11111111-1111-4111-8111-111111111111'
+const failedDocumentId = '71309511-00aa-4d06-a60b-728e1fdd3269'
 const identity = { name: 'playwright-full', scopes: ['chat', 'documents:read', 'admin:ingest'] }
 const documentsOnlyIdentity = { name: 'playwright-documents-only', scopes: ['documents:read'] }
 const document = {
@@ -19,6 +20,14 @@ const document = {
   diagnostic: null,
   created_at: '2026-07-20T00:00:00Z',
   updated_at: '2026-07-20T00:01:00Z',
+}
+const failedDocument = {
+  ...document,
+  id: failedDocumentId,
+  arxiv_id: '1904.05234',
+  title: 'Failed PageIndex Fixture',
+  status: 'failed',
+  diagnostic: 'The PageIndex provider request failed after all retry attempts.',
 }
 const citation = { source_type: 'document', source_id: documentId, title: document.title, page_start: 1, page_end: 2 }
 const completed = { answer: 'The fixture confirms cobalt lantern retrieval [1].', thread_id: 'thread-1', route: 'documents', trace_id: 'trace-1', citations: [citation], sql_audit_id: null, insufficient: false }
@@ -45,10 +54,16 @@ const server = createServer(async (request, response) => {
     thread_id: 'thread-failed',
     runs: [{ trace_id: 'trace-failed', route: null, question: 'Make this fail', answer: null, citations: [], insufficient: true, status: 'failed', failure_code: 'request_failed', created_at: '2026-07-20T00:03:00Z' }],
   })
-  if (url.pathname === '/v1/documents') return json(response, 200, { items: [document], next_cursor: null })
+  if (url.pathname === '/v1/documents') return json(response, 200, { items: [document, failedDocument], next_cursor: null })
   if (url.pathname === `/v1/documents/${documentId}`) return json(response, 200, document)
+  if (url.pathname === `/v1/documents/${failedDocumentId}`) return json(response, 200, failedDocument)
   if (url.pathname === '/v1/admin/ingestion/sync') return json(response, 200, { discovered: 1, queued: 1, deduplicated: 0, pilot_limit_reached: false })
   if (url.pathname.startsWith('/v1/admin/ingestion/')) return json(response, 200, { id: '22222222-2222-4222-8222-222222222222', document_id: documentId, status: 'completed', attempts: 1, diagnostic: null, metrics: { pages: 2 }, created_at: '2026-07-20T00:00:00Z', updated_at: '2026-07-20T00:01:00Z' })
+  if (url.pathname === `/v1/admin/documents/${failedDocumentId}/retry`) {
+    if (request.method !== 'POST') return json(response, 405, { detail: 'method not allowed' })
+    if (!requestIdentity.scopes.includes('admin:ingest')) return json(response, 403, { detail: 'insufficient scope' })
+    return json(response, 200, { id: '33333333-3333-4333-8333-333333333333', document_id: failedDocumentId, status: 'queued', attempts: 0, diagnostic: null, metrics: {}, created_at: '2026-07-20T00:04:00Z', updated_at: '2026-07-20T00:04:00Z' })
+  }
   if (url.pathname === '/v1/admin/documents') {
     const chunks = []
     for await (const chunk of request) chunks.push(chunk)

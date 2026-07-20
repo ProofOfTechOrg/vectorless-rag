@@ -35,6 +35,7 @@ from vectorless_rag.ingestion import (
     UnsupportedPDF,
     register_pdf,
     retry_failed_ingestion,
+    retry_latest_document_ingestion,
     sync_corpus,
 )
 from vectorless_rag.llm import DeepSeekLLM
@@ -385,6 +386,20 @@ async def upload_document(
     if job is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "document already exists")
     return JobResponse.model_validate(job)
+
+
+@app.post("/v1/admin/documents/{document_id}/retry", response_model=JobResponse, tags=["admin"])
+async def retry_document_ingestion(
+    document_id: uuid.UUID, principal: AdminPrincipal, session: Session
+) -> JobResponse:
+    del principal
+    if await session.get(Document, document_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    try:
+        replacement = await retry_latest_document_ingestion(session, document_id)
+    except IngestionRetryConflict as error:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+    return JobResponse.model_validate(replacement)
 
 
 @app.post("/v1/admin/ingestion/sync", response_model=SyncResponse, tags=["admin"])

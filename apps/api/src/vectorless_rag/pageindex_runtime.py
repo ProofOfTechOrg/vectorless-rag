@@ -334,6 +334,7 @@ class PageIndexRuntime:
                     messages=messages,
                     temperature=0,
                     num_retries=0,
+                    extra_body={"thinking": {"type": "disabled"}},
                 )
                 content, finish_reason, usage = self._read_response(
                     response, attempt=attempt, expect_json=expect_json
@@ -382,6 +383,7 @@ class PageIndexRuntime:
                     messages=messages,
                     temperature=0,
                     num_retries=0,
+                    extra_body={"thinking": {"type": "disabled"}},
                 )
                 content, finish_reason, usage = self._read_response(
                     response, attempt=attempt, expect_json=expect_json

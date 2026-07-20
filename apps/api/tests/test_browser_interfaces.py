@@ -45,11 +45,16 @@ class _Session:
         return _Result(self.rows)
 
 
-def test_retry_ingestion_route_requires_admin_ingest_scope() -> None:
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/admin/ingestion/{job_id}/retry",
+        "/v1/admin/documents/{document_id}/retry",
+    ],
+)
+def test_retry_ingestion_routes_require_admin_ingest_scope(path: str) -> None:
     route = next(
-        route
-        for route in app.routes
-        if isinstance(route, APIRoute) and route.path == "/v1/admin/ingestion/{job_id}/retry"
+        route for route in app.routes if isinstance(route, APIRoute) and route.path == path
     )
     principal = next(
         dependency for dependency in route.dependant.dependencies if dependency.name == "principal"

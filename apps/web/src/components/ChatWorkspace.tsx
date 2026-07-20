@@ -36,6 +36,7 @@ interface Message {
   sender: 'user' | 'assistant'
   text: string
   traceId?: string
+  threadId?: string
   route?: string | null
   citations?: Citation[]
   streaming?: boolean
@@ -82,6 +83,7 @@ export function ChatWorkspace({
         sender: 'assistant' as const,
         text: run.answer ?? failureMessage(run.failure_code),
         traceId: run.trace_id,
+        threadId,
         route: run.route,
         citations: run.citations,
         failureCode: run.failure_code ?? undefined,
@@ -120,7 +122,7 @@ export function ChatWorkspace({
           const started = runStartedSchema.parse(JSON.parse(event.data))
           completedThread = started.thread_id
           traceId = started.trace_id
-          setMessages((current) => updateLast(current, { traceId }))
+          setMessages((current) => updateLast(current, { traceId, threadId: started.thread_id }))
         } else if (event.event === 'route.selected') {
           const route = JSON.parse(event.data).route as string
           setStatus(`Route selected: ${route}`)
@@ -309,7 +311,7 @@ export function ChatWorkspace({
                             ))}
                           </HStack>
                         ) : null}
-                        {message.traceId && !message.failureCode ? (
+                        {message.traceId && !message.failureCode && message.threadId === threadId ? (
                           <AnswerFeedback traceId={message.traceId} />
                         ) : null}
                       </VStack>

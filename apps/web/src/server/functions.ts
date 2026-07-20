@@ -68,6 +68,15 @@ export const getDocument = createServerFn({ method: 'GET' })
   .validator(z.object({ documentId: z.uuid() }))
   .handler(({ data }) => apiJson(`/v1/documents/${data.documentId}`, documentSchema))
 
+export const retryDocument = createServerFn({ method: 'POST' })
+  .validator(z.object({ documentId: z.uuid() }))
+  .handler(({ data }) => {
+    assertCurrentRequestOrigin()
+    return apiJson(`/v1/admin/documents/${data.documentId}/retry`, jobSchema, {
+      method: 'POST',
+    })
+  })
+
 export const syncCorpus = createServerFn({ method: 'POST' })
   .validator(z.object({ force: z.boolean() }))
   .handler(({ data }) => {

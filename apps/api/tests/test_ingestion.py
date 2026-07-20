@@ -14,6 +14,7 @@ from vectorless_rag.ingestion import (
     extract_first_pages,
     normalize_document_title,
     retry_failed_ingestion,
+    retry_latest_document_ingestion,
     sha256_bytes,
     validate_pdf,
 )
@@ -57,6 +58,18 @@ class _RetrySession:
 
     async def flush(self) -> None:
         return None
+
+
+class _DocumentRetrySession(_RetrySession):
+    def __init__(self, document: Document, latest: IngestionJob | None) -> None:
+        super().__init__(document)
+        self.latest = latest
+        self.scalar_calls = 0
+
+    async def scalar(self, statement: object) -> IngestionJob | None:
+        del statement
+        self.scalar_calls += 1
+        return self.latest if self.scalar_calls == 1 else self.pending
 
 
 class _ProcessingSession:
@@ -193,6 +206,33 @@ async def test_retry_creates_forced_replacement_and_preserves_failed_history() -
     assert failed.diagnostic == "safe old failure"
     assert document.status == DocumentStatus.queued
     assert document.diagnostic is None
+
+
+async def test_document_retry_uses_only_the_latest_ingestion_job() -> None:
+    document = _document()
+    latest = IngestionJob(
+        id=uuid.uuid4(),
+        document_id=document.id,
+        status=JobStatus.failed,
+    )
+    session = _DocumentRetrySession(document, latest)
+
+    replacement = await retry_latest_document_ingestion(cast(Any, session), document.id)
+
+    assert replacement.document_id == document.id
+    assert replacement.force is True
+    assert session.scalar_calls == 2
+
+    completed = IngestionJob(document_id=document.id, status=JobStatus.completed)
+    with pytest.raises(IngestionRetryConflict, match="only failed"):
+        await retry_latest_document_ingestion(
+            cast(Any, _DocumentRetrySession(document, completed)), document.id
+        )
+
+    with pytest.raises(IngestionRetryConflict, match="no ingestion work"):
+        await retry_latest_document_ingestion(
+            cast(Any, _DocumentRetrySession(document, None)), document.id
+        )
 
 
 async def test_provider_failures_persist_only_stable_safe_metadata(

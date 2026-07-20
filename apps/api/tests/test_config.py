@@ -33,7 +33,7 @@ def test_ingestion_operational_defaults_are_bounded_and_patch_versioned() -> Non
     assert settings.pageindex_timeout_seconds == 3_600
     assert settings.ingestion_max_attempts == 3
     assert settings.ingestion_stale_grace_seconds == 300
-    assert settings.pageindex_version.endswith("+vr1")
+    assert settings.pageindex_version.endswith("+vr2")
 
 
 def test_unpatched_pageindex_artifact_version_cannot_be_selected(
