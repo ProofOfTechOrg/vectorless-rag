@@ -27,6 +27,19 @@ from vectorless_rag.schemas import DocumentMetadata, SyncResponse
 from vectorless_rag.storage import ObjectStore
 
 ARXIV_FILENAME = re.compile(r"^(?P<id>\d{4}\.\d{4,5})(?:v\d+)?\.pdf$", re.IGNORECASE)
+PLACEHOLDER_TITLES = frozenset(
+    {
+        "",
+        "n/a",
+        "none",
+        "not available",
+        "null",
+        "unknown",
+        "unknown title",
+        "untitled",
+        "untitled document",
+    }
+)
 
 
 class UnsupportedPDF(ValueError):
@@ -42,6 +55,14 @@ def arxiv_id_from_filename(filename: str) -> str | None:
     return match.group("id") if match else None
 
 
+def normalize_document_title(extracted: str, embedded: str | None, filename: str) -> str:
+    for candidate in (extracted, embedded):
+        normalized = candidate.strip() if candidate else ""
+        if normalized.casefold() not in PLACEHOLDER_TITLES:
+            return normalized
+    return Path(filename).stem
+
+
 def validate_pdf(data: bytes, filename: str, maximum_bytes: int) -> None:
     if not filename.lower().endswith(".pdf"):
         raise UnsupportedPDF("only .pdf files are accepted")
@@ -55,7 +76,7 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def extract_first_pages(data: bytes, count: int = 3) -> tuple[str, int, float]:
+def extract_first_pages(data: bytes, count: int = 3) -> tuple[str, int, float, str | None]:
     try:
         with fitz.open(stream=data, filetype="pdf") as pdf:
             texts = [
@@ -63,18 +84,21 @@ def extract_first_pages(data: bytes, count: int = 3) -> tuple[str, int, float]:
                 for index in range(min(count, len(pdf)))
             ]
             page_count = len(pdf)
+            pdf_metadata = cast(dict[str, object] | None, pdf.metadata) or {}
+            raw_title = pdf_metadata.get("title")
+            embedded_title = (raw_title.strip() or None) if isinstance(raw_title, str) else None
     except Exception as exc:
         raise UnsupportedPDF(f"PDF parsing failed: {exc}") from exc
     combined = "\n\n".join(texts).strip()
     non_space = sum(not char.isspace() for char in combined)
     quality = min(1.0, non_space / max(1, min(page_count, count) * 1_500))
-    return combined, page_count, quality
+    return combined, page_count, quality, embedded_title
 
 
 async def extract_metadata(
     data: bytes, filename: str, llm: StructuredLLM, settings: Settings
 ) -> tuple[DocumentMetadata, int, float]:
-    text, page_count, quality = await asyncio.to_thread(extract_first_pages, data)
+    text, page_count, quality, embedded_title = await asyncio.to_thread(extract_first_pages, data)
     if len(text) < settings.extraction_min_characters:
         raise UnsupportedPDF(
             f"extraction-poor PDF: first pages yielded {len(text)} characters; OCR is not enabled"
@@ -87,6 +111,9 @@ async def extract_metadata(
     )
     metadata = await llm.structured(
         DocumentMetadata, UNTRUSTED_DOCUMENT_SYSTEM, prompt, thinking=False
+    )
+    metadata = metadata.model_copy(
+        update={"title": normalize_document_title(metadata.title, embedded_title, filename)}
     )
     return metadata, page_count, quality
 
