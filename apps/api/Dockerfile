@@ -10,6 +10,7 @@ COPY src ./src
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY scripts ./scripts
+COPY patches ./patches
 RUN uv sync --frozen --no-dev && sh /app/scripts/install-pageindex.sh /opt/pageindex
 ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/opt/pageindex:/app/src"
 RUN useradd --create-home --uid 10001 app && mkdir -p /workspaces && chown -R app:app /app /workspaces

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,7 +25,13 @@ class Settings(BaseSettings):
     pageindex_model: str = "deepseek/deepseek-v4-pro"
     pageindex_source_dir: Path = Path("/opt/pageindex")
     pageindex_work_dir: Path = Path("/workspaces")
-    pageindex_version: str = "190f8b378be58199ca993566a9214dba72089c54"
+    pageindex_version: Literal["190f8b378be58199ca993566a9214dba72089c54+vr1"] = (
+        "190f8b378be58199ca993566a9214dba72089c54+vr1"
+    )
+    pageindex_llm_max_attempts: int = 3
+    pageindex_timeout_seconds: int = 3_600
+    ingestion_max_attempts: int = 3
+    ingestion_stale_grace_seconds: int = 300
     metadata_prompt_version: str = "metadata-v1"
     arxiv_pdf_dir: Path = Path("arxiv-pdfs")
     object_store_endpoint: str = "http://localhost:9000"
@@ -58,7 +65,15 @@ class Settings(BaseSettings):
     def normalize_corpus_dir(cls, value: Path) -> Path:
         return value.expanduser().resolve()
 
-    @field_validator("candidate_limit", "document_limit", "fetched_page_limit")
+    @field_validator(
+        "candidate_limit",
+        "document_limit",
+        "fetched_page_limit",
+        "pageindex_llm_max_attempts",
+        "pageindex_timeout_seconds",
+        "ingestion_max_attempts",
+        "ingestion_stale_grace_seconds",
+    )
     @classmethod
     def positive_limits(cls, value: int) -> int:
         if value < 1:

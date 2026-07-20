@@ -1,16 +1,25 @@
-from typing import Protocol, cast
+import uuid
+from typing import Any, Protocol, cast
 
 import fitz
 import pytest
+from pytest import MonkeyPatch
 
+from vectorless_rag.config import Settings
 from vectorless_rag.ingestion import (
+    IngestionProcessor,
+    IngestionRetryConflict,
     UnsupportedPDF,
     arxiv_id_from_filename,
     extract_first_pages,
     normalize_document_title,
+    retry_failed_ingestion,
     sha256_bytes,
     validate_pdf,
 )
+from vectorless_rag.models import Document, DocumentStatus, IngestionJob, JobStatus
+from vectorless_rag.pageindex_adapter import PageIndexError
+from vectorless_rag.schemas import DocumentMetadata
 
 
 class _WritablePage(Protocol):
@@ -25,6 +34,74 @@ class _WritableDocument(Protocol):
     def tobytes(self) -> bytes: ...
 
     def close(self) -> None: ...
+
+
+class _RetrySession:
+    def __init__(self, document: Document, *, pending: IngestionJob | None = None) -> None:
+        self.document = document
+        self.pending = pending
+        self.added: list[object] = []
+
+    async def scalar(self, statement: object) -> IngestionJob | None:
+        del statement
+        return self.pending
+
+    async def get(
+        self, model: object, identifier: object, *, with_for_update: bool = False
+    ) -> Document | None:
+        del model, identifier, with_for_update
+        return self.document
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
+
+    async def flush(self) -> None:
+        return None
+
+
+class _ProcessingSession:
+    def __init__(self, document: Document) -> None:
+        self.document = document
+
+    async def get(
+        self, model: object, identifier: object, *, with_for_update: bool = False
+    ) -> Document:
+        del model, identifier, with_for_update
+        return self.document
+
+    async def scalar(self, statement: object) -> None:
+        del statement
+        return None
+
+    async def flush(self) -> None:
+        return None
+
+
+class _Store:
+    async def get_bytes(self, key: str) -> bytes:
+        del key
+        return b"%PDF-private-document"
+
+
+class _FailingPageIndex:
+    async def index(self, path: object, document_id: str, metadata: object) -> bytes:
+        del path, document_id, metadata
+        raise PageIndexError(
+            "pageindex_content_filter",
+            "The provider rejected PageIndex content under its content policy.",
+            attempts=1,
+            finish_reason="content_filter",
+        )
+
+
+def _document() -> Document:
+    return Document(
+        id=uuid.uuid4(),
+        sha256="a" * 64,
+        original_filename="paper.pdf",
+        pdf_object_key="pdf/paper.pdf",
+        status=DocumentStatus.failed,
+    )
 
 
 @pytest.mark.parametrize(
@@ -80,3 +157,89 @@ def test_pdf_extraction_reads_embedded_title() -> None:
     assert text == "A text-rich paper page"
     assert page_count == 1
     assert embedded_title == "Embedded Paper Title"
+
+
+async def test_retry_requires_failed_job_and_no_pending_work() -> None:
+    document = _document()
+    completed = IngestionJob(document_id=document.id, status=JobStatus.completed)
+    session = _RetrySession(document)
+
+    with pytest.raises(IngestionRetryConflict, match="only failed"):
+        await retry_failed_ingestion(cast(Any, session), completed)
+
+    failed = IngestionJob(document_id=document.id, status=JobStatus.failed)
+    session.pending = IngestionJob(document_id=document.id, status=JobStatus.running)
+    with pytest.raises(IngestionRetryConflict, match="already has"):
+        await retry_failed_ingestion(cast(Any, session), failed)
+
+
+async def test_retry_creates_forced_replacement_and_preserves_failed_history() -> None:
+    document = _document()
+    failed = IngestionJob(
+        id=uuid.uuid4(),
+        document_id=document.id,
+        status=JobStatus.failed,
+        diagnostic="safe old failure",
+    )
+    session = _RetrySession(document)
+
+    replacement = await retry_failed_ingestion(cast(Any, session), failed)
+
+    assert replacement is session.added[0]
+    assert replacement.document_id == document.id
+    assert replacement.force is True
+    assert replacement.status == JobStatus.queued
+    assert failed.status == JobStatus.failed
+    assert failed.diagnostic == "safe old failure"
+    assert document.status == DocumentStatus.queued
+    assert document.diagnostic is None
+
+
+async def test_provider_failures_persist_only_stable_safe_metadata(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    document = _document()
+    job = IngestionJob(
+        id=uuid.uuid4(),
+        document_id=document.id,
+        status=JobStatus.running,
+        metrics={},
+    )
+
+    async def metadata(*args: object, **kwargs: object) -> tuple[DocumentMetadata, int, float]:
+        del args, kwargs
+        return (
+            DocumentMetadata(
+                title="Paper",
+                authors=[],
+                abstract="Abstract",
+                topics=[],
+                description="Description",
+            ),
+            2,
+            1.0,
+        )
+
+    async def inline_to_thread(function: Any, *args: Any, **kwargs: Any) -> Any:
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr("vectorless_rag.ingestion.extract_metadata", metadata)
+    monkeypatch.setattr("vectorless_rag.ingestion.asyncio.to_thread", inline_to_thread)
+    processor = IngestionProcessor(
+        Settings(),
+        cast(Any, _Store()),
+        cast(Any, object()),
+        cast(Any, _FailingPageIndex()),
+    )
+
+    with pytest.raises(PageIndexError):
+        await processor.process(cast(Any, _ProcessingSession(document)), job)
+
+    assert job.status == JobStatus.failed
+    assert job.metrics["failure_code"] == "pageindex_content_filter"
+    assert job.metrics["provider_finish_reason"] == "content_filter"
+    assert job.metrics["llm_attempts"] == 1
+    assert document.diagnostic == (
+        "The provider rejected PageIndex content under its content policy."
+    )
+    assert "private-document" not in repr((job.diagnostic, job.metrics, document.diagnostic))

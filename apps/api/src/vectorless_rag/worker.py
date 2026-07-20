@@ -24,14 +24,14 @@ async def run_worker() -> None:
     await store.ensure_bucket()
     observability = Observability(settings)
     processor = IngestionProcessor(
-        settings, store, DeepSeekLLM(settings), PageIndexAdapter(settings)
+        settings, store, DeepSeekLLM(settings, observability), PageIndexAdapter(settings)
     )
     worker_id = f"{socket.gethostname()}:{os.getpid()}"
     try:
         while True:
             job_id = None
             async with database.session() as session:
-                job = await claim_ingestion_job(session, worker_id)
+                job = await claim_ingestion_job(session, worker_id, settings)
                 if job is not None:
                     job_id = job.id
             if job_id is None:
@@ -44,7 +44,7 @@ async def run_worker() -> None:
                 try:
                     await processor.process(session, job)
                 except Exception:
-                    logger.exception("ingestion job %s failed", job_id)
+                    logger.error("ingestion job %s failed", job_id)
     finally:
         observability.flush()
         await database.close()

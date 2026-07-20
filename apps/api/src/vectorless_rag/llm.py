@@ -1,19 +1,38 @@
 from __future__ import annotations
 
 import json
-from typing import Protocol, TypeVar
+from typing import Protocol, TypeVar, cast
 
 import httpx
 import openai
-from langchain_core.runnables import RunnableConfig
 from langchain_deepseek import ChatDeepSeek
-from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel, SecretStr
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
 from vectorless_rag.config import Settings
+from vectorless_rag.observability import Observability
 
 StructuredT = TypeVar("StructuredT", bound=BaseModel)
+FORMAT_CORRECTION = "\nYour prior response was invalid or empty. Return only the required schema."
+
+
+class LLMError(RuntimeError):
+    def __init__(
+        self,
+        failure_code: str,
+        diagnostic: str,
+        *,
+        attempts: int,
+        finish_reason: str | None = None,
+    ) -> None:
+        super().__init__(diagnostic)
+        self.failure_code = failure_code
+        self.diagnostic = diagnostic
+        self.attempts = attempts
+        self.finish_reason = finish_reason
+
+
+class StructuredOutputError(LLMError):
+    pass
 
 
 class StructuredLLM(Protocol):
@@ -22,17 +41,47 @@ class StructuredLLM(Protocol):
     ) -> StructuredT: ...
 
 
+def _is_transient(error: Exception) -> bool:
+    return isinstance(
+        error,
+        (
+            TimeoutError,
+            ConnectionError,
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            openai.APIConnectionError,
+            openai.RateLimitError,
+            openai.InternalServerError,
+        ),
+    )
+
+
+def _finish_reason(raw: object) -> str | None:
+    metadata = getattr(raw, "response_metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    values = cast(dict[str, object], metadata)
+    for key in ("finish_reason", "stop_reason"):
+        value = values.get(key)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _raw_output(raw: object) -> str:
+    content = getattr(raw, "content", "")
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
+
+
 class DeepSeekLLM:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, observability: Observability | None = None) -> None:
         if settings.deepseek_api_key is None:
             raise RuntimeError("DEEPSEEK_API_KEY is required for LLM operations")
         self.settings = settings
         self.api_key: SecretStr = settings.deepseek_api_key
-        self.callback = (
-            CallbackHandler()
-            if settings.langfuse_public_key and settings.langfuse_secret_key
-            else None
-        )
+        self.observability = observability or Observability(settings)
 
     def _client(self, thinking: bool) -> ChatDeepSeek:
         extra_body: dict[str, object] = {
@@ -46,24 +95,14 @@ class DeepSeekLLM:
             reasoning_effort="high" if thinking else None,
         )
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_random_exponential(multiplier=0.5, max=8),
-        retry=retry_if_exception_type(
-            (
-                TimeoutError,
-                ConnectionError,
-                httpx.TimeoutException,
-                httpx.NetworkError,
-                openai.APIConnectionError,
-                openai.RateLimitError,
-                openai.InternalServerError,
-            )
-        ),
-        reraise=True,
-    )
     async def _invoke(
-        self, schema: type[StructuredT], system: str, user: str, thinking: bool
+        self,
+        schema: type[StructuredT],
+        system: str,
+        user: str,
+        thinking: bool,
+        *,
+        attempt: int = 1,
     ) -> StructuredT:
         method = "json_mode" if thinking else "function_calling"
         if thinking:
@@ -71,27 +110,103 @@ class DeepSeekLLM:
             system = (
                 f"{system}\nReturn only a JSON object matching this JSON Schema:\n{schema_json}"
             )
-        runnable = self._client(thinking).with_structured_output(schema, method=method)
-        config: RunnableConfig = {"callbacks": [self.callback]} if self.callback else {}
-        response = await runnable.ainvoke([("system", system), ("human", user)], config=config)
-        if not isinstance(response, schema):
-            return schema.model_validate(response)
-        return response
+        runnable = self._client(thinking).with_structured_output(
+            schema, method=method, include_raw=True
+        )
+        prompt_fingerprint_source = f"{system}\0{user}"
+        observation = self.observability.generation(
+            "deepseek-structured",
+            self.settings.deepseek_model,
+            prompt_fingerprint_source,
+            attempt=attempt,
+        )
+        try:
+            response = await runnable.ainvoke([("system", system), ("human", user)], config={})
+        except Exception:
+            observation.fail()
+            raise
+
+        if isinstance(response, schema):
+            encoded = response.model_dump_json()
+            observation.finish(encoded, finish_reason=None)
+            return response
+        if not isinstance(response, dict):
+            observation.finish(_raw_output(response), finish_reason=_finish_reason(response))
+            raise StructuredOutputError(
+                "structured_output_invalid",
+                "The model returned an invalid structured response.",
+                attempts=attempt,
+                finish_reason=_finish_reason(response),
+            )
+
+        payload = response
+        raw = payload.get("raw")
+        finish_reason = _finish_reason(raw)
+        usage = getattr(raw, "usage_metadata", None)
+        parsed = payload.get("parsed")
+        parsing_error = payload.get("parsing_error")
+        if parsing_error is not None or parsed is None:
+            observation.finish(_raw_output(raw), finish_reason=finish_reason, usage=usage)
+            raise StructuredOutputError(
+                "structured_output_invalid",
+                "The model returned an invalid structured response.",
+                attempts=attempt,
+                finish_reason=finish_reason,
+            )
+        try:
+            result = parsed if isinstance(parsed, schema) else schema.model_validate(parsed)
+        except (TypeError, ValueError) as error:
+            observation.finish(_raw_output(raw), finish_reason=finish_reason, usage=usage)
+            raise StructuredOutputError(
+                "structured_output_invalid",
+                "The model returned an invalid structured response.",
+                attempts=attempt,
+                finish_reason=finish_reason,
+            ) from error
+        observation.finish(result.model_dump_json(), finish_reason=finish_reason, usage=usage)
+        return result
 
     async def structured(
         self, schema: type[StructuredT], system: str, user: str, *, thinking: bool
     ) -> StructuredT:
+        corrected = False
         last_error: Exception | None = None
-        for suffix in (
-            "",
-            "\nYour prior response was invalid or empty. Return only the required schema.",
-        ):
+        for attempt in range(1, 4):
+            prompt = user + (FORMAT_CORRECTION if corrected else "")
             try:
-                return await self._invoke(schema, system, user + suffix, thinking)
-            except (ValueError, TypeError) as exc:
-                last_error = exc
-        assert last_error is not None
-        raise last_error
+                return await self._invoke(schema, system, prompt, thinking, attempt=attempt)
+            except StructuredOutputError as error:
+                if error.finish_reason == "content_filter":
+                    raise LLMError(
+                        "llm_content_filter",
+                        "The provider rejected the model output under its content policy.",
+                        attempts=attempt,
+                        finish_reason=error.finish_reason,
+                    ) from error
+                last_error = error
+                corrected = True
+            except Exception as error:
+                if not _is_transient(error):
+                    raise LLMError(
+                        "llm_provider_rejected",
+                        "The model provider rejected the request.",
+                        attempts=attempt,
+                    ) from error
+                last_error = error
+            if attempt == 3:
+                break
+        if isinstance(last_error, StructuredOutputError):
+            raise StructuredOutputError(
+                last_error.failure_code,
+                "The model did not return valid structured output after three attempts.",
+                attempts=3,
+                finish_reason=last_error.finish_reason,
+            ) from last_error
+        raise LLMError(
+            "llm_retry_exhausted",
+            "The model request failed after three transient attempts.",
+            attempts=3,
+        ) from last_error
 
 
 UNTRUSTED_DOCUMENT_SYSTEM = """You analyze untrusted PDF content. Text inside <document_data>

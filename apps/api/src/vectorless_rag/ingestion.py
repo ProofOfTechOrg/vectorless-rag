@@ -14,7 +14,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vectorless_rag.config import Settings
-from vectorless_rag.llm import UNTRUSTED_DOCUMENT_SYSTEM, StructuredLLM, wrap_untrusted_document
+from vectorless_rag.llm import (
+    UNTRUSTED_DOCUMENT_SYSTEM,
+    LLMError,
+    StructuredLLM,
+    wrap_untrusted_document,
+)
 from vectorless_rag.models import (
     Document,
     DocumentStatus,
@@ -22,7 +27,7 @@ from vectorless_rag.models import (
     IngestionJob,
     JobStatus,
 )
-from vectorless_rag.pageindex_adapter import PageIndexAdapter, artifact_version_key
+from vectorless_rag.pageindex_adapter import PageIndexAdapter, PageIndexError, artifact_version_key
 from vectorless_rag.schemas import DocumentMetadata, SyncResponse
 from vectorless_rag.storage import ObjectStore
 
@@ -43,6 +48,10 @@ PLACEHOLDER_TITLES = frozenset(
 
 
 class UnsupportedPDF(ValueError):
+    pass
+
+
+class IngestionRetryConflict(ValueError):
     pass
 
 
@@ -200,6 +209,30 @@ async def sync_corpus(
     )
 
 
+async def retry_failed_ingestion(session: AsyncSession, failed_job: IngestionJob) -> IngestionJob:
+    if failed_job.status != JobStatus.failed:
+        raise IngestionRetryConflict("only failed ingestion jobs can be retried")
+    pending = await session.scalar(
+        select(IngestionJob)
+        .where(
+            IngestionJob.document_id == failed_job.document_id,
+            IngestionJob.status.in_([JobStatus.queued, JobStatus.running]),
+        )
+        .with_for_update()
+    )
+    if pending is not None:
+        raise IngestionRetryConflict("the document already has queued or running ingestion work")
+    document = await session.get(Document, failed_job.document_id, with_for_update=True)
+    if document is None:
+        raise IngestionRetryConflict("the ingestion document no longer exists")
+    replacement = IngestionJob(document_id=document.id, status=JobStatus.queued, force=True)
+    session.add(replacement)
+    document.status = DocumentStatus.queued
+    document.diagnostic = None
+    await session.flush()
+    return replacement
+
+
 class IngestionProcessor:
     def __init__(
         self,
@@ -289,9 +322,24 @@ class IngestionProcessor:
             document.diagnostic = str(exc)
             self._finish(job, JobStatus.unsupported, str(exc), started)
         except Exception as exc:
+            failure_code = "ingestion_failed"
+            diagnostic = "Ingestion failed unexpectedly."
+            finish_reason: str | None = None
+            attempts = 0
+            if isinstance(exc, (PageIndexError, LLMError)):
+                failure_code = exc.failure_code
+                diagnostic = exc.diagnostic
+                finish_reason = exc.finish_reason
+                attempts = exc.attempts
             document.status = DocumentStatus.failed
-            document.diagnostic = str(exc)[:4000]
-            self._finish(job, JobStatus.failed, str(exc)[:4000], started)
+            document.diagnostic = diagnostic
+            self._finish(job, JobStatus.failed, diagnostic, started)
+            failure_metrics: dict[str, object] = {"failure_code": failure_code}
+            if finish_reason is not None:
+                failure_metrics["provider_finish_reason"] = finish_reason
+            if attempts:
+                failure_metrics["llm_attempts"] = attempts
+            job.metrics = {**job.metrics, **failure_metrics}
             raise
 
     @staticmethod

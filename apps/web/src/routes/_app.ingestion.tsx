@@ -7,14 +7,9 @@ import { FileInput } from '@astryxdesign/core/FileInput'
 import { ProgressBar } from '@astryxdesign/core/ProgressBar'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useState } from 'react'
+import { isTerminalJob, useIngestionJobPolling } from '../hooks/use-ingestion-job'
 import { jobSchema, type Job } from '../lib/contracts'
-import { getJob, syncCorpus } from '../server/functions'
-
-const TERMINAL_JOB_STATUSES = new Set<Job['status']>([
-  'completed',
-  'failed',
-  'unsupported',
-])
+import { retryJob, syncCorpus } from '../server/functions'
 
 export const Route = createFileRoute('/_app/ingestion')({ component: IngestionPage })
 
@@ -27,16 +22,7 @@ function IngestionPage() {
   const [forceOpen, setForceOpen] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-
-  async function pollJob(jobId: string) {
-    for (let attempt = 0; attempt < 120; attempt += 1) {
-      const current = await getJob({ data: { jobId } })
-      setJob(current)
-      if (TERMINAL_JOB_STATUSES.has(current.status)) return
-      await new Promise((resolve) => window.setTimeout(resolve, 1_500))
-    }
-    setError('Job polling timed out; the durable job may still be running.')
-  }
+  const pollingError = useIngestionJobPolling(job, setJob)
 
   async function upload() {
     if (!file) return
@@ -49,11 +35,21 @@ function IngestionPage() {
       if (!response.ok) throw new Error(await response.text())
       const created = jobSchema.parse(await response.json())
       setJob(created)
-      await pollJob(created.id)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Upload failed')
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function retry() {
+    if (job?.status !== 'failed') return
+    setError(null)
+    try {
+      const replacement = await retryJob({ data: { jobId: job.id } })
+      setJob(replacement)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Retry failed')
     }
   }
 
@@ -75,6 +71,7 @@ function IngestionPage() {
       <header className="page-header"><div><h1>Ingestion</h1><p className="muted">Upload a PDF or scan the fixed mounted corpus.</p></div></header>
       {!allowed && <Banner status="warning" title="Read-only key" description="This key lacks admin:ingest. API authorization remains enforced even if UI controls are bypassed." />}
       {error && <Banner status="error" title="Ingestion attention required" description={error} />}
+      {pollingError && <Banner status="warning" title="Polling delayed" description={pollingError} />}
       {message && <Banner status="success" title="Sync requested" description={message} isDismissable onDismiss={() => setMessage(null)} />}
       <div className="grid">
         <Card padding={5}>
@@ -111,9 +108,10 @@ function IngestionPage() {
         <Card padding={5}>
           <div className="stack">
             <div className="inline"><h2>Job</h2><Badge label={job.status} variant={job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'info'} /></div>
-            {!TERMINAL_JOB_STATUSES.has(job.status) && <ProgressBar value={job.status === 'running' ? 60 : 20} label="Processing document" />}
+            {!isTerminalJob(job.status) && <ProgressBar value={job.status === 'running' ? 60 : 20} label="Processing document" />}
             <p>Attempts: {job.attempts} · Document: <Link to="/documents/$documentId" params={{ documentId: job.document_id }}>{job.document_id}</Link></p>
             {job.diagnostic && <Banner status={job.status === 'failed' ? 'error' : 'info'} title="Diagnostic" description={job.diagnostic} />}
+            {job.status === 'failed' && <Button label="Retry ingestion" clickAction={retry} isDisabled={!allowed} />}
             {Object.keys(job.metrics).length > 0 && <pre>{JSON.stringify(job.metrics, null, 2)}</pre>}
           </div>
         </Card>

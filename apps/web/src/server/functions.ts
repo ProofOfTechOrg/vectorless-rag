@@ -83,6 +83,15 @@ export const getJob = createServerFn({ method: 'GET' })
   .validator(z.object({ jobId: z.uuid() }))
   .handler(({ data }) => apiJson(`/v1/admin/ingestion/${data.jobId}`, jobSchema))
 
+export const retryJob = createServerFn({ method: 'POST' })
+  .validator(z.object({ jobId: z.uuid() }))
+  .handler(({ data }) => {
+    assertCurrentRequestOrigin()
+    return apiJson(`/v1/admin/ingestion/${data.jobId}/retry`, jobSchema, {
+      method: 'POST',
+    })
+  })
+
 export const submitFeedback = createServerFn({ method: 'POST' })
   .validator(
     z.object({

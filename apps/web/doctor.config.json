@@ -21,8 +21,12 @@
         "rules": ["react-doctor/tanstack-start-no-navigate-in-render"]
       },
       {
-        "files": ["src/routes/_app.tsx"],
+        "files": ["src/components/ChatWorkspace.tsx", "src/routes/_app.tsx"],
         "rules": ["react-doctor/jsx-no-jsx-as-prop"]
+      },
+      {
+        "files": ["src/hooks/use-ingestion-job.ts"],
+        "rules": ["react-doctor/async-defer-await"]
       },
       {
         "files": ["src/server/session.server.ts"],

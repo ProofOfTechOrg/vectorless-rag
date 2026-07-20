@@ -17,6 +17,10 @@ deepseekModel: deepseek-v4-pro
 deepseekInputCostPerMillionUsd: ""
 deepseekOutputCostPerMillionUsd: ""
 pageindexModel: deepseek/deepseek-v4-pro
+pageindexLlmMaxAttempts: 3
+pageindexTimeoutSeconds: 3600
+ingestionMaxAttempts: 3
+ingestionStaleGraceSeconds: 300
 pilotDocumentLimit: 10
 allowFullCorpusIndex: false
 

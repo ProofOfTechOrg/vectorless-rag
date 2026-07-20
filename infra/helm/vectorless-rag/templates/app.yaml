@@ -100,6 +100,10 @@ spec:
 - {name: DEEPSEEK_INPUT_COST_PER_MILLION_USD, value: {{ .Values.deepseekInputCostPerMillionUsd | quote }}}
 - {name: DEEPSEEK_OUTPUT_COST_PER_MILLION_USD, value: {{ .Values.deepseekOutputCostPerMillionUsd | quote }}}
 - {name: PAGEINDEX_MODEL, value: {{ .Values.pageindexModel | quote }}}
+- {name: PAGEINDEX_LLM_MAX_ATTEMPTS, value: {{ .Values.pageindexLlmMaxAttempts | quote }}}
+- {name: PAGEINDEX_TIMEOUT_SECONDS, value: {{ .Values.pageindexTimeoutSeconds | quote }}}
+- {name: INGESTION_MAX_ATTEMPTS, value: {{ .Values.ingestionMaxAttempts | quote }}}
+- {name: INGESTION_STALE_GRACE_SECONDS, value: {{ .Values.ingestionStaleGraceSeconds | quote }}}
 - {name: ARXIV_PDF_DIR, value: {{ .Values.corpus.mountPath | quote }}}
 - {name: OBJECT_STORE_ENDPOINT, value: {{ include "vectorless-rag.s3Endpoint" . | quote }}}
 - name: OBJECT_STORE_ACCESS_KEY

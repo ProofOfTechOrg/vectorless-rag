@@ -6,8 +6,10 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 from vectorless_rag.api import (
+    app,
     decode_thread_cursor,
     encode_thread_cursor,
     identity,
@@ -41,6 +43,20 @@ class _Session:
     async def execute(self, statement: Any) -> _Result:
         self.statement = statement
         return _Result(self.rows)
+
+
+def test_retry_ingestion_route_requires_admin_ingest_scope() -> None:
+    route = next(
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path == "/v1/admin/ingestion/{job_id}/retry"
+    )
+    principal = next(
+        dependency for dependency in route.dependant.dependencies if dependency.name == "principal"
+    )
+
+    assert route.methods == {"POST"}
+    assert principal.own_oauth_scopes == ["admin:ingest"]
 
 
 async def test_identity_returns_only_name_and_sorted_scopes() -> None:

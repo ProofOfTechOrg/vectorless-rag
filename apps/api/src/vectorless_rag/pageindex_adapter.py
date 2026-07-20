@@ -15,9 +15,40 @@ import fitz
 
 from vectorless_rag.config import Settings
 
+PAGEINDEX_FAILURE_DIAGNOSTICS = {
+    "pageindex_child_failed": "PageIndex failed inside its isolated runtime.",
+    "pageindex_content_filter": (
+        "The provider rejected PageIndex content under its content policy."
+    ),
+    "pageindex_empty_response": "The provider returned an empty PageIndex completion.",
+    "pageindex_insufficient_system_resource": (
+        "The provider reported insufficient system resources."
+    ),
+    "pageindex_invalid_json": "PageIndex received malformed JSON.",
+    "pageindex_invalid_response": "PageIndex received an invalid provider response.",
+    "pageindex_llm_retry_exhausted": (
+        "The PageIndex provider request failed after all retry attempts."
+    ),
+    "pageindex_provider_rejected": "The PageIndex provider rejected the request.",
+    "pageindex_transient_provider_error": ("The PageIndex provider request failed transiently."),
+    "pageindex_unexpected_tool_call": "PageIndex received an unexpected tool call.",
+}
+
 
 class PageIndexError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        failure_code: str,
+        diagnostic: str,
+        *,
+        attempts: int = 0,
+        finish_reason: str | None = None,
+    ) -> None:
+        super().__init__(diagnostic)
+        self.failure_code = failure_code
+        self.diagnostic = diagnostic
+        self.attempts = attempts
+        self.finish_reason = finish_reason
 
 
 class _TextPage(Protocol):
@@ -63,7 +94,9 @@ def normalize_artifact(
         nodes: object = raw_tree.get("structure") or raw_tree.get("nodes") or []
         description = str(raw_tree.get("doc_description") or "")
     if not isinstance(nodes, list):
-        raise PageIndexError("PageIndex artifact has no valid node list")
+        raise PageIndexError(
+            "pageindex_invalid_artifact", "PageIndex artifact has no valid node list."
+        )
     normalized_nodes = [node.__dict__ for node in _walk_nodes(cast(list[dict[str, Any]], nodes))]
     return {
         "schema_version": 1,
@@ -110,6 +143,8 @@ class PageIndexAdapter:
                 str(Path(__file__).with_name("run_pageindex.py")),
                 "--pageindex-script",
                 str(self.settings.pageindex_source_dir / "run_pageindex.py"),
+                "--failure-report",
+                str(workspace / "failure.json"),
                 "--pdf_path",
                 str(local_pdf),
                 "--model",
@@ -128,17 +163,29 @@ class PageIndexAdapter:
                 *command,
                 cwd=workspace,
                 env=environment,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
             )
-            stdout, stderr = await process.communicate()
+            waiter = asyncio.create_task(process.wait())
+            try:
+                async with asyncio.timeout(self.settings.pageindex_timeout_seconds):
+                    await asyncio.shield(waiter)
+            except TimeoutError as error:
+                await asyncio.shield(self._stop_process(process, waiter))
+                raise PageIndexError(
+                    "pageindex_timeout",
+                    "PageIndex exceeded its configured processing deadline.",
+                ) from error
+            except asyncio.CancelledError:
+                await asyncio.shield(self._stop_process(process, waiter))
+                raise
             if process.returncode:
-                diagnostic = stderr.decode(errors="replace")[-4000:]
-                raise PageIndexError(f"PageIndex failed: {diagnostic}")
+                raise self._reported_failure(workspace / "failure.json")
             result_path = workspace / "results" / "document_structure.json"
             if not result_path.is_file():
                 raise PageIndexError(
-                    f"PageIndex produced no artifact: {stdout.decode(errors='replace')[-1000:]}"
+                    "pageindex_missing_artifact",
+                    "PageIndex completed without producing an artifact.",
                 )
             raw_tree = cast(
                 dict[str, Any] | list[dict[str, Any]],
@@ -146,6 +193,58 @@ class PageIndexAdapter:
             )
             artifact = normalize_artifact(raw_tree, pages, metadata=metadata)
             return json.dumps(artifact, ensure_ascii=False, separators=(",", ":")).encode()
+
+    @staticmethod
+    async def _stop_process(
+        process: asyncio.subprocess.Process,
+        waiter: asyncio.Task[int],
+    ) -> None:
+        if process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+        try:
+            async with asyncio.timeout(5):
+                await asyncio.shield(waiter)
+        except TimeoutError:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            await waiter
+
+    @staticmethod
+    def _reported_failure(path: Path) -> PageIndexError:
+        try:
+            if path.stat().st_size > 16_384:
+                raise ValueError("failure report exceeds limit")
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError("failure report is not an object")
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            return PageIndexError(
+                "pageindex_child_failed", "PageIndex failed inside its isolated runtime."
+            )
+        report = cast(dict[str, object], raw)
+        code = report.get("failure_code")
+        finish_reason = report.get("finish_reason")
+        attempts = report.get("llm_attempts", 0)
+        if not isinstance(code, str) or code not in PAGEINDEX_FAILURE_DIAGNOSTICS:
+            return PageIndexError(
+                "pageindex_child_failed", "PageIndex failed inside its isolated runtime."
+            )
+        return PageIndexError(
+            code,
+            PAGEINDEX_FAILURE_DIAGNOSTICS[code],
+            attempts=(
+                attempts
+                if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts >= 0
+                else 0
+            ),
+            finish_reason=finish_reason[:80] if isinstance(finish_reason, str) else None,
+        )
 
 
 def artifact_version_key(

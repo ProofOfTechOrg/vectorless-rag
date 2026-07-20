@@ -30,7 +30,13 @@ from vectorless_rag.auth import (
 from vectorless_rag.config import Settings, get_settings
 from vectorless_rag.db import Database, make_engine
 from vectorless_rag.graph import GraphRunner
-from vectorless_rag.ingestion import UnsupportedPDF, register_pdf, sync_corpus
+from vectorless_rag.ingestion import (
+    IngestionRetryConflict,
+    UnsupportedPDF,
+    register_pdf,
+    retry_failed_ingestion,
+    sync_corpus,
+)
 from vectorless_rag.llm import DeepSeekLLM
 from vectorless_rag.models import Document, IngestionJob, QueryRun, RunFeedback, RunRoute
 from vectorless_rag.observability import Observability
@@ -77,7 +83,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     sql_engine = make_engine(settings.sql_database_url, pool_size=5)
     store = S3ObjectStore(settings)
     observability = Observability(settings)
-    llm = DeepSeekLLM(settings) if settings.deepseek_api_key else None
+    llm = DeepSeekLLM(settings, observability) if settings.deepseek_api_key else None
     async with AsyncExitStack() as stack:
         checkpointer_context = AsyncPostgresSaver.from_conn_string(
             _checkpoint_url(settings.database_url)
@@ -402,6 +408,21 @@ async def ingestion_job(
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "ingestion job not found")
     return JobResponse.model_validate(job)
+
+
+@app.post("/v1/admin/ingestion/{job_id}/retry", response_model=JobResponse, tags=["admin"])
+async def retry_ingestion_job(
+    job_id: uuid.UUID, principal: AdminPrincipal, session: Session
+) -> JobResponse:
+    del principal
+    job = await session.get(IngestionJob, job_id, with_for_update=True)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "ingestion job not found")
+    try:
+        replacement = await retry_failed_ingestion(session, job)
+    except IngestionRetryConflict as error:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+    return JobResponse.model_validate(replacement)
 
 
 @app.get("/v1/threads", response_model=ThreadPage, tags=["chat"])
