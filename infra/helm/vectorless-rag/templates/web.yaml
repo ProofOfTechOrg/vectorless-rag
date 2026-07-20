@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vectorless-rag.fullname" . }}-web
+  labels: {{- include "vectorless-rag.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontendReplicaCount }}
+  selector:
+    matchLabels: {app.kubernetes.io/component: web, app.kubernetes.io/instance: {{ .Release.Name }}}
+  template:
+    metadata:
+      labels:
+        {{- include "vectorless-rag.labels" . | nindent 8 }}
+        app.kubernetes.io/component: web
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000}
+      containers:
+        - name: web
+          image: "{{ .Values.webImage.repository }}:{{ .Values.webImage.tag }}"
+          imagePullPolicy: {{ .Values.webImage.pullPolicy }}
+          ports: [{name: http, containerPort: 3001}]
+          env:
+            - {name: NODE_ENV, value: production}
+            - {name: HOST, value: "0.0.0.0"}
+            - {name: PORT, value: "3001"}
+            - {name: VECTORLESS_API_URL, value: "http://{{ include "vectorless-rag.fullname" . }}-api:{{ .Values.service.port }}"}
+            - {name: APP_ORIGIN, value: {{ .Values.appOrigin | quote }}}
+            - name: SESSION_SECRET
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: session-secret}}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources: {{- toYaml .Values.resources.web | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vectorless-rag.fullname" . }}-web
+  labels: {{- include "vectorless-rag.labels" . | nindent 4 }}
+spec:
+  selector: {app.kubernetes.io/component: web, app.kubernetes.io/instance: {{ .Release.Name }}}
+  ports: [{name: http, port: {{ .Values.frontendService.port }}, targetPort: http}]

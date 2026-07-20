@@ -1,0 +1,84 @@
+image:
+  repository: vectorless-rag
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+webImage:
+  repository: vectorless-rag-web
+  tag: "0.2.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+workerReplicaCount: 2
+frontendReplicaCount: 2
+existingSecret: vectorless-rag-secrets
+release: dev
+deepseekModel: deepseek-v4-pro
+deepseekInputCostPerMillionUsd: ""
+deepseekOutputCostPerMillionUsd: ""
+pageindexModel: deepseek/deepseek-v4-pro
+pilotDocumentLimit: 10
+allowFullCorpusIndex: false
+
+service:
+  port: 8000
+frontendService:
+  port: 3001
+appOrigin: https://app.rag.example.com
+ingress:
+  enabled: false
+  className: ""
+  host: rag.example.com
+  annotations: {}
+  tls: []
+frontendIngress:
+  enabled: false
+  className: ""
+  host: app.rag.example.com
+  annotations: {}
+  tls: []
+
+resources:
+  api:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+  worker:
+    requests: {cpu: 500m, memory: 1Gi}
+    limits: {cpu: "4", memory: 4Gi}
+  web:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+corpus:
+  existingClaim: arxiv-pdfs
+  mountPath: /corpus
+
+postgresql:
+  bundled: true
+  externalHost: ""
+  port: 5432
+  storage: 20Gi
+clickhouse:
+  bundled: true
+  externalHost: ""
+  httpPort: 8123
+  nativePort: 9000
+  clusterEnabled: false
+  storage: 50Gi
+redis:
+  bundled: true
+  externalHost: ""
+  port: 6379
+  storage: 5Gi
+s3:
+  bundled: true
+  externalEndpoint: ""
+  storage: 50Gi
+
+langfuse:
+  enabled: true
+  webImage: langfuse/langfuse:3.221.1
+  workerImage: langfuse/langfuse-worker:3.221.1
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}

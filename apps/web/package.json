@@ -1,0 +1,59 @@
+{
+  "name": "@vectorless-rag/web",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "scripts": {
+    "dev": "vite dev --port 3001",
+    "generate-routes": "tsr generate",
+    "build": "vite build",
+    "start": "srvx serve --prod --static=../client --entry=dist/server/server.js",
+    "preview": "vite preview --port 3001",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "astryx:doctor": "astryx doctor"
+  },
+  "astryx": {
+    "theme": "@astryxdesign/theme-neutral"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "0.1.6",
+    "@astryxdesign/theme-neutral": "0.1.6",
+    "@tailwindcss/vite": "^4.1.18",
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-start": "latest",
+    "@tanstack/router-plugin": "^1.132.0",
+    "lucide-react": "^0.545.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "srvx": "0.11.22",
+    "tailwindcss": "^4.1.18",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@astryxdesign/cli": "0.1.6",
+    "@eslint/js": "latest",
+    "@playwright/test": "latest",
+    "@stylexjs/stylex": "0.19.0",
+    "@tailwindcss/typography": "^0.5.16",
+    "@tanstack/devtools-vite": "latest",
+    "@tanstack/router-cli": "^1.132.0",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "eslint": "latest",
+    "eslint-plugin-react-hooks": "latest",
+    "jsdom": "^28.1.0",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "latest",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.5"
+  }
+}

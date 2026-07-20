@@ -4,4 +4,9 @@ arxiv-pdfs
 pageindex-workspaces
 __pycache__
 .pytest_cache
-
+node_modules
+apps/api/.venv
+apps/web/dist
+apps/web/test-results
+apps/web/playwright-report
+.env

@@ -1,101 +1,23 @@
 # Operator guide
 
-## Ingestion lifecycle
+## Start and connect
 
-The API stores a PDF by SHA-256 and queues a PostgreSQL job. Workers claim jobs with
-`FOR UPDATE SKIP LOCKED`, extract first-page metadata, run PageIndex in a unique temporary
-workspace, normalize the tree plus page text, and upload the versioned JSON artifact to MinIO.
-Retries reuse completed versions unless `force` is true. Empty/extraction-poor PDFs become
-`unsupported`; v1 intentionally has no OCR.
+Configure `.env`, run `make up`, then `make health`. Mint a least-privilege key with `make bootstrap-key NAME=operator SCOPES=chat,documents:read,admin:ingest`. The raw value is shown once. Open `http://localhost:3001/connect`; API key lifecycle management is deliberately outside the UI.
 
-The mounted-folder endpoint accepts only `{"force": boolean}` and always reads direct `.pdf`
-children of `ARXIV_PDF_DIR`. It never accepts a server path. Uploads are limited to 200 MB.
+## Ingestion and pilot gate
 
-### Synchronizing the mounted corpus
+Use the Ingestion page for one PDF, or `make upload-document PDF=/path/file.pdf`. Jobs are durable and the UI polls queued/running work through completion, failure, or unsupported status. Use `make logs SERVICE=worker` for worker detail.
 
-The service does not watch the mounted directory for changes. Adding or replacing a PDF does not
-start ingestion until an operator calls the synchronization endpoint with an API key containing
-the `admin:ingest` scope:
+Mounted sync scans only direct PDF children of `ARXIV_PDF_HOST_DIR`. `make sync-corpus` deduplicates by content. Force mode reprocesses known files and requires an explicit UI confirmation or `FORCE=true` on the Make target.
 
-```bash
-export VECTORLESS_RAG_ADMIN_KEY=vrag_...
-make sync-corpus
-```
+With `ALLOW_FULL_CORPUS_INDEX=false`, only ten unknown documents can be registered. Review `make pilot-report` for extraction quality, failures, duration, tokens, retrieval/citation behavior, and projected cost before enabling the full corpus. Do not casually sync the normal 537-file development directory.
 
-Synchronization scans only PDFs directly inside `ARXIV_PDF_DIR`; it does not recurse into
-subdirectories. It copies newly discovered PDFs to canonical object storage and queues PostgreSQL
-jobs. The ingestion worker then extracts metadata and creates the PageIndex artifact
-asynchronously, so a successful sync response means that work was queued, not that indexing has
-finished. Use `GET /v1/documents` to inspect document status and
-`GET /v1/admin/ingestion/{job_id}` when a job ID is available.
+## Browser operations
 
-PDFs are identified by content SHA-256 rather than filename:
+Chat exposes selected route, retrieval/writing status, cancellation, retry, Markdown, page citations, recent threads, and feedback. Documents shows status, topics, diagnostics, and detail landing pages. Settings verifies key name/scopes and API readiness, changes system/light/dark appearance, and clears the cookie on logout.
 
-- `force: false` registers and queues new content, but does not requeue an identical PDF.
-- `force: true` requeues an existing document unless it already has a queued or running job.
-- Replacing a file with different content registers a new document because its checksum changes.
-- Renaming or copying an unchanged PDF does not create another document.
-- Removing a PDF from the mounted directory does not delete its database record, canonical PDF,
-  or index artifact. Corpus deletion is intentionally not performed by directory synchronization.
+## Live verification
 
-Alternatively, `POST /v1/admin/documents` accepts a PDF upload up to 200 MB and queues it
-immediately; uploaded files do not require a subsequent directory sync.
+Use a disposable stack and a dedicated `codex-ui-dev` full-scope key. Pass the key directly in `PLAYWRIGHT_API_KEY` without printing or saving it. Create one temporary text-rich PDF with a unique phrase, log in through `/connect`, upload, await a terminal job, and make at most one unique-phrase chat call after successful ingestion. Verify citation/page range, thread history, feedback, detail, settings, responsive navigation, theme, and logout. Remove the temporary PDF afterward.
 
-## Pilot gate
-
-The default `PILOT_DOCUMENT_LIMIT=10` and `ALLOW_FULL_CORPUS_INDEX=false` enforce the first
-rollout. Run `make pilot-report` after all ten jobs reach terminal status. Review:
-
-- extraction quality and unsupported diagnostics;
-- retrieval/citation evaluation scores;
-- elapsed time and provider token totals;
-- projected spend for the remaining 527 PDFs.
-
-Set the current hosted-provider rates in `DEEPSEEK_INPUT_COST_PER_MILLION_USD` and
-`DEEPSEEK_OUTPUT_COST_PER_MILLION_USD`; the report leaves projected spend unset when rates are
-not configured instead of silently applying stale pricing.
-
-After explicit approval, set `ALLOW_FULL_CORPUS_INDEX=true`, restart API and workers, and call
-sync again. Jobs remain resumable and failures are quarantined as `failed`/`unsupported`.
-
-## API key operations
-
-Create the first Vectorless RAG API key inside the running API container:
-
-```bash
-make bootstrap-key NAME=operator
-```
-
-This invokes the service CLI inside the container, creates an API-key record named `operator`,
-and grants its default `chat`, `documents:read`, and `admin:ingest` scopes. The name is an audit
-label, not a login or Langfuse user. The command prints the plaintext `vrag_...` key exactly once;
-only its prefix and an HMAC-SHA256 hash are stored in PostgreSQL. Save the output in a secret
-manager and pass it to API requests through the `X-API-Key` header.
-
-Create a least-privilege key by selecting scopes explicitly:
-
-```bash
-make bootstrap-key NAME=chat-client SCOPES=chat,documents:read
-```
-
-For non-interactive capture, disable Compose's pseudo-TTY:
-
-```bash
-VECTORLESS_RAG_ADMIN_KEY="$(
-  make --no-print-directory bootstrap-key NAME=operator
-)"
-```
-
-`API_KEY_PEPPER` is loaded from `.env` and participates in every stored key hash. Generate it with
-`make secret-api-pepper` before creating the first key, and never change it while keys remain
-active. Losing a plaintext key requires creating a replacement; it cannot be recovered from the
-database. Rotate by creating a replacement, updating clients, then setting the old
-`agent.api_keys.disabled` flag through an audited operator procedure. Running `bootstrap-key`
-again creates another key; it does not replace or disable earlier keys.
-
-## Operational checks
-
-- `/health/live` checks the process; `/health/ready` checks PostgreSQL.
-- PostgreSQL `sql_audits` and `retrieval_audits` are the authoritative audit records.
-- Langfuse is diagnostic. Long passages/results are represented by hashes, sizes and previews.
-- A request is cancelled after 120 seconds and SSE disconnects propagate cancellation.
+For a real mounted-sync check, use an isolated Compose override mounting only that fixture. Let deduplication prevent a second ingestion. Credentialed Playwright runs keep trace, video, screenshot, and storage-state artifacts disabled.

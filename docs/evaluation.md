@@ -1,15 +1,12 @@
-# Evaluation and release gates
+# Evaluation
 
-Seed Langfuse with at least 85 labeled cases: 20 single-document, 15 cross-document, 15 SQL,
-15 hybrid, 10 unanswerable and 10 prompt-injection/adversarial cases. Case records must include
-the expected route, document/page locators or SQL properties, and whether refusal is required.
-`evaluation/release-v1.jsonl` contains these 85 deterministic cases, built from the local corpus
-by `scripts/build_evaluation_dataset.py`. `scripts/seed_evaluation.py` validates category counts
-before uploading it to Langfuse. Page expectations should be labeled after the ten-paper pilot.
-Use `make evaluation-build` to rebuild the file and `make evaluation-seed` to upload it through
-the configured API container. See the [command reference](commands.md) for overrides.
+The deterministic release dataset lives at `apps/api/evaluation/release-v1.jsonl`; its builders are under `apps/api/scripts`.
 
-Release requires all SQL attack tests to pass, every citation to resolve, route accuracy >= 90%,
-SQL answer accuracy >= 95%, pilot citation validity >= 90%, and zero unsupported claims in
-unanswerable cases. Store automated scores for route correctness, retrieval sufficiency, citation
-validity, SQL safety, groundedness and request success.
+```bash
+make evaluation-build
+make evaluation-seed DATASET=apps/api/evaluation/release-v1.jsonl
+```
+
+The seed command streams the dataset into the API container so local credentials are not copied into files. Keep grounded-answer, route-selection, citation-resolution, SQL-policy, insufficiency, latency, and cost evaluations separate from the deterministic frontend suite.
+
+`make playwright` starts a local mock upstream while retaining the real TanStack UI, server functions/routes, encrypted cookie, authorization gates, multipart proxy, and SSE parser. The mock deliberately fragments SSE and covers stable browser states without model spend. `make playwright-live` is the low-volume authorized integration path described in the operator guide.

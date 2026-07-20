@@ -1,14 +1,9 @@
 # Backup and restore
 
-Back up PostgreSQL and object storage as one recovery point. PostgreSQL contains catalog,
-authorization, audits, jobs and LangGraph checkpoints; MinIO contains canonical PDFs and PageIndex
-artifacts. Langfuse additionally needs its PostgreSQL database, ClickHouse and its S3 objects.
+Persistent state remains in the Compose volumes `postgres_data`, `clickhouse_data`, `clickhouse_logs`, `redis_data`, `minio_data`, and `pageindex_work`. The repository move does not rename or remove them. `make down` preserves volumes.
 
-For Compose, stop API/worker writes, run `pg_dump` separately for `rag` and `langfuse`, snapshot
-the MinIO and ClickHouse volumes, then resume. Encrypt backups and test restores quarterly.
+Back up PostgreSQL with `pg_dump`, MinIO with an S3-compatible replication/copy tool, and Langfuse/ClickHouse according to the deployed topology. Corpus PDFs mounted from `arxiv-pdfs` or another host path are user-owned and must be backed up separately.
 
-Restore into empty infrastructure in this order: PostgreSQL roles/databases, PostgreSQL dumps,
-MinIO objects, ClickHouse data, then start Langfuse, API and workers. Run migrations before serving
-traffic. Verify artifact SHA-256 values against `agent.index_versions`; enqueue only mismatches or
-missing objects with `force=true`. Never treat Langfuse as the source for security audits.
+Restore database and object-store data as a consistent set, restore the same application credentials and `API_KEY_PEPPER`, apply `make migrate`, then start API/worker before web. Restoring `SESSION_SECRET` preserves unexpired browser sessions; rotating it intentionally logs every browser out. Validate with `make health`, a document detail lookup, and a cited test question.
 
+Kubernetes PVC and external-service backups follow provider-native procedures. The chart path is `infra/helm/vectorless-rag`; render the exact release values and Secret key inventory alongside backups without storing secret values in Git.

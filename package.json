@@ -1,0 +1,13 @@
+{
+  "name": "vectorless-rag",
+  "private": true,
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "dev:web": "pnpm --filter @vectorless-rag/web dev",
+    "lint:web": "pnpm --filter @vectorless-rag/web lint",
+    "typecheck:web": "pnpm --filter @vectorless-rag/web typecheck",
+    "test:web": "pnpm --filter @vectorless-rag/web test",
+    "build:web": "pnpm --filter @vectorless-rag/web build",
+    "test:e2e": "pnpm --filter @vectorless-rag/web test:e2e"
+  }
+}

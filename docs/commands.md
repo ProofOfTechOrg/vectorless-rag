@@ -1,93 +1,57 @@
 # Command reference
 
-The repository Makefile is the supported interface for development, CI, deployment validation,
-Compose lifecycle operations, and routine operator tasks. Run `make help` for the same target list.
-Direct `uv`, Ruff, Basedpyright, pytest, Docker, Helm, Alembic, and service-CLI commands are implementation
-details behind these targets.
+Run commands from the repository root. `make help` is generated from the Makefile.
 
-Local prerequisites are GNU Make, `uv`, Docker with Compose v2, Helm 3, curl, and OpenSSL. GitHub
-Actions installs pinned `uv` and Helm toolchains before invoking Make. The Makefile keeps the `uv`
-cache inside the ignored `.uv-cache/` workspace directory so validation does not depend on a
-writable global user cache.
-
-## Setup and validation
-
-| Command | Purpose |
+| Area | Commands |
 | --- | --- |
-| `make env` | Create `.env` from `.env.example` only when absent and set mode `0600` |
-| `make install` | Install the frozen Python development environment |
-| `make format` | Format Python and apply safe Ruff fixes |
-| `make lint` | Check Ruff lint and formatting rules |
-| `make typecheck` | Run strict Basedpyright checks over every repository-owned Python file |
-| `make test` | Run all available tests with coverage; unconfigured integration tests skip |
-| `make test-unit` | Run tests that require no external infrastructure |
-| `make test-integration` | Run PostgreSQL integration tests using exported test database URLs |
-| `make workflow-check` | Parse the GitHub Actions workflow YAML |
-| `make migration-check` | Render the Alembic migration offline |
-| `make compose-check` | Validate Compose using `ENV_FILE=.env` by default |
-| `make helm-lint` | Lint the Helm chart |
-| `make helm-template` | Render the Helm chart |
-| `make helm-check` | Lint and render the Helm chart |
-| `make docker-build` | Build the production image as `vectorless-rag:test` |
-| `make check` | Run lint, typecheck, tests, migration, Compose, and Helm checks |
-| `make ci` | Run the complete GitHub CI-equivalent suite using `.env.example` |
+| Environment | `make env`, `make secret-api-pepper`, `make secret-session`, `make secrets-langfuse` |
+| Dependencies | `make install`, `make api-install`, `make web-install` |
+| API quality | `make api-format`, `make api-lint`, `make api-typecheck`, `make api-test`, `make api-build`, `make api-check` |
+| Web quality | `make web-format`, `make web-lint`, `make web-typecheck`, `make web-test`, `make web-build`, `make web-check`, `make astryx-doctor` |
+| Browser tests | `make playwright`, `make playwright-live PLAYWRIGHT_BASE_URL=http://localhost:3001` |
+| Deployment | `make compose-check`, `make helm-check`, `make docker-build-api`, `make docker-build-web`, `make docker-build` |
+| Full validation | `make check ENV_FILE=.env.example`, `make ci` |
+| Lifecycle | `make up`, `make down`, `make stop`, `make restart`, `make restart-app`, `make restart-web`, `make ps`, `make logs SERVICE=worker`, `make health` |
+| Corpus | `make download-corpus`, `make download-corpus ARXIV_PDF_HOST_DIR=/srv/vectorless/arxiv-pdfs` |
+| Operator | `make migrate`, `make bootstrap-key NAME=operator`, `make sync-corpus`, `make upload-document PDF=/path/file.pdf`, `make pilot-report` |
+| Evaluation | `make evaluation-build`, `make evaluation-seed DATASET=apps/api/evaluation/release-v1.jsonl` |
 
-GitHub Actions invokes the same `make install`, `make lint`, `make typecheck`, `make test`,
-`make workflow-check`, `make migration-check`, `make compose-check`, `make helm-check`, and
-`make docker-build` targets. There is no separate CI-only implementation.
+## Download the test corpus
 
-PostgreSQL integration tests require both URLs:
+Use `make download-corpus` to fetch the 537 PDFs represented by the tracked corpus manifest. The current set requires approximately 1.5 GB of storage. Install Bash and `curl`, then confirm that the destination directory is writable.
+
+Download missing PDFs into the default `arxiv-pdfs` directory:
 
 ```bash
-export TEST_OWNER_DATABASE_URL=postgresql+psycopg://rag_owner:PASSWORD@127.0.0.1:PORT/rag
-export TEST_DATABASE_URL=postgresql+psycopg://rag_reader:PASSWORD@127.0.0.1:PORT/rag
-make test-integration
+make download-corpus
 ```
 
-## Compose lifecycle
-
-| Command | Purpose |
-| --- | --- |
-| `make up` | Build and start the complete stack |
-| `make down` | Remove containers and networks while preserving named volumes |
-| `make stop` | Stop containers without removing them |
-| `make restart` | Recreate the complete stack without removing volumes |
-| `make restart-app` | Recreate API and ingestion worker only |
-| `make restart-langfuse` | Recreate Langfuse web and worker only |
-| `make restart-observability` | Reload Langfuse credentials in Langfuse, API, and worker |
-| `make ps` | Show service state |
-| `make logs` | Follow all logs; use `SERVICE=api` and/or `TAIL=500` to narrow output |
-| `make health` | Check API and Langfuse health endpoints |
-
-None of the lifecycle targets removes named volumes. Volume deletion is deliberately not exposed
-as a convenience target.
-
-## Operator commands
-
-| Command | Purpose |
-| --- | --- |
-| `make migrate` | Apply application migrations in the API container |
-| `make bootstrap-key NAME=operator` | Create a Vectorless RAG API key |
-| `make sync-corpus` | Queue mounted PDFs with `force=false` |
-| `make sync-corpus FORCE=true` | Requeue eligible existing documents and queue new PDFs |
-| `make upload-document PDF=/path/paper.pdf` | Upload and queue one PDF |
-| `make pilot-report` | Print the ten-document pilot report |
-| `make evaluation-build` | Rebuild the deterministic 85-case evaluation dataset |
-| `make evaluation-seed` | Upload the dataset to Langfuse |
-
-`sync-corpus` and `upload-document` require an exported key so it is not placed in shell history as
-a Make argument:
+Pass the same host directory configured for Compose when you store the corpus elsewhere:
 
 ```bash
-export VECTORLESS_RAG_ADMIN_KEY=vrag_...
-make sync-corpus
+make download-corpus ARXIV_PDF_HOST_DIR=/srv/vectorless/arxiv-pdfs
 ```
 
-Override key scopes with `SCOPES`, evaluation input with `DATASET`, and the Langfuse dataset name
-with `DATASET_NAME`. Run `make help` for defaults.
+`make` does not load `ARXIV_PDF_HOST_DIR` from `.env` for this target. Pass the value on the command line when `.env` uses a custom path.
 
-## Secret generation
+The downloader handles each manifest entry as follows:
 
-`make secret-api-pepper` and `make secrets-langfuse` print generated `.env` assignments. They do
-not modify `.env`; review and paste their output into the intended deployment secret store. The
-generated initial-user password is hexadecimal so Compose cannot reinterpret `$` characters.
+- A missing ID downloads from `export.arxiv.org` and resolves to the latest available revision.
+- A valid existing `arxiv_id.pdf` is skipped without a network request.
+- An invalid response is removed before it can become a final PDF.
+- An existing invalid file, directory, or broken symlink remains untouched and counts as a failure.
+- Other IDs continue after a failure, and the final summary reports downloaded, skipped, and failed counts.
+
+The script writes each response to a temporary file, validates the `%PDF-` signature, and installs the result with an atomic rename. It retries transient transfer failures and follows [arXiv’s bulk-access guidance](https://info.arxiv.org/help/bulk_data.html) by pausing after every four requests.
+
+The command returns a nonzero status if any ID fails. Correct or remove the invalid destination path, resolve any network problem, and rerun the same command. Valid files from the previous run are skipped.
+
+## Ingest downloaded PDFs
+
+Downloading the corpus does not start services or queue ingestion. Start the stack, create an administrative key, and then run `make sync-corpus` when you intend to ingest the mounted PDFs.
+
+The default ten-document pilot gate still applies. Do not enable full-corpus indexing until you have reviewed pilot quality and projected provider cost.
+
+`make web-dev` runs the Start development server on port 3001 against FastAPI on port 8000. It still needs `SESSION_SECRET`; load it from your shell or `.env` without using a `VITE_` name.
+
+Operator curl targets require `VECTORLESS_RAG_ADMIN_KEY` in the process environment. They never read the browser session. `make down` preserves named volumes; do not use `docker compose down -v` unless a full local data reset is intended.

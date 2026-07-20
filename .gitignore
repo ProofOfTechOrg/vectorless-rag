@@ -10,5 +10,11 @@ dist/
 *.egg-info/
 pageindex-workspaces/
 pilot-report.json
+node_modules/
+apps/*/node_modules/
+apps/api/.venv/
+apps/web/dist/
+apps/web/test-results/
+apps/web/playwright-report/
 
 arxiv-pdfs/

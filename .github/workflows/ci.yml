@@ -4,33 +4,43 @@ on:
   pull_request:
 
 jobs:
-  python:
+  api:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v8
         with: {version: "0.11.29", enable-cache: true}
-      - name: Install
-        run: make install
-      - name: Lint
-        run: make lint
-      - name: Typecheck
-        run: make typecheck
-      - name: Test
-        run: make test
-      - name: Check workflow syntax
-        run: make workflow-check
-      - name: Check migrations
-        run: make migration-check
+      - run: make api-install
+      - run: make api-lint
+      - run: make api-typecheck
+      - run: make api-test
+      - run: make migration-check
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: {node-version: 22, cache: pnpm}
+      - run: make web-install
+      - run: pnpm --filter @vectorless-rag/web exec playwright install --with-deps chromium
+      - run: make web-lint
+      - run: make web-typecheck
+      - run: make web-test
+      - run: make web-build
+      - run: make astryx-doctor
+      - run: make playwright
 
   deployment:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8
+        with: {version: "0.11.29"}
       - uses: azure/setup-helm@v5
-      - name: Validate Compose
-        run: make compose-check ENV_FILE=.env.example
-      - name: Validate Helm
-        run: make helm-check
-      - name: Build image
-        run: make docker-build
+      - run: make api-install
+      - run: make workflow-check
+      - run: make compose-check ENV_FILE=.env.example
+      - run: make helm-check
+      - run: make docker-build

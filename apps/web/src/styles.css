@@ -1,0 +1,38 @@
+@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "@astryxdesign/core/reset.css";
+@import "@astryxdesign/core/astryx.css";
+@import "@astryxdesign/theme-neutral/theme.css";
+@import "@astryxdesign/core/tailwind-theme.css";
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@layer components {
+  html, body { min-height: 100%; }
+  body { margin: 0; background: var(--color-background-body); color: var(--color-text-primary); }
+  .connect-page { min-height: 100dvh; display: grid; place-items: center; padding: var(--spacing-6); }
+  .page { width: min(1120px, 100%); margin-inline: auto; padding: var(--spacing-5); display: grid; gap: var(--spacing-4); }
+  .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--spacing-3); flex-wrap: wrap; }
+  .page-header h1, .page-header p { margin: 0; }
+  .stack { display: grid; gap: var(--spacing-3); }
+  .inline { display: flex; align-items: center; gap: var(--spacing-2); flex-wrap: wrap; }
+  .grid { display: grid; gap: var(--spacing-4); grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); }
+  .muted { color: var(--color-text-secondary); }
+  .table-wrap { overflow-x: auto; }
+  .document-list { display: none; }
+  .chat-layout { min-height: calc(100dvh - 9rem); display: grid; grid-template-rows: 1fr auto; gap: var(--spacing-3); }
+  .chat-scroll { overflow: auto; display: grid; align-content: start; gap: var(--spacing-3); padding-block: var(--spacing-3); }
+  .chat-composer { position: sticky; bottom: 0; background: var(--color-background-body); padding-block: var(--spacing-2); }
+  .citation-list { display: flex; gap: var(--spacing-2); flex-wrap: wrap; }
+  .status-line { min-height: 1.5rem; color: var(--color-text-secondary); }
+  .metadata { display: grid; grid-template-columns: minmax(9rem, 0.3fr) 1fr; gap: var(--spacing-2); }
+  .mobile-only { display: none; }
+  @media (max-width: 720px) {
+    .page { padding: var(--spacing-3); }
+    .desktop-table { display: none; }
+    .document-list { display: grid; gap: var(--spacing-3); }
+    .mobile-only { display: block; }
+    .metadata { grid-template-columns: 1fr; }
+  }
+}

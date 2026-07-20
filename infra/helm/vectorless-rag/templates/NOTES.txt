@@ -1,0 +1,3 @@
+The browser service is {{ include "vectorless-rag.fullname" . }}-web and the API service is {{ include "vectorless-rag.fullname" . }}-api.
+Create secret {{ .Values.existingSecret }} with the keys documented in docs/deployment.md, including session-secret.
+Full corpus ingestion remains disabled until allowFullCorpusIndex is explicitly set to true.

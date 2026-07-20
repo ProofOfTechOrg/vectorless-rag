@@ -1,7 +1,0 @@
-apiVersion: v2
-name: vectorless-rag
-description: Self-hosted API-only vectorless ArXiv RAG and Langfuse
-type: application
-version: 0.1.0
-appVersion: "0.1.0"
-

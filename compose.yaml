@@ -53,7 +53,7 @@ x-langfuse-env: &langfuse-env
 
 services:
   api:
-    build: .
+    build: ./apps/api
     restart: unless-stopped
     command: ["sh", "-c", "vectorless-rag migrate && uvicorn vectorless_rag.api:app --host 0.0.0.0 --port 8000"]
     environment: *app-env
@@ -75,7 +75,7 @@ services:
       start_period: 30s
 
   worker:
-    build: .
+    build: ./apps/api
     restart: unless-stopped
     command: ["python", "-m", "vectorless_rag.worker"]
     environment: *app-env
@@ -99,7 +99,7 @@ services:
       LANGFUSE_DB_PASSWORD: ${LANGFUSE_DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+      - ./infra/docker/postgres-init:/docker-entrypoint-initdb.d:ro
     ports:
       - "127.0.0.1:${POSTGRES_PORT}:5432"
     healthcheck:
@@ -190,6 +190,29 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      VECTORLESS_API_URL: http://api:8000
+      APP_ORIGIN: ${APP_ORIGIN}
+      SESSION_SECRET: ${SESSION_SECRET}
+      PORT: 3001
+      HOST: 0.0.0.0
+    ports:
+      - "${FRONTEND_PORT}:3001"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
 volumes:
   postgres_data:
