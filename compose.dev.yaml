@@ -1,0 +1,42 @@
+services:
+  api:
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - >-
+        vectorless-rag migrate && uvicorn vectorless_rag.api:app
+        --host 0.0.0.0 --port 8000 --reload --reload-dir /app/src
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./apps/api/src:/app/src:ro
+
+  worker:
+    restart: "no"
+    command:
+      - watchfiles
+      - --filter
+      - python
+      - --target-type
+      - command
+      - python -m vectorless_rag.worker
+      - /app/src
+    environment:
+      WATCHFILES_FORCE_POLLING: "true"
+    volumes:
+      - ./apps/api/src:/app/src:ro
+
+  web:
+    image: vectorless-rag-web-dev
+    build:
+      target: development
+    restart: "no"
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "250"
+    volumes:
+      - ./apps/web/src:/app/apps/web/src
+      - ./apps/web/public:/app/apps/web/public:ro
+      - ./apps/web/tsconfig.json:/app/apps/web/tsconfig.json:ro
+      - ./apps/web/vite.config.ts:/app/apps/web/vite.config.ts:ro

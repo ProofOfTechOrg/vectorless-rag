@@ -2,6 +2,35 @@ version = 1
 revision = 3
 requires-python = "==3.12.*"
 
+[options]
+exclude-newer = "2026-07-13T08:43:23.631009754Z"
+exclude-newer-span = "P7D"
+
+[options.exclude-newer-package]
+opentelemetry-exporter-otlp-proto-common = false
+opentelemetry-api = false
+types-boto3 = false
+types-boto3-s3 = false
+opentelemetry-exporter-otlp-proto-http = false
+litellm = false
+boto3 = false
+opentelemetry-semantic-conventions = false
+regex = false
+huggingface-hub = false
+hf-xet = false
+opentelemetry-sdk = false
+langsmith = false
+tqdm = false
+fastapi = false
+openai = false
+ruff = false
+opentelemetry-proto = false
+botocore = false
+filelock = false
+typer = false
+langchain = false
+coverage = false
+
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"

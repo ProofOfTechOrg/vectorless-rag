@@ -18,7 +18,7 @@ This page lists every public Make target and the variables that alter operator c
 | Manifest validation | `make workflow-check`, `make migration-check`, `make compose-check`, `make helm-lint`, `make helm-template`, `make helm-check` |
 | Image builds | `make docker-build-api`, `make docker-build-web`, `make docker-build` |
 | Validation suites | `make api-check`, `make web-check`, `make deploy-check`, `make check ENV_FILE=.env.example`, `make ci` |
-| Lifecycle | `make up`, `make down`, `make stop`, `make restart`, `make restart-app`, `make restart-web`, `make restart-langfuse`, `make restart-observability`, `make ps`, `make logs SERVICE=worker`, `make health`, `make web-dev` |
+| Lifecycle | `make up`, `make rebuild`, `make dev`, `make dev-build`, `make down`, `make stop`, `make restart`, `make restart-app`, `make restart-web`, `make restart-langfuse`, `make restart-observability`, `make ps`, `make logs SERVICE=worker`, `make health`, `make web-dev` |
 | Corpus | `make download-corpus`, `make download-corpus ARXIV_PDF_HOST_DIR=/srv/vectorless/arxiv-pdfs` |
 | Operator | `make migrate`, `make bootstrap-key NAME=operator`, `make sync-corpus`, `make upload-document PDF=/path/file.pdf`, `make pilot-report` |
 | Evaluation | `make evaluation-build`, `make evaluation-seed DATASET=apps/api/evaluation/release-v1.jsonl` |
@@ -27,6 +27,29 @@ This page lists every public Make target and the variables that alter operator c
 `make playwright-live` exits with status 2 unless both `PLAYWRIGHT_BASE_URL` and the process-only `PLAYWRIGHT_API_KEY` are set. Use the [disposable live-stack procedure](operator-guide.md#verify-a-disposable-live-stack) to create both values without saving the key.
 
 `make ci` installs Playwright Chromium and its operating-system dependencies through `make playwright-install` before it runs browser tests.
+
+## Run the local development stack
+
+Use the development Compose override when you need API, worker, and web source changes to reload without rebuilding images.
+
+```bash
+make dev
+```
+
+The command reads `.env`, runs in the foreground, and displays logs from the complete stack. Stop it with Ctrl+C. Named volumes remain available for the next run. Pass `ENV_FILE=path/to/env` to select another environment file.
+
+Compose builds any missing development image on the first run. Rebuild the development images after changing a Dockerfile, package manifest, or lockfile:
+
+```bash
+make dev-build
+make dev
+```
+
+Python changes restart Uvicorn and the ingestion worker. Web source changes use Vite hot module replacement. Migration changes require `make migrate` or a development-stack restart.
+
+Use `make web-dev` when you want only the web process on the host. It runs the Start development server on port 3001 against FastAPI on port 8000 and requires `SESSION_SECRET` in your shell or `.env`.
+
+`make up` starts the deployment-style Compose stack in the background without forcing rebuilds. Run `make rebuild` to rebuild every local application image and force-recreate the complete stack. Use `make restart-app` or `make restart-web` when only one application area needs a new image. All four commands preserve named volumes.
 
 ## Download the test corpus
 
@@ -67,8 +90,6 @@ This procedure queues downloaded PDFs after you deliberately start the stack and
 Downloading the corpus does not start services or queue ingestion. Start the stack, create an administrative key, and then run `make sync-corpus` when you intend to ingest the mounted PDFs.
 
 The default ten-document pilot gate still applies. Do not enable full-corpus indexing until you have reviewed pilot quality and projected provider cost.
-
-`make web-dev` runs the Start development server on port 3001 against FastAPI on port 8000. It still needs `SESSION_SECRET`; load it from your shell or `.env` without using a `VITE_` name.
 
 Operator curl targets require `VECTORLESS_RAG_ADMIN_KEY` in the process environment. They never read the browser session. `make down` preserves named volumes; do not use `docker compose down -v` unless a full local data reset is intended.
 

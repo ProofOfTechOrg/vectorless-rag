@@ -19,17 +19,29 @@ Generate a development secret with `make secret-session`. Never use `VITE_` for 
 
 ## Compose
 
-Use Compose for a local full-stack deployment with persistent named volumes.
+Use Compose for a local full-stack deployment with persistent named volumes. Use the development override when you need source reload inside containers.
 
-`compose.yaml` builds API/worker from `apps/api` and web from `apps/web/Dockerfile`. It mounts PostgreSQL initialization from `infra/docker/postgres-init` and preserves the existing `postgres_data`, `clickhouse_data`, `clickhouse_logs`, `redis_data`, `minio_data`, and `pageindex_work` volumes.
+`compose.yaml` defines API and worker images from `apps/api` and the web image from `apps/web/Dockerfile`. It mounts PostgreSQL initialization from `infra/docker/postgres-init` and preserves the existing `postgres_data`, `clickhouse_data`, `clickhouse_logs`, `redis_data`, `minio_data`, and `pageindex_work` volumes. `make up` starts these services in the background without forcing image rebuilds.
 
 ```bash
 make compose-check ENV_FILE=.env.example
 make up
+make rebuild
 make restart-app
 make restart-web
 make health
 ```
+
+`make up` reuses existing images. `make rebuild` rebuilds every local application image and force-recreates the complete detached stack. `make restart-app` and `make restart-web` perform the same rebuild and recreation for their named application services. None of these commands removes named volumes.
+
+`compose.dev.yaml` adds source mounts, Uvicorn and worker reload, and Vite hot module replacement. Run it through the Make targets:
+
+```bash
+make dev
+make dev-build
+```
+
+`make dev` runs the stack in the foreground and builds only missing images. Use `make dev-build` after changing a Dockerfile, package manifest, or lockfile. `make compose-check` validates both Compose configurations.
 
 Public local endpoints are web 3001 and Langfuse 3000. Compose publishes FastAPI only on host loopback at `127.0.0.1:8000`, so other hosts cannot connect to it directly.
 

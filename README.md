@@ -89,8 +89,10 @@ arxiv-pdfs/                 Git-ignored, user-owned local corpus
 ## Development and verification
 
 ```bash
-make install          # API + web dependencies
-make web-dev          # web on :3001 against the live Compose API on :8000
+make dev              # full Compose stack with API, worker, and web reload
+make dev-build        # rebuild development images after dependency changes
+make web-dev          # host web on :3001 against the Compose API on :8000
+make install          # install host API and web dependencies
 make api-check
 make web-check
 make deploy-check ENV_FILE=.env.example
@@ -102,7 +104,9 @@ make ci               # local CI equivalent
 
 Use `make help` or the [command reference](docs/commands.md) for every target. Follow the [live verification workflow](docs/operator-guide.md#verify-a-disposable-live-stack) before running `make playwright-live`.
 
-`make restart-app` rebuilds API and worker from `apps/api` without removing named volumes. `make restart-web` rebuilds only the frontend.
+`make dev` runs in the foreground and mounts local API and web source into the containers. Stop it with Ctrl+C. Compose builds missing images on the first run, but it does not force rebuilds afterward. Run `make dev-build` after changing a Dockerfile, package manifest, or lockfile.
+
+`make up` starts the deployment-style stack in the background without forcing image rebuilds. Run `make rebuild` to rebuild and recreate the complete stack. `make restart-app` rebuilds only API and worker, while `make restart-web` rebuilds only the frontend. These commands preserve named volumes.
 
 ## Ingestion safety
 

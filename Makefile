@@ -8,6 +8,7 @@ PNPM ?= pnpm
 HELM ?= helm
 DOCKER ?= docker
 COMPOSE ?= docker compose
+DEV_COMPOSE = $(COMPOSE) --env-file "$(ENV_FILE)" -f compose.yaml -f compose.dev.yaml
 API_DIR := apps/api
 WEB_DIR := apps/web
 CHART := infra/helm/vectorless-rag
@@ -28,7 +29,7 @@ export UV_CACHE_DIR
 	typecheck api-typecheck web-typecheck test api-test web-test test-unit test-integration \
 	api-build web-build playwright-install playwright playwright-live react-doctor react-doctor-diff astryx-doctor workflow-check migration-check \
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
-	check api-check web-check deploy-check ci up down stop restart restart-app restart-web \
+	check api-check web-check deploy-check ci up rebuild dev dev-build down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
 	download-corpus sync-corpus upload-document pilot-report evaluation-build evaluation-seed \
 	secret-api-pepper secret-session secrets-langfuse
@@ -104,6 +105,7 @@ migration-check: ## Render the complete Alembic migration offline.
 compose-check: ## Validate Compose using ENV_FILE (default .env).
 	@test -f "$(ENV_FILE)" || { echo "$(ENV_FILE) does not exist; run make env" >&2; exit 2; }
 	$(COMPOSE) --env-file "$(ENV_FILE)" config --quiet
+	$(DEV_COMPOSE) config --quiet
 helm-lint: ## Lint the Helm chart.
 	$(HELM) lint $(CHART)
 helm-template: ## Render the Helm chart with default values.
@@ -122,8 +124,14 @@ check: api-check web-check deploy-check ## Validate the full repository without 
 ci: ENV_FILE := .env.example
 ci: check playwright-install playwright docker-build ## Run the complete CI-equivalent validation.
 
-up: ## Build and start the complete Compose stack without removing volumes.
-	$(COMPOSE) up --build -d
+up: ## Start the complete Compose stack in the background without forcing rebuilds.
+	$(COMPOSE) up -d
+rebuild: ## Rebuild and recreate the complete Compose stack in the background.
+	$(COMPOSE) up -d --build --force-recreate
+dev: env ## Run the complete Compose stack with API, worker, and web hot reload.
+	$(DEV_COMPOSE) up
+dev-build: env ## Rebuild the development API, worker, and web images.
+	$(DEV_COMPOSE) build api worker web
 down: ## Stop and remove containers and networks while preserving volumes.
 	$(COMPOSE) down
 stop: ## Stop Compose containers without removing them.
