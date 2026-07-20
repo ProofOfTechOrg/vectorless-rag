@@ -10,6 +10,12 @@ import { useState } from 'react'
 import { jobSchema, type Job } from '../lib/contracts'
 import { getJob, syncCorpus } from '../server/functions'
 
+const TERMINAL_JOB_STATUSES = new Set<Job['status']>([
+  'completed',
+  'failed',
+  'unsupported',
+])
+
 export const Route = createFileRoute('/_app/ingestion')({ component: IngestionPage })
 
 function IngestionPage() {
@@ -26,7 +32,7 @@ function IngestionPage() {
     for (let attempt = 0; attempt < 120; attempt += 1) {
       const current = await getJob({ data: { jobId } })
       setJob(current)
-      if (['completed', 'failed', 'unsupported'].includes(current.status)) return
+      if (TERMINAL_JOB_STATUSES.has(current.status)) return
       await new Promise((resolve) => window.setTimeout(resolve, 1_500))
     }
     setError('Job polling timed out; the durable job may still be running.')
@@ -105,7 +111,7 @@ function IngestionPage() {
         <Card padding={5}>
           <div className="stack">
             <div className="inline"><h2>Job</h2><Badge label={job.status} variant={job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'info'} /></div>
-            {!['completed', 'failed', 'unsupported'].includes(job.status) && <ProgressBar value={job.status === 'running' ? 60 : 20} label="Processing document" />}
+            {!TERMINAL_JOB_STATUSES.has(job.status) && <ProgressBar value={job.status === 'running' ? 60 : 20} label="Processing document" />}
             <p>Attempts: {job.attempts} · Document: <a href={`/documents/${job.document_id}`}>{job.document_id}</a></p>
             {job.diagnostic && <Banner status={job.status === 'failed' ? 'error' : 'info'} title="Diagnostic" description={job.diagnostic} />}
             {Object.keys(job.metrics).length > 0 && <pre>{JSON.stringify(job.metrics, null, 2)}</pre>}

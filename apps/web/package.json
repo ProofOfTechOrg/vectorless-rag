@@ -15,7 +15,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "astryx:doctor": "astryx doctor"
+    "astryx:doctor": "astryx doctor",
+    "react-doctor": "pnpm dlx github:gcharang/react-doctor#4ad50e2e8c37104c98223e6e2ab1f8bea6bd27de --scope full --verbose --blocking warning",
+    "react-doctor:diff": "pnpm dlx github:gcharang/react-doctor#4ad50e2e8c37104c98223e6e2ab1f8bea6bd27de --scope changed --base \"$(sh scripts/resolve-react-doctor-diff-base.sh)\" --verbose --blocking warning"
   },
   "astryx": {
     "theme": "@astryxdesign/theme-neutral"
@@ -26,7 +28,6 @@
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-router": "latest",
     "@tanstack/react-start": "latest",
-    "@tanstack/router-plugin": "^1.132.0",
     "lucide-react": "^0.545.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

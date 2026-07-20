@@ -8,6 +8,12 @@
     "typecheck:web": "pnpm --filter @vectorless-rag/web typecheck",
     "test:web": "pnpm --filter @vectorless-rag/web test",
     "build:web": "pnpm --filter @vectorless-rag/web build",
-    "test:e2e": "pnpm --filter @vectorless-rag/web test:e2e"
+    "test:e2e": "pnpm --filter @vectorless-rag/web test:e2e",
+    "react-doctor": "pnpm --filter @vectorless-rag/web run react-doctor",
+    "react-doctor:diff": "pnpm --filter @vectorless-rag/web run react-doctor:diff",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
   }
 }

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/gcharang/react-doctor/4ad50e2e8c37104c98223e6e2ab1f8bea6bd27de/packages/website/public/schema/config.json",
+  "ignore": {
+    "overrides": [
+      {
+        "files": ["src/lib/sse.ts"],
+        "rules": [
+          "react-doctor/async-await-in-loop",
+          "react-doctor/js-set-map-lookups"
+        ]
+      },
+      {
+        "files": ["src/routes/_app.ingestion.tsx"],
+        "rules": [
+          "react-doctor/async-await-in-loop",
+          "react-doctor/prefer-useReducer"
+        ]
+      },
+      {
+        "files": ["src/routes/_app.settings.tsx", "src/routes/connect.tsx"],
+        "rules": ["react-doctor/tanstack-start-no-navigate-in-render"]
+      },
+      {
+        "files": ["src/routes/_app.tsx"],
+        "rules": ["react-doctor/jsx-no-jsx-as-prop"]
+      },
+      {
+        "files": ["src/server/session.server.ts"],
+        "rules": ["react-doctor/js-set-map-lookups"]
+      },
+      {
+        "files": ["tests/mock-api.mjs"],
+        "rules": ["deslop/unused-file"]
+      }
+    ]
+  }
+}

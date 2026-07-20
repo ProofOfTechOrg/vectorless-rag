@@ -1,6 +1,6 @@
 import { Theme } from '@astryxdesign/core/theme'
 import { neutralTheme } from '@astryxdesign/theme-neutral'
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, use, useEffect, useMemo, useState, type ReactNode } from 'react'
 
 export type Appearance = 'system' | 'light' | 'dark'
 const STORAGE_KEY = 'vectorless:appearance'
@@ -31,7 +31,7 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
 }
 
 export function useAppearance() {
-  const value = useContext(AppearanceContext)
+  const value = use(AppearanceContext)
   if (!value) throw new Error('useAppearance must be used inside AppearanceProvider')
   return value
 }

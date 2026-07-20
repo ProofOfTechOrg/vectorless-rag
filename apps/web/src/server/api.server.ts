@@ -1,8 +1,8 @@
 import type { ZodType } from 'zod'
-import { apiErrorSchema } from '../lib/contracts'
+import { apiErrorSchema, identitySchema } from '../lib/contracts'
 import { clearSession, requireSession } from './session.server'
 
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
@@ -54,6 +54,5 @@ export async function validateApiKey(apiKey: string) {
     headers: { 'X-API-Key': apiKey },
   })
   if (!response.ok) throw new ApiError(response.status === 401 ? 'Invalid API key' : 'API unavailable', response.status)
-  const { identitySchema } = await import('../lib/contracts')
   return identitySchema.parse(await response.json())
 }

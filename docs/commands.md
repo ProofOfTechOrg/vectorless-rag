@@ -7,7 +7,7 @@ Run commands from the repository root. `make help` is generated from the Makefil
 | Environment | `make env`, `make secret-api-pepper`, `make secret-session`, `make secrets-langfuse` |
 | Dependencies | `make install`, `make api-install`, `make web-install` |
 | API quality | `make api-format`, `make api-lint`, `make api-typecheck`, `make api-test`, `make api-build`, `make api-check` |
-| Web quality | `make web-format`, `make web-lint`, `make web-typecheck`, `make web-test`, `make web-build`, `make web-check`, `make astryx-doctor` |
+| Web quality | `make web-format`, `make web-lint`, `make web-typecheck`, `make web-test`, `make react-doctor`, `make react-doctor-diff`, `make web-build`, `make web-check`, `make astryx-doctor` |
 | Browser tests | `make playwright`, `make playwright-live PLAYWRIGHT_BASE_URL=http://localhost:3001` |
 | Deployment | `make compose-check`, `make helm-check`, `make docker-build-api`, `make docker-build-web`, `make docker-build` |
 | Full validation | `make check ENV_FILE=.env.example`, `make ci` |
@@ -55,3 +55,11 @@ The default ten-document pilot gate still applies. Do not enable full-corpus ind
 `make web-dev` runs the Start development server on port 3001 against FastAPI on port 8000. It still needs `SESSION_SECRET`; load it from your shell or `.env` without using a `VITE_` name.
 
 Operator curl targets require `VECTORLESS_RAG_ADMIN_KEY` in the process environment. They never read the browser session. `make down` preserves named volumes; do not use `docker compose down -v` unless a full local data reset is intended.
+
+## React Doctor
+
+`make react-doctor` (or `pnpm react-doctor`) runs the authoritative full-project React Doctor scan. CI and `make web-check` require this scan to remain at 100/100 with warnings treated as blocking findings.
+
+`make react-doctor-diff` (or `pnpm react-doctor:diff`) scans only files changed from the current branch's open pull request base. The resolver prefers `origin/<base>`, falls back to a local base branch, and otherwise uses React Doctor's `parent` fork-point heuristic. It does not fetch or mutate remote refs.
+
+Husky runs the changed-files scan before every push. The hook fails closed on findings or tool errors and prints the commands for rerunning the changed-files or full scan. Use `git push --no-verify` only as an explicit emergency bypass; CI still runs the full gate.

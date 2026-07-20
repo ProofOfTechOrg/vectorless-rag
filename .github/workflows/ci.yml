@@ -28,6 +28,9 @@ jobs:
       - run: make web-lint
       - run: make web-typecheck
       - run: make web-test
+      - name: React Doctor (full 100/100 gate)
+        timeout-minutes: 10
+        run: make react-doctor
       - run: make web-build
       - run: make astryx-doctor
       - run: make playwright

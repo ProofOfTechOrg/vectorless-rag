@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Fast changed-file pre-check; CI runs the authoritative full-project scan.
+# Bypass only when necessary with `git push --no-verify`.
+echo "[husky/pre-push] react-doctor (changed files) — fast pre-check; CI runs the full gate…"
+if ! pnpm --filter @vectorless-rag/web run react-doctor:diff; then
+	printf '\033[1;31m[husky/pre-push] react-doctor found issues or failed — push aborted. Re-run: pnpm react-doctor:diff (or pnpm react-doctor for a full scan). Bypass: git push --no-verify\033[0m\n' >&2
+	exit 1
+fi
+echo "[husky/pre-push] react-doctor (changed files) clean"

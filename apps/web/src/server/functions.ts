@@ -65,7 +65,7 @@ export const getDocuments = createServerFn({ method: 'GET' })
   })
 
 export const getDocument = createServerFn({ method: 'GET' })
-  .validator(z.object({ documentId: z.string().uuid() }))
+  .validator(z.object({ documentId: z.uuid() }))
   .handler(({ data }) => apiJson(`/v1/documents/${data.documentId}`, documentSchema))
 
 export const syncCorpus = createServerFn({ method: 'POST' })
@@ -80,7 +80,7 @@ export const syncCorpus = createServerFn({ method: 'POST' })
   })
 
 export const getJob = createServerFn({ method: 'GET' })
-  .validator(z.object({ jobId: z.string().uuid() }))
+  .validator(z.object({ jobId: z.uuid() }))
   .handler(({ data }) => apiJson(`/v1/admin/ingestion/${data.jobId}`, jobSchema))
 
 export const submitFeedback = createServerFn({ method: 'POST' })

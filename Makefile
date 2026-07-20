@@ -26,7 +26,7 @@ export UV_CACHE_DIR
 
 .PHONY: help env install api-install web-install format api-format web-format lint api-lint web-lint \
 	typecheck api-typecheck web-typecheck test api-test web-test test-unit test-integration \
-	api-build web-build playwright playwright-live astryx-doctor workflow-check migration-check \
+	api-build web-build playwright playwright-live react-doctor react-doctor-diff astryx-doctor workflow-check migration-check \
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
@@ -86,6 +86,10 @@ playwright: ## Run deterministic Playwright against the local mock upstream.
 	$(PNPM) --filter @vectorless-rag/web test:e2e
 playwright-live: ## Run Playwright against PLAYWRIGHT_BASE_URL and a live stack.
 	PLAYWRIGHT_LIVE=1 $(PNPM) --filter @vectorless-rag/web test:e2e
+react-doctor: ## Run the authoritative full React Doctor 100/100 gate.
+	$(PNPM) --filter @vectorless-rag/web react-doctor
+react-doctor-diff: ## Run React Doctor against files changed from the current PR base.
+	$(PNPM) --filter @vectorless-rag/web react-doctor:diff
 astryx-doctor: ## Diagnose ASTRYX package, peer, theme, and agent setup.
 	$(PNPM) --filter @vectorless-rag/web astryx:doctor
 
@@ -108,7 +112,7 @@ docker-build-web: ## Build the production frontend image.
 docker-build: docker-build-api docker-build-web ## Build both production images.
 
 api-check: api-lint api-typecheck api-test migration-check ## Validate the API package.
-web-check: web-lint web-typecheck web-test web-build astryx-doctor ## Validate the web package.
+web-check: web-lint web-typecheck web-test react-doctor web-build astryx-doctor ## Validate the web package.
 deploy-check: workflow-check compose-check helm-check ## Validate CI and deployment manifests.
 check: api-check web-check deploy-check ## Validate the full repository without browser or image builds.
 ci: ENV_FILE := .env.example

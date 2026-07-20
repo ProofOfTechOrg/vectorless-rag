@@ -27,6 +27,8 @@ interface ThreadRun {
   citations: Citation[]
 }
 
+const EMPTY_RUNS: ThreadRun[] = []
+
 interface ThreadSummary {
   thread_id: string
   title: string
@@ -35,7 +37,7 @@ interface ThreadSummary {
 
 export function ChatWorkspace({
   threadId,
-  runs = [],
+  runs = EMPTY_RUNS,
   threads,
 }: {
   threadId?: string
@@ -44,10 +46,10 @@ export function ChatWorkspace({
 }) {
   const navigate = useNavigate()
   const abortRef = useRef<AbortController | null>(null)
+  const lastQuestionRef = useRef('')
   const [composer, setComposer] = useState('')
   const [status, setStatus] = useState('Ready')
   const [error, setError] = useState<string | null>(null)
-  const [lastQuestion, setLastQuestion] = useState('')
   const [messages, setMessages] = useState<Message[]>(() =>
     runs.flatMap((run) => [
       { sender: 'user' as const, text: run.question },
@@ -66,7 +68,7 @@ export function ChatWorkspace({
     const question = value.trim()
     if (!question || isStreaming) return
     setComposer('')
-    setLastQuestion(question)
+    lastQuestionRef.current = question
     setError(null)
     setStatus('Starting run…')
     setMessages((current) => [
@@ -183,7 +185,7 @@ export function ChatWorkspace({
           </ChatMessage>
         ))}
         <p className="status-line" role="status">{status}</p>
-        {error && <div className="inline"><span>{error}</span><Button label="Retry" onClick={() => send(lastQuestion)} /></div>}
+        {error && <div className="inline"><span>{error}</span><Button label="Retry" onClick={() => send(lastQuestionRef.current)} /></div>}
       </div>
       <div className="chat-composer">
         <ChatComposer

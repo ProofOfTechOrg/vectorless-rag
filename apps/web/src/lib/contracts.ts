@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const scopeSchema = z.enum(['chat', 'documents:read', 'admin:ingest'])
+const scopeSchema = z.enum(['chat', 'documents:read', 'admin:ingest'])
 export const identitySchema = z.object({
   name: z.string(),
   scopes: z.array(scopeSchema),
@@ -30,7 +30,7 @@ export const chatResponseSchema = z.object({
 })
 export type ChatResponse = z.infer<typeof chatResponseSchema>
 
-export const threadRunSchema = z.object({
+const threadRunSchema = z.object({
   trace_id: z.string(),
   route: z.enum(['sql', 'documents', 'hybrid', 'clarify']).nullable(),
   question: z.string(),
@@ -40,7 +40,7 @@ export const threadRunSchema = z.object({
   created_at: z.string(),
 })
 export const threadSchema = z.object({ thread_id: z.string(), runs: z.array(threadRunSchema) })
-export const threadSummarySchema = z.object({
+const threadSummarySchema = z.object({
   thread_id: z.string(),
   title: z.string(),
   run_count: z.number().int(),
@@ -89,4 +89,4 @@ export const syncResponseSchema = z.object({
   pilot_limit_reached: z.boolean(),
 })
 
-export const apiErrorSchema = z.object({ detail: z.unknown().optional() }).passthrough()
+export const apiErrorSchema = z.looseObject({ detail: z.unknown().optional() })
