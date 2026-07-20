@@ -3,8 +3,10 @@ import { expect, test } from '@playwright/test'
 test.skip(!!process.env.PLAYWRIGHT_LIVE, 'Deterministic mock coverage is separate from live verification')
 
 const key = process.env.PLAYWRIGHT_API_KEY ?? 'vrag_test_full'
+const shellWidth = 80 * 16
 const operationalWidth = 64 * 16
 const readingWidth = 42 * 16
+const chatWidth = 48 * 16
 
 async function waitForHydration(page: import('@playwright/test').Page) {
   await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true')
@@ -45,7 +47,7 @@ async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
   expect(Math.max(...geometry.columns.map(({ center }) => center)) - Math.min(...geometry.columns.map(({ center }) => center))).toBeLessThanOrEqual(1)
   for (const column of geometry.columns) {
     expect(Math.abs(column.center - geometry.shellCenter)).toBeLessThanOrEqual(1)
-    expect(column.width).toBeLessThanOrEqual(readingWidth + 1)
+    expect(column.width).toBeLessThanOrEqual(chatWidth + 1)
     expect(column.width).toBeLessThanOrEqual(geometry.viewportWidth + 1)
   }
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth)
@@ -102,39 +104,76 @@ async function expectConnectCardGeometry(page: import('@playwright/test').Page) 
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth)
 }
 
-async function expectTopNavAligned(page: import('@playwright/test').Page, expectedSideNavWidth: number) {
+async function expectBoundedOperatorShell(page: import('@playwright/test').Page, expectedSideNavWidth: number) {
   const geometry = await page.evaluate(() => {
     const shell = document.querySelector<HTMLElement>('.operator-shell')
     const topNav = document.querySelector<HTMLElement>('[data-testid="operator-top-nav"]')
-    const operationalPage = document.querySelector<HTMLElement>('.page:not(.page-reading)')
-    if (!shell || !topNav || !operationalPage) throw new Error('Missing operator layout surface')
+    const main = document.querySelector<HTMLElement>('#astryx-app-shell-main')
+    const sideNav = document.querySelector<HTMLElement>('.astryx-side-nav')
+    if (!shell || !topNav || !main) throw new Error('Missing operator layout surface')
 
     const shellStyle = getComputedStyle(shell)
-    const topNavStyle = getComputedStyle(topNav)
-    const pageStyle = getComputedStyle(operationalPage)
+    const shellRect = shell.getBoundingClientRect()
     const topNavRect = topNav.getBoundingClientRect()
-    const pageRect = operationalPage.getBoundingClientRect()
+    const mainRect = main.getBoundingClientRect()
+    const sideNavRect = sideNav?.getBoundingClientRect()
     const sideNavWidth = Number.parseFloat(shellStyle.getPropertyValue('--operator-side-nav-width'))
-    const topNavGutter = Number.parseFloat(topNavStyle.paddingLeft) - sideNavWidth
-    const effectiveLeft = topNavRect.left + sideNavWidth + topNavGutter
-    const effectiveRight = topNavRect.right - Number.parseFloat(topNavStyle.paddingRight)
-    const pageContentLeft = pageRect.left + Number.parseFloat(pageStyle.paddingLeft)
-    const pageContentRight = pageRect.right - Number.parseFloat(pageStyle.paddingRight)
 
     return {
-      effectiveLeft,
-      effectiveRight,
-      pageContentLeft,
-      pageContentRight,
+      mainLeft: mainRect.left,
+      mainRight: mainRect.right,
+      shellCenter: shellRect.left + shellRect.width / 2,
+      shellLeft: shellRect.left,
+      shellRight: shellRect.right,
+      shellWidth: shellRect.width,
       sideNavWidth,
+      sideNavLeft: sideNavRect?.left ?? null,
+      sideNavRight: sideNavRect?.right ?? null,
+      topNavLeft: topNavRect.left,
+      topNavRight: topNavRect.right,
       topNavWidth: topNavRect.width,
+      viewportCenter: window.innerWidth / 2,
+      viewportWidth: window.innerWidth,
+      scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
     }
   })
 
   expect(Math.abs(geometry.sideNavWidth - expectedSideNavWidth)).toBeLessThanOrEqual(1)
-  expect(Math.abs(geometry.effectiveLeft - geometry.pageContentLeft)).toBeLessThanOrEqual(1)
-  expect(Math.abs(geometry.effectiveRight - geometry.pageContentRight)).toBeLessThanOrEqual(1)
-  expect(geometry.topNavWidth).toBeLessThanOrEqual(operationalWidth + expectedSideNavWidth + 1)
+  expect(Math.abs(geometry.shellCenter - geometry.viewportCenter)).toBeLessThanOrEqual(1)
+  expect(geometry.shellWidth).toBeLessThanOrEqual(shellWidth + 1)
+  expect(Math.abs(geometry.shellWidth - Math.min(geometry.viewportWidth, shellWidth))).toBeLessThanOrEqual(1)
+  expect(Math.abs(geometry.topNavLeft - geometry.shellLeft)).toBeLessThanOrEqual(1)
+  expect(Math.abs(geometry.topNavRight - geometry.shellRight)).toBeLessThanOrEqual(1)
+  expect(Math.abs(geometry.topNavWidth - geometry.shellWidth)).toBeLessThanOrEqual(1)
+  expect(geometry.mainLeft).toBeGreaterThanOrEqual(geometry.shellLeft - 1)
+  expect(geometry.mainRight).toBeLessThanOrEqual(geometry.shellRight + 1)
+  if (expectedSideNavWidth > 0) {
+    expect(geometry.sideNavLeft).not.toBeNull()
+    expect(geometry.sideNavRight).not.toBeNull()
+    expect(geometry.sideNavLeft as number).toBeGreaterThanOrEqual(geometry.shellLeft - 1)
+    expect(geometry.sideNavRight as number).toBeLessThanOrEqual(geometry.shellRight + 1)
+  }
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth)
+}
+
+async function expectExpandedTypeScale(page: import('@playwright/test').Page) {
+  const sizes = await page.evaluate(() => {
+    const tokens = ['4xs', '3xs', '2xs', 'xs', 'sm', 'base', 'lg', 'xl', '2xl', '3xl', '4xl', '5xl']
+    const probe = document.createElement('span')
+    document.body.append(probe)
+    const values = tokens.map((token) => {
+      probe.style.fontSize = `var(--font-size-${token})`
+      return Number.parseFloat(getComputedStyle(probe).fontSize)
+    })
+    probe.remove()
+    return values
+  })
+
+  const increase = 2 * 96 / 72
+  const neutralScale = [6, 7, 8, 10, 12, 14, 17, 20, 24, 29, 35, 42]
+  for (const [index, size] of sizes.entries()) {
+    expect(Math.abs(size - (neutralScale[index] + increase))).toBeLessThanOrEqual(0.02)
+  }
 }
 
 async function navigateFromSideNav(
@@ -166,7 +205,7 @@ async function expectAppWidthTiers(page: import('@playwright/test').Page, sideNa
     await navigateFromSideNav(page, destination)
     await expect(page.getByRole('heading', { name: destination, exact: true })).toBeVisible()
     await expectCenteredSurface(page, '.page:not(.page-reading)', operationalWidth)
-    await expectTopNavAligned(page, sideNavWidth)
+    await expectBoundedOperatorShell(page, sideNavWidth)
   }
 
   await navigateFromSideNav(page, 'Chat')
@@ -329,6 +368,7 @@ test('centers operational, reading, connection, and navigation surfaces app-wide
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.goto('/connect')
   await expectConnectCardGeometry(page)
+  await expectExpandedTypeScale(page)
 
   await page.setViewportSize({ width: 390, height: 844 })
   await expectConnectCardGeometry(page)
@@ -343,11 +383,11 @@ test('centers operational, reading, connection, and navigation surfaces app-wide
   await page.getByRole('button', { name: 'Collapse sidebar' }).click()
   await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible()
   await expectCenteredSurface(page, '.page:not(.page-reading)', operationalWidth)
-  await expectTopNavAligned(page, 48)
+  await expectBoundedOperatorShell(page, 48)
 
   await page.getByRole('button', { name: 'Expand sidebar' }).click()
   await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible()
-  await expectTopNavAligned(page, 260)
+  await expectBoundedOperatorShell(page, 260)
 
   await setAppearance(page, 'Dark')
   await expectAppWidthTiers(page, 260)
