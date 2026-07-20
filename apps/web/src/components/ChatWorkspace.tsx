@@ -1,12 +1,19 @@
 import { Badge } from '@astryxdesign/core/Badge'
 import { Button } from '@astryxdesign/core/Button'
 import { Card } from '@astryxdesign/core/Card'
-import { ChatComposer, ChatMessage, ChatMessageBubble } from '@astryxdesign/core/Chat'
+import { ChatComposer, ChatMessage, ChatMessageBubble, ChatMessageMetadata } from '@astryxdesign/core/Chat'
 import { Citation as CitationChip } from '@astryxdesign/core/Citation'
 import { Markdown } from '@astryxdesign/core/Markdown'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { useRef, useState } from 'react'
-import { chatResponseSchema, citationSchema, type Citation } from '../lib/contracts'
+import {
+  chatErrorSchema,
+  chatResponseSchema,
+  citationSchema,
+  runStartedSchema,
+  type Citation,
+  type FailureCode,
+} from '../lib/contracts'
 import { parseSseStream } from '../lib/sse'
 import { submitFeedback } from '../server/functions'
 
@@ -17,6 +24,8 @@ interface Message {
   route?: string | null
   citations?: Citation[]
   streaming?: boolean
+  failureCode?: FailureCode
+  retryQuestion?: string
 }
 
 interface ThreadRun {
@@ -25,6 +34,8 @@ interface ThreadRun {
   question: string
   answer: string | null
   citations: Citation[]
+  status: 'completed' | 'failed'
+  failure_code: FailureCode | null
 }
 
 const EMPTY_RUNS: ThreadRun[] = []
@@ -46,19 +57,19 @@ export function ChatWorkspace({
 }) {
   const navigate = useNavigate()
   const abortRef = useRef<AbortController | null>(null)
-  const lastQuestionRef = useRef('')
   const [composer, setComposer] = useState('')
   const [status, setStatus] = useState('Ready')
-  const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<Message[]>(() =>
     runs.flatMap((run) => [
       { sender: 'user' as const, text: run.question },
       {
         sender: 'assistant' as const,
-        text: run.answer ?? 'This run did not complete.',
+        text: run.answer ?? failureMessage(run.failure_code),
         traceId: run.trace_id,
         route: run.route,
         citations: run.citations,
+        failureCode: run.failure_code ?? undefined,
+        retryQuestion: run.status === 'failed' ? run.question : undefined,
       },
     ]),
   )
@@ -68,16 +79,18 @@ export function ChatWorkspace({
     const question = value.trim()
     if (!question || isStreaming) return
     setComposer('')
-    lastQuestionRef.current = question
-    setError(null)
     setStatus('Starting run…')
     setMessages((current) => [
       ...current,
       { sender: 'user', text: question },
-      { sender: 'assistant', text: '', citations: [], streaming: true },
+      { sender: 'assistant', text: '', citations: [], streaming: true, retryQuestion: question },
     ])
     const controller = new AbortController()
     abortRef.current = controller
+    let completedThread = threadId
+    let traceId: string | undefined
+    let finished = false
+    let shouldNavigate = true
     try {
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
@@ -86,9 +99,13 @@ export function ChatWorkspace({
         signal: controller.signal,
       })
       if (!response.ok || !response.body) throw new Error(await response.text() || 'Chat failed')
-      let completedThread = threadId
       for await (const event of parseSseStream(response.body)) {
-        if (event.event === 'route.selected') {
+        if (event.event === 'run.started') {
+          const started = runStartedSchema.parse(JSON.parse(event.data))
+          completedThread = started.thread_id
+          traceId = started.trace_id
+          setMessages((current) => updateLast(current, { traceId }))
+        } else if (event.event === 'route.selected') {
           const route = JSON.parse(event.data).route as string
           setStatus(`Route selected: ${route}`)
           setMessages((current) => updateLast(current, { route }))
@@ -110,26 +127,50 @@ export function ChatWorkspace({
             route: result.route,
             citations: result.citations,
             streaming: false,
+            failureCode: undefined,
+            retryQuestion: undefined,
           }))
+          finished = true
           setStatus(result.insufficient ? 'Completed with insufficient evidence' : 'Completed')
         } else if (event.event === 'error') {
-          throw new Error('The API could not complete this run')
+          const failure = chatErrorSchema.parse(JSON.parse(event.data))
+          completedThread = failure.thread_id
+          traceId = failure.trace_id
+          setMessages((current) => updateLast(current, {
+            text: failure.message,
+            traceId,
+            streaming: false,
+            failureCode: failure.code,
+          }))
+          finished = true
+          setStatus('Failed')
         }
       }
-      if (completedThread && completedThread !== threadId) {
-        await navigate({ to: '/chat/$threadId', params: { threadId: completedThread }, replace: true })
-      }
+      if (!finished) throw new Error('The chat stream ended before completion.')
     } catch (reason) {
       if (controller.signal.aborted) {
+        shouldNavigate = false
         setStatus('Cancelled')
+        setMessages((current) => updateLast(current, {
+          text: 'Run cancelled.',
+          streaming: false,
+          failureCode: 'request_failed',
+        }))
       } else {
         const message = reason instanceof Error ? reason.message : 'Chat failed'
-        setError(message)
         setStatus('Failed')
+        setMessages((current) => updateLast(current, {
+          text: message,
+          traceId,
+          streaming: false,
+          failureCode: 'request_failed',
+        }))
       }
-      setMessages((current) => updateLast(current, { streaming: false }))
     } finally {
       abortRef.current = null
+    }
+    if (shouldNavigate && completedThread && completedThread !== threadId) {
+      await navigate({ to: '/chat/$threadId', params: { threadId: completedThread }, replace: true })
     }
   }
 
@@ -165,6 +206,19 @@ export function ChatWorkspace({
                 <Markdown isStreaming={message.streaming} headingLevelStart={3} autolink="gfm">{message.text || '…'}</Markdown>
               ) : message.text}
             </ChatMessageBubble>
+            {message.failureCode && (
+              <div className="inline">
+                <ChatMessageMetadata status="error" />
+                {message.retryQuestion && (
+                  <Button
+                    label="Retry"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => send(message.retryQuestion!)}
+                  />
+                )}
+              </div>
+            )}
             {message.route && <Badge label={message.route} variant="info" />}
             {message.citations && message.citations.length > 0 && (
               <div className="citation-list">
@@ -175,7 +229,7 @@ export function ChatWorkspace({
                 ))}
               </div>
             )}
-            {message.traceId && (
+            {message.traceId && !message.failureCode && (
               <div className="inline">
                 <span className="muted">Was this grounded?</span>
                 <Button label="Helpful" size="sm" variant="ghost" clickAction={async () => { await submitFeedback({ data: { traceId: message.traceId!, value: 1 } }) }} />
@@ -185,7 +239,6 @@ export function ChatWorkspace({
           </ChatMessage>
         ))}
         <p className="status-line" role="status">{status}</p>
-        {error && <div className="inline"><span>{error}</span><Button label="Retry" onClick={() => send(lastQuestionRef.current)} /></div>}
       </div>
       <div className="chat-composer">
         <ChatComposer
@@ -199,6 +252,12 @@ export function ChatWorkspace({
       </div>
     </div>
   )
+}
+
+function failureMessage(code: FailureCode | null): string {
+  return code === 'deadline_exceeded'
+    ? 'The request timed out.'
+    : 'The API could not complete this run.'
 }
 
 function updateLast(messages: Message[], patch: Partial<Message>): Message[] {

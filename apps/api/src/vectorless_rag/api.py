@@ -152,10 +152,13 @@ async def _execute_chat(
     payload: ChatRequest,
     principal: Principal,
     session: AsyncSession,
+    *,
+    thread_id: str | None = None,
+    trace_id: str | None = None,
 ) -> ChatResponse:
     runtime: Runtime = request.app.state.runtime
-    thread_id = payload.thread_id or uuid.uuid4().hex
-    trace_id = uuid.uuid4().hex
+    thread_id = thread_id or payload.thread_id or uuid.uuid4().hex
+    trace_id = trace_id or uuid.uuid4().hex
     run = QueryRun(
         trace_id=trace_id,
         thread_id=thread_id,
@@ -220,10 +223,23 @@ async def chat_stream(
     principal: ChatPrincipal,
     session: Session,
 ) -> EventSourceResponse:
+    thread_id = payload.thread_id or uuid.uuid4().hex
+    trace_id = uuid.uuid4().hex
+
     async def events() -> AsyncIterator[dict[str, str]]:
-        yield {"event": "run.started", "data": json.dumps({"thread_id": payload.thread_id})}
+        yield {
+            "event": "run.started",
+            "data": json.dumps({"thread_id": thread_id, "trace_id": trace_id}),
+        }
         try:
-            result = await _execute_chat(request, payload, principal, session)
+            result = await _execute_chat(
+                request,
+                payload,
+                principal,
+                session,
+                thread_id=thread_id,
+                trace_id=trace_id,
+            )
             if await request.is_disconnected():
                 return
             yield {"event": "route.selected", "data": json.dumps({"route": result.route})}
@@ -243,8 +259,29 @@ async def chat_stream(
             yield {"event": "run.completed", "data": result.model_dump_json()}
         except asyncio.CancelledError:
             raise
-        except Exception:
-            yield {"event": "error", "data": json.dumps({"message": "request failed"})}
+        except Exception as exc:
+            failure_code = (
+                "deadline_exceeded"
+                if isinstance(exc, HTTPException)
+                and exc.status_code == status.HTTP_504_GATEWAY_TIMEOUT
+                else "request_failed"
+            )
+            message = (
+                "The request timed out."
+                if failure_code == "deadline_exceeded"
+                else "The API could not complete this run."
+            )
+            yield {
+                "event": "error",
+                "data": json.dumps(
+                    {
+                        "code": failure_code,
+                        "message": message,
+                        "thread_id": thread_id,
+                        "trace_id": trace_id,
+                    }
+                ),
+            }
 
     return EventSourceResponse(events(), ping=15, send_timeout=30)
 
@@ -468,6 +505,16 @@ async def thread_history(
                 answer=run.answer,
                 citations=run.citations,
                 insufficient=run.insufficient,
+                status=("completed" if run.error is None and run.answer is not None else "failed"),
+                failure_code=(
+                    None
+                    if run.error is None and run.answer is not None
+                    else (
+                        "deadline_exceeded"
+                        if run.error == "request deadline exceeded"
+                        else "request_failed"
+                    )
+                ),
                 created_at=run.created_at,
             )
             for run in runs

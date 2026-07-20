@@ -69,6 +69,7 @@ class ChatResponse(StrictModel):
 class RouteDecision(StrictModel):
     route: RunRoute
     reason: str
+    standalone_question: str = Field(min_length=1, max_length=20_000)
     clarification_question: str | None = None
 
 
@@ -181,6 +182,8 @@ class ThreadRun(StrictModel):
     answer: str | None
     citations: list[dict[str, object]]
     insufficient: bool
+    status: Literal["completed", "failed"]
+    failure_code: Literal["deadline_exceeded", "request_failed"] | None = None
     created_at: datetime
 
 

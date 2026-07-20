@@ -33,6 +33,19 @@ def test_sql_citation_requires_audit_id() -> None:
 
 
 def test_route_schema_is_closed() -> None:
-    assert RouteDecision(route=RunRoute.hybrid, reason="needs filtering").route == RunRoute.hybrid
+    assert (
+        RouteDecision(
+            route=RunRoute.hybrid,
+            reason="needs filtering",
+            standalone_question="Compare the selected papers",
+        ).route
+        == RunRoute.hybrid
+    )
     with pytest.raises(ValidationError):
-        RouteDecision.model_validate({"route": "web", "reason": "unsupported"})
+        RouteDecision.model_validate(
+            {
+                "route": "web",
+                "reason": "unsupported",
+                "standalone_question": "Search the web",
+            }
+        )

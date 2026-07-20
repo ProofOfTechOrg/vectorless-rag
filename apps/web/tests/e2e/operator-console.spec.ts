@@ -70,3 +70,18 @@ test('returns an existing documents-only session to its scoped home', async ({ p
   await page.goto('/connect')
   await expect(page).toHaveURL(/\/documents$/)
 })
+
+test('persists a failed stream with a safe retryable message', async ({ page }) => {
+  await page.goto('/connect')
+  await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled()
+  await page.getByLabel('API key').fill(key)
+  await page.getByRole('button', { name: 'Connect' }).click()
+
+  await page.getByLabel('Message input').fill('Make this fail')
+  await page.getByLabel('Message input').press('Enter')
+
+  await expect(page).toHaveURL(/\/chat\/thread-failed$/)
+  await expect(page.getByText('The API could not complete this run.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible()
+  await expect(page.locator('.status-line')).toHaveText('Ready')
+})

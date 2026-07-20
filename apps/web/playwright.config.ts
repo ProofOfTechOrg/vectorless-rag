@@ -8,7 +8,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: 'list',
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? (live ? 'http://127.0.0.1:3001' : 'http://127.0.0.1:3101'),
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? (live ? 'http://localhost:3001' : 'http://127.0.0.1:3101'),
     trace: 'off',
     video: 'off',
     screenshot: 'off',

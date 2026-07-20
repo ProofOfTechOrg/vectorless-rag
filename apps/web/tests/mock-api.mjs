@@ -39,7 +39,11 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/v1/threads') return json(response, 200, { items: [{ thread_id: 'thread-1', title: 'Cobalt lantern question', run_count: 1, last_activity_at: '2026-07-20T00:02:00Z' }], next_cursor: null })
   if (url.pathname === '/v1/threads/thread-1') return json(response, 200, {
     thread_id: 'thread-1',
-    runs: [{ trace_id: completed.trace_id, route: completed.route, question: 'What does the cobalt lantern fixture prove?', answer: completed.answer, citations: completed.citations, insufficient: false, created_at: '2026-07-20T00:02:00Z' }],
+    runs: [{ trace_id: completed.trace_id, route: completed.route, question: 'What does the cobalt lantern fixture prove?', answer: completed.answer, citations: completed.citations, insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:02:00Z' }],
+  })
+  if (url.pathname === '/v1/threads/thread-failed') return json(response, 200, {
+    thread_id: 'thread-failed',
+    runs: [{ trace_id: 'trace-failed', route: null, question: 'Make this fail', answer: null, citations: [], insufficient: true, status: 'failed', failure_code: 'request_failed', created_at: '2026-07-20T00:03:00Z' }],
   })
   if (url.pathname === '/v1/documents') return json(response, 200, { items: [document], next_cursor: null })
   if (url.pathname === `/v1/documents/${documentId}`) return json(response, 200, document)
@@ -57,16 +61,24 @@ const server = createServer(async (request, response) => {
     return response.end()
   }
   if (url.pathname === '/v1/chat/stream') {
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    const payload = JSON.parse(Buffer.concat(chunks).toString())
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-    const chunks = [
-      'event: run.started\ndata: {"thread_id":"thread-1"}\n\n',
+    if (payload.message === 'Make this fail') {
+      response.write('event: run.started\ndata: {"thread_id":"thread-failed","trace_id":"trace-failed"}\n\n')
+      response.write('event: error\ndata: {"code":"request_failed","message":"The API could not complete this run.","thread_id":"thread-failed","trace_id":"trace-failed"}\n\n')
+      return response.end()
+    }
+    const events = [
+      'event: run.started\ndata: {"thread_id":"thread-1","trace_id":"trace-1"}\n\n',
       'event: route.selected\ndata: {"route":"documents"}\n\n',
       'event: answer.delta\ndata: {"delta":"The fixture confirms "}\n\n',
       'event: answer.delta\ndata: {"delta":"cobalt lantern retrieval [1]."}\n\n',
       `event: citation\ndata: ${JSON.stringify(completed.citations[0])}\n\n`,
       `event: run.completed\ndata: ${JSON.stringify(completed)}\n\n`,
     ]
-    for (const chunk of chunks) {
+    for (const chunk of events) {
       const midpoint = Math.floor(chunk.length / 2)
       response.write(chunk.slice(0, midpoint))
       await delay(5)

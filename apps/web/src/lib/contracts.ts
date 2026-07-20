@@ -30,6 +30,16 @@ export const chatResponseSchema = z.object({
 })
 export type ChatResponse = z.infer<typeof chatResponseSchema>
 
+export const failureCodeSchema = z.enum(['deadline_exceeded', 'request_failed'])
+export type FailureCode = z.infer<typeof failureCodeSchema>
+export const runStartedSchema = z.object({ thread_id: z.string(), trace_id: z.string() })
+export const chatErrorSchema = z.object({
+  code: failureCodeSchema,
+  message: z.string(),
+  thread_id: z.string(),
+  trace_id: z.string(),
+})
+
 const threadRunSchema = z.object({
   trace_id: z.string(),
   route: z.enum(['sql', 'documents', 'hybrid', 'clarify']).nullable(),
@@ -37,6 +47,8 @@ const threadRunSchema = z.object({
   answer: z.string().nullable(),
   citations: z.array(citationSchema),
   insufficient: z.boolean(),
+  status: z.enum(['completed', 'failed']),
+  failure_code: failureCodeSchema.nullable(),
   created_at: z.string(),
 })
 export const threadSchema = z.object({ thread_id: z.string(), runs: z.array(threadRunSchema) })

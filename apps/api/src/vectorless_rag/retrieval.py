@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
@@ -18,10 +19,18 @@ from vectorless_rag.schemas import (
     CandidateSelection,
     Evidence,
     MetadataConstraints,
+    NodeChoice,
     NodeSelection,
     SufficiencyDecision,
 )
 from vectorless_rag.storage import ObjectStore
+
+QUOTED_PHRASE = re.compile(r'"([^"\n]+)"|“([^”\n]+)”')
+
+
+def candidate_search_text(question: str) -> str:
+    phrases = [next(value for value in match if value) for match in QUOTED_PHRASE.findall(question)]
+    return max(phrases, key=len) if phrases else question
 
 
 @dataclass(frozen=True)
@@ -63,7 +72,7 @@ class CorpusRouter:
             filters.append(Document.submitted_date <= constraints.date_to)
         if restrict_ids is not None:
             filters.append(Document.id.in_(restrict_ids))
-        query = func.websearch_to_tsquery("english", question)
+        query = func.websearch_to_tsquery("english", candidate_search_text(question))
         rank = func.ts_rank_cd(Document.search_vector, query)
         text_filter = Document.search_vector.op("@@")(query)
         statement = (
@@ -133,14 +142,26 @@ class PageIndexRetriever:
         evidence: list[Evidence] = []
         used_nodes: set[tuple[uuid.UUID, str]] = set()
         for round_number in range(1, 3):
-            tree_payload = [
-                {
-                    "document_id": str(document.id),
-                    "title": document.title,
-                    "tree": artifacts[document.id]["tree"],
-                }
-                for document in documents
-            ]
+            forced: list[NodeChoice] = []
+            tree_payload: list[dict[str, Any]] = []
+            for document in documents:
+                tree = artifacts[document.id]["tree"]
+                if len(tree) == 1:
+                    forced.append(
+                        NodeChoice(
+                            document_id=document.id,
+                            node_id=tree[0]["node_id"],
+                            reason="The document has one page and one evidence node.",
+                        )
+                    )
+                else:
+                    tree_payload.append(
+                        {
+                            "document_id": str(document.id),
+                            "title": document.title,
+                            "tree": tree,
+                        }
+                    )
             prior = [
                 {
                     "source_id": item.source_id,
@@ -154,13 +175,17 @@ class PageIndexRetriever:
                 f"Question: {question}\nTrees and prior retrieval:\n"
                 + wrap_untrusted_document(json.dumps({"trees": tree_payload, "prior": prior}))
             )
-            selection = await self.llm.structured(
-                NodeSelection,
-                UNTRUSTED_DOCUMENT_SYSTEM
-                + "\nChoose tree nodes whose page ranges can directly answer the question.",
-                selection_prompt,
-                thinking=True,
-            )
+            if tree_payload:
+                selected = await self.llm.structured(
+                    NodeSelection,
+                    UNTRUSTED_DOCUMENT_SYSTEM
+                    + "\nChoose tree nodes whose page ranges can directly answer the question.",
+                    selection_prompt,
+                    thinking=True,
+                )
+                selection = NodeSelection(selections=(forced + selected.selections)[:32])
+            else:
+                selection = NodeSelection(selections=forced)
             evidence = self._fetch_evidence(
                 question, documents, artifacts, selection, evidence, used_nodes
             )

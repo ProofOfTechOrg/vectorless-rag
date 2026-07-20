@@ -69,15 +69,15 @@ web-typecheck: ## Typecheck the web package with TypeScript.
 
 test: api-test web-test ## Run API and web unit tests.
 api-test: ## Run API tests with coverage.
-	$(UV) run --project $(API_DIR) pytest $(API_DIR)/tests --cov=vectorless_rag --cov-report=term-missing
+	cd $(API_DIR) && $(UV) run pytest tests --cov=vectorless_rag --cov-report=term-missing
 web-test: ## Run web unit tests.
 	$(PNPM) --filter @vectorless-rag/web test
 test-unit: ## Run Python tests that require no external infrastructure.
-	$(UV) run --project $(API_DIR) pytest $(API_DIR)/tests -m 'not integration'
+	cd $(API_DIR) && $(UV) run pytest tests -m 'not integration'
 test-integration: ## Run PostgreSQL integration tests with TEST_*_DATABASE_URL.
 	@test -n "$${TEST_OWNER_DATABASE_URL:-}" || { echo "TEST_OWNER_DATABASE_URL is required" >&2; exit 2; }
 	@test -n "$${TEST_DATABASE_URL:-}" || { echo "TEST_DATABASE_URL is required" >&2; exit 2; }
-	$(UV) run --project $(API_DIR) pytest $(API_DIR)/tests -m integration
+	cd $(API_DIR) && $(UV) run pytest tests -m integration
 
 api-build: ## Build the Python distribution.
 	$(UV) build --project $(API_DIR)

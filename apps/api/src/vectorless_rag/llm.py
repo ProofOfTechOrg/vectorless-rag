@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Protocol, TypeVar
 
 import httpx
@@ -64,7 +65,13 @@ class DeepSeekLLM:
     async def _invoke(
         self, schema: type[StructuredT], system: str, user: str, thinking: bool
     ) -> StructuredT:
-        runnable = self._client(thinking).with_structured_output(schema)
+        method = "json_mode" if thinking else "function_calling"
+        if thinking:
+            schema_json = json.dumps(schema.model_json_schema(), separators=(",", ":"))
+            system = (
+                f"{system}\nReturn only a JSON object matching this JSON Schema:\n{schema_json}"
+            )
+        runnable = self._client(thinking).with_structured_output(schema, method=method)
         config: RunnableConfig = {"callbacks": [self.callback]} if self.callback else {}
         response = await runnable.ainvoke([("system", system), ("human", user)], config=config)
         if not isinstance(response, schema):

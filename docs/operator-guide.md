@@ -56,7 +56,7 @@ This procedure isolates live verification from the normal Compose project and de
 4. Run the live browser test against the disposable frontend, then remove the key from the shell:
 
    ```bash
-   make playwright-live PLAYWRIGHT_BASE_URL=http://127.0.0.1:3001
+   make playwright-live PLAYWRIGHT_BASE_URL=http://localhost:3001
    unset PLAYWRIGHT_API_KEY
    ```
 

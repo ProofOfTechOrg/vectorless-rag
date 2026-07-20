@@ -31,36 +31,32 @@ test('verifies the authorized live stack through the operator console', async ({
     await page.locator('input[type="file"]').setInputFiles(fixturePath)
     await page.getByRole('button', { name: 'Upload and queue' }).click()
     const completed = page.getByText('completed', { exact: true })
-    const terminalFailure = page.getByText(/^(failed|unsupported)$/)
     const uploadError = page.getByRole('alert').filter({ hasText: 'Ingestion attention required' })
-    await expect(completed.or(terminalFailure).or(uploadError)).toBeVisible({ timeout: 4 * 60_000 })
+    await expect(completed.or(uploadError)).toBeVisible({ timeout: 4 * 60_000 })
     await expect(uploadError).toHaveCount(0)
-    const ingestionCompleted = await completed.isVisible()
-    if (!ingestionCompleted) await expect(page.getByText('Diagnostic', { exact: true })).toBeVisible()
+    await expect(completed).toBeVisible()
 
     const documentLink = page.getByText('Document:').locator('..').getByRole('link')
     const documentHref = await documentLink.getAttribute('href')
     expect(documentHref).toMatch(/^\/documents\/[0-9a-f-]+$/)
 
-    if (ingestionCompleted) {
-      await page.goto('/chat')
-      await waitForHydration(page)
-      const question = `Which document contains the exact phrase "${uniquePhrase}"? Cite its page.`
-      await page.getByLabel('Message input').fill(question)
-      await page.getByLabel('Message input').press('Enter')
-      await expect(page.getByRole('status')).toContainText('Completed', { timeout: 3 * 60_000 })
-      await expect(page.locator('.citation-list a').first()).toHaveAttribute('href', documentHref!)
-      await page.getByRole('button', { name: 'Helpful', exact: true }).click()
-    }
+    await page.goto('/chat')
+    await waitForHydration(page)
+    const question = `Which document contains the exact phrase "${uniquePhrase}"? Cite its page.`
+    await page.getByLabel('Message input').fill(question)
+    await page.getByLabel('Message input').press('Enter')
+    await expect(page).toHaveURL(/\/chat\/[0-9a-f]+$/, { timeout: 3 * 60_000 })
+    await expect(page.locator('.citation-list a').first()).toHaveAttribute('href', documentHref!, {
+      timeout: 3 * 60_000,
+    })
+    await page.getByRole('button', { name: 'Helpful', exact: true }).click()
 
     await page.goto(documentHref!)
     await expect(page.getByText('Citation landing page')).toBeVisible()
     await expect(page.locator('dt', { hasText: 'Pages' }).locator('xpath=following-sibling::dd[1]')).toContainText('1')
 
-    if (ingestionCompleted) {
-      await page.goto('/chat')
-      await expect(page.getByLabel('Recent threads')).toContainText(uniquePhrase)
-    }
+    await page.goto('/chat')
+    await expect(page.getByLabel('Recent threads')).toContainText(uniquePhrase)
 
     await page.goto('/settings')
     await waitForHydration(page)
@@ -108,6 +104,7 @@ function textPdf(text: string): Buffer {
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
     `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+    `<< /Title (${escape(text)}) >>`,
   ]
   let body = '%PDF-1.4\n'
   const offsets = [0]
@@ -118,6 +115,6 @@ function textPdf(text: string): Buffer {
   const xref = Buffer.byteLength(body)
   body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
   body += offsets.slice(1).map((offset) => `${offset.toString().padStart(10, '0')} 00000 n \n`).join('')
-  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R /Info 6 0 R >>\nstartxref\n${xref}\n%%EOF\n`
   return Buffer.from(body)
 }

@@ -90,6 +90,21 @@ class PageIndexAdapter:
             workspace = Path(temp)
             local_pdf = workspace / "document.pdf"
             await asyncio.to_thread(shutil.copyfile, pdf_path, local_pdf)
+            pages = await asyncio.to_thread(extract_pdf_pages, local_pdf)
+            if len(pages) == 1:
+                raw_tree = [
+                    {
+                        "node_id": "node-0000",
+                        "title": str(metadata.get("title") or "Document"),
+                        "summary": str(
+                            metadata.get("description") or metadata.get("abstract") or ""
+                        ),
+                        "start_index": 1,
+                        "end_index": 1,
+                    }
+                ]
+                artifact = normalize_artifact(raw_tree, pages, metadata=metadata)
+                return json.dumps(artifact, ensure_ascii=False, separators=(",", ":")).encode()
             command = [
                 sys.executable,
                 str(Path(__file__).with_name("run_pageindex.py")),
@@ -129,7 +144,6 @@ class PageIndexAdapter:
                 dict[str, Any] | list[dict[str, Any]],
                 json.loads(result_path.read_text(encoding="utf-8")),
             )
-            pages = await asyncio.to_thread(extract_pdf_pages, local_pdf)
             artifact = normalize_artifact(raw_tree, pages, metadata=metadata)
             return json.dumps(artifact, ensure_ascii=False, separators=(",", ":")).encode()
 
