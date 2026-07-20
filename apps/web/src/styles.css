@@ -9,10 +9,16 @@
 @import "tailwindcss/utilities.css" layer(utilities);
 
 @layer components {
+  :root {
+    --app-content-width: 64rem;
+    --app-reading-width: 42rem;
+    --app-content-gutter: var(--spacing-5);
+  }
   html, body { min-height: 100%; }
   body { margin: 0; background: var(--color-background-body); color: var(--color-text-primary); }
   .connect-page { min-height: 100dvh; display: grid; place-items: center; padding: var(--spacing-6); }
-  .page { width: min(1120px, 100%); margin-inline: auto; padding: var(--spacing-5); display: grid; gap: var(--spacing-4); }
+  .page { width: 100%; max-width: var(--app-content-width); margin-inline: auto; padding: var(--app-content-gutter); display: grid; gap: var(--spacing-4); }
+  .page-reading { max-width: var(--app-reading-width); }
   .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--spacing-3); flex-wrap: wrap; }
   .page-header h1, .page-header p { margin: 0; }
   .stack { display: grid; gap: var(--spacing-3); }
@@ -29,15 +35,27 @@
     height: 100%;
     min-height: 0;
   }
-  .chat-intro { flex: none; padding: var(--spacing-6) var(--spacing-6) var(--spacing-2); }
-  .chat-column { width: 100%; max-width: 42rem; margin-inline: auto; }
+  .chat-intro { flex: none; padding: var(--spacing-6) var(--app-content-gutter) var(--spacing-2); }
+  .chat-column { width: 100%; max-width: var(--app-reading-width); margin-inline: auto; }
   .chat-conversation { flex: 1; min-height: 0; }
   .chat-answer-bubble { max-width: 100%; }
   .citation-list { display: flex; gap: var(--spacing-2); flex-wrap: wrap; }
   .metadata { display: grid; grid-template-columns: minmax(9rem, 0.3fr) 1fr; gap: var(--spacing-2); }
   .mobile-only { display: none; }
+  .operator-shell { --operator-side-nav-width: 260px; }
+  .operator-shell--side-nav-collapsed { --operator-side-nav-width: var(--spacing-12); }
+  .operator-top-nav {
+    width: 100%;
+    max-width: calc(var(--app-content-width) + var(--operator-side-nav-width));
+    margin-inline: auto;
+    padding-inline-start: calc(var(--operator-side-nav-width) + var(--app-content-gutter));
+    padding-inline-end: var(--app-content-gutter);
+  }
+  @media (max-width: 768px) {
+    .operator-shell { --operator-side-nav-width: 0px; }
+  }
   @media (max-width: 720px) {
-    .page { padding: var(--spacing-3); }
+    :root { --app-content-gutter: var(--spacing-3); }
     .desktop-table { display: none; }
     .document-list { display: grid; gap: var(--spacing-3); }
     .mobile-only { display: block; }

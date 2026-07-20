@@ -3,6 +3,8 @@ import { expect, test } from '@playwright/test'
 test.skip(!!process.env.PLAYWRIGHT_LIVE, 'Deterministic mock coverage is separate from live verification')
 
 const key = process.env.PLAYWRIGHT_API_KEY ?? 'vrag_test_full'
+const operationalWidth = 64 * 16
+const readingWidth = 42 * 16
 
 async function waitForHydration(page: import('@playwright/test').Page) {
   await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true')
@@ -17,25 +19,164 @@ async function connectToChat(page: import('@playwright/test').Page) {
 }
 
 async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
-  const columns = await page.evaluate(() => {
+  const geometry = await page.evaluate(() => {
     const selectors = [
       '[data-testid="chat-intro-column"]',
-      '[data-testid="chat-message-list"]',
+      '[data-testid="chat-message-list"], .chat-empty-state',
       '[data-testid="chat-composer"]',
     ]
-    return selectors.map((selector) => {
+    const shellContent = document.querySelector<HTMLElement>('#astryx-app-shell-main')
+    if (!shellContent) throw new Error('Missing AppShell content')
+    const shellRect = shellContent.getBoundingClientRect()
+    const columns = selectors.map((selector) => {
       const element = document.querySelector<HTMLElement>(selector)
       if (!element) throw new Error(`Missing chat column: ${selector}`)
       const rect = element.getBoundingClientRect()
       return { center: rect.left + rect.width / 2, width: rect.width }
     })
+    return {
+      columns,
+      shellCenter: shellRect.left + shellRect.width / 2,
+      scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+      viewportWidth: window.innerWidth,
+    }
   })
 
-  expect(Math.max(...columns.map(({ center }) => center)) - Math.min(...columns.map(({ center }) => center))).toBeLessThanOrEqual(1)
-  for (const column of columns) {
-    expect(column.width).toBeLessThanOrEqual(42 * 16 + 1)
-    expect(column.width).toBeLessThanOrEqual((page.viewportSize()?.width ?? 0) + 1)
+  expect(Math.max(...geometry.columns.map(({ center }) => center)) - Math.min(...geometry.columns.map(({ center }) => center))).toBeLessThanOrEqual(1)
+  for (const column of geometry.columns) {
+    expect(Math.abs(column.center - geometry.shellCenter)).toBeLessThanOrEqual(1)
+    expect(column.width).toBeLessThanOrEqual(readingWidth + 1)
+    expect(column.width).toBeLessThanOrEqual(geometry.viewportWidth + 1)
   }
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth)
+}
+
+async function expectCenteredSurface(
+  page: import('@playwright/test').Page,
+  selector: string,
+  maxWidth: number,
+) {
+  const surface = page.locator(selector).first()
+  await expect(surface).toBeVisible()
+  const geometry = await surface.evaluate((element) => {
+    const shellContent = document.querySelector<HTMLElement>('#astryx-app-shell-main')
+    if (!shellContent) throw new Error('Missing AppShell content')
+    const rect = element.getBoundingClientRect()
+    const shellRect = shellContent.getBoundingClientRect()
+    return {
+      center: rect.left + rect.width / 2,
+      shellCenter: shellRect.left + shellRect.width / 2,
+      left: rect.left,
+      right: rect.right,
+      shellLeft: shellRect.left,
+      shellRight: shellRect.right,
+      width: rect.width,
+      scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+      viewportWidth: window.innerWidth,
+    }
+  })
+
+  expect(Math.abs(geometry.center - geometry.shellCenter)).toBeLessThanOrEqual(1)
+  expect(geometry.width).toBeLessThanOrEqual(maxWidth + 1)
+  expect(geometry.left).toBeGreaterThanOrEqual(geometry.shellLeft - 1)
+  expect(geometry.right).toBeLessThanOrEqual(geometry.shellRight + 1)
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth)
+}
+
+async function expectConnectCardGeometry(page: import('@playwright/test').Page) {
+  const card = page.locator('.connect-page > .astryx-card')
+  await expect(card).toBeVisible()
+  const geometry = await card.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return {
+      center: rect.left + rect.width / 2,
+      viewportCenter: window.innerWidth / 2,
+      width: rect.width,
+      scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+      viewportWidth: window.innerWidth,
+    }
+  })
+
+  expect(Math.abs(geometry.center - geometry.viewportCenter)).toBeLessThanOrEqual(1)
+  expect(geometry.width).toBeLessThanOrEqual(520 + 1)
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.viewportWidth)
+}
+
+async function expectTopNavAligned(page: import('@playwright/test').Page, expectedSideNavWidth: number) {
+  const geometry = await page.evaluate(() => {
+    const shell = document.querySelector<HTMLElement>('.operator-shell')
+    const topNav = document.querySelector<HTMLElement>('[data-testid="operator-top-nav"]')
+    const operationalPage = document.querySelector<HTMLElement>('.page:not(.page-reading)')
+    if (!shell || !topNav || !operationalPage) throw new Error('Missing operator layout surface')
+
+    const shellStyle = getComputedStyle(shell)
+    const topNavStyle = getComputedStyle(topNav)
+    const pageStyle = getComputedStyle(operationalPage)
+    const topNavRect = topNav.getBoundingClientRect()
+    const pageRect = operationalPage.getBoundingClientRect()
+    const sideNavWidth = Number.parseFloat(shellStyle.getPropertyValue('--operator-side-nav-width'))
+    const topNavGutter = Number.parseFloat(topNavStyle.paddingLeft) - sideNavWidth
+    const effectiveLeft = topNavRect.left + sideNavWidth + topNavGutter
+    const effectiveRight = topNavRect.right - Number.parseFloat(topNavStyle.paddingRight)
+    const pageContentLeft = pageRect.left + Number.parseFloat(pageStyle.paddingLeft)
+    const pageContentRight = pageRect.right - Number.parseFloat(pageStyle.paddingRight)
+
+    return {
+      effectiveLeft,
+      effectiveRight,
+      pageContentLeft,
+      pageContentRight,
+      sideNavWidth,
+      topNavWidth: topNavRect.width,
+    }
+  })
+
+  expect(Math.abs(geometry.sideNavWidth - expectedSideNavWidth)).toBeLessThanOrEqual(1)
+  expect(Math.abs(geometry.effectiveLeft - geometry.pageContentLeft)).toBeLessThanOrEqual(1)
+  expect(Math.abs(geometry.effectiveRight - geometry.pageContentRight)).toBeLessThanOrEqual(1)
+  expect(geometry.topNavWidth).toBeLessThanOrEqual(operationalWidth + expectedSideNavWidth + 1)
+}
+
+async function navigateFromSideNav(
+  page: import('@playwright/test').Page,
+  destination: 'Chat' | 'Documents' | 'Ingestion' | 'Settings',
+) {
+  if ((page.viewportSize()?.width ?? 0) <= 768) {
+    await page.getByRole('button', { name: 'Open navigation' }).click()
+    await page.getByRole('dialog', { name: 'Navigation' }).getByRole('link', { name: destination, exact: true }).click()
+    return
+  }
+  const link = page.locator('.astryx-side-nav').getByRole('link', { name: destination, exact: true }).first()
+  await link.click()
+}
+
+async function setAppearance(page: import('@playwright/test').Page, appearance: 'Light' | 'Dark') {
+  await navigateFromSideNav(page, 'Settings')
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await page.getByLabel('Color mode').click()
+  await page.getByText(appearance, { exact: true }).click()
+}
+
+async function expectAppWidthTiers(page: import('@playwright/test').Page, sideNavWidth: number) {
+  for (const destination of [
+    'Documents',
+    'Ingestion',
+    'Settings',
+  ] as const) {
+    await navigateFromSideNav(page, destination)
+    await expect(page.getByRole('heading', { name: destination, exact: true })).toBeVisible()
+    await expectCenteredSurface(page, '.page:not(.page-reading)', operationalWidth)
+    await expectTopNavAligned(page, sideNavWidth)
+  }
+
+  await navigateFromSideNav(page, 'Chat')
+  await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
+  await expectAlignedChatColumns(page)
+
+  await navigateFromSideNav(page, 'Documents')
+  await page.getByRole('link', { name: 'Deterministic Vectorless Retrieval' }).first().click()
+  await expect(page.getByText('Citation landing page')).toBeVisible()
+  await expectCenteredSurface(page, '.page.page-reading', readingWidth)
 }
 
 test('connects through the UI and exercises the operator workflows', async ({ page }) => {
@@ -181,6 +322,38 @@ test('keeps the chat on one centered reading axis at desktop and mobile sizes', 
   })
   expect(mobileBounds.bottomGap).toBeLessThanOrEqual(1)
   expect(mobileBounds.rightOverflow).toBe(0)
+})
+
+test('centers operational, reading, connection, and navigation surfaces app-wide', async ({ page }) => {
+  test.slow()
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.goto('/connect')
+  await expectConnectCardGeometry(page)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectConnectCardGeometry(page)
+
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await connectToChat(page)
+  await setAppearance(page, 'Light')
+  await expectAppWidthTiers(page, 260)
+
+  await navigateFromSideNav(page, 'Documents')
+  await expect(page.getByRole('heading', { name: 'Documents', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click()
+  await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible()
+  await expectCenteredSurface(page, '.page:not(.page-reading)', operationalWidth)
+  await expectTopNavAligned(page, 48)
+
+  await page.getByRole('button', { name: 'Expand sidebar' }).click()
+  await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible()
+  await expectTopNavAligned(page, 260)
+
+  await setAppearance(page, 'Dark')
+  await expectAppWidthTiers(page, 260)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectAppWidthTiers(page, 0)
 })
 
 test('redirects protected routes to connect without a session', async ({ page }) => {

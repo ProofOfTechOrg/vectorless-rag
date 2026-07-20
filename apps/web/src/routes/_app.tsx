@@ -31,6 +31,7 @@ function OperatorShell() {
   const { session } = Route.useRouteContext()
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
+  const [isSideNavCollapsed, setIsSideNavCollapsed] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [ready, setReady] = useState<boolean | null>(null)
   const allowedDestinations = useMemo(
@@ -53,7 +54,12 @@ function OperatorShell() {
   }, [])
 
   const nav = (
-    <SideNav collapsible>
+    <SideNav
+      collapsible={{
+        isCollapsed: isSideNavCollapsed,
+        onCollapsedChange: setIsSideNavCollapsed,
+      }}
+    >
       <SideNavSection title="Workspace" isHeaderHidden>
         {allowedDestinations.map((item) => (
           <SideNavItem
@@ -71,12 +77,15 @@ function OperatorShell() {
   return (
     <>
       <AppShell
+        className={isSideNavCollapsed ? 'operator-shell operator-shell--side-nav-collapsed' : 'operator-shell'}
         variant="elevated"
         contentPadding={0}
         sideNav={nav}
         mobileNav={{ breakpoint: 'md' }}
         topNav={
           <TopNav
+            className="operator-top-nav"
+            data-testid="operator-top-nav"
             heading={<TopNavHeading heading="Vectorless RAG" headingHref={allowedDestinations[0]?.id ?? '/settings'} />}
             endContent={
               <div className="inline">

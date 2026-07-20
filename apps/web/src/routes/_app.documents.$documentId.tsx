@@ -6,15 +6,15 @@ import { getDocument } from '../server/functions'
 
 export const Route = createFileRoute('/_app/documents/$documentId')({
   loader: ({ params }) => getDocument({ data: { documentId: params.documentId } }),
-  pendingComponent: () => <div className="page"><p>Loading document…</p></div>,
-  errorComponent: ({ error }) => <div className="page"><h1>Document unavailable</h1><p>{error.message}</p></div>,
+  pendingComponent: () => <div className="page page-reading"><p>Loading document…</p></div>,
+  errorComponent: ({ error }) => <div className="page page-reading"><h1>Document unavailable</h1><p>{error.message}</p></div>,
   component: DocumentDetail,
 })
 
 function DocumentDetail() {
   const document = Route.useLoaderData()
   return (
-    <article className="page">
+    <article className="page page-reading">
       <Breadcrumbs>
         <BreadcrumbItem href="/documents">Documents</BreadcrumbItem>
         <BreadcrumbItem>{document.title ?? document.arxiv_id ?? 'Document'}</BreadcrumbItem>
