@@ -26,11 +26,25 @@ from vectorless_rag.schemas import (
 from vectorless_rag.storage import ObjectStore
 
 QUOTED_PHRASE = re.compile(r'"([^"\n]+)"|“([^”\n]+)”')
+FALLBACK_SEARCH_EXCLUDED_TOKENS = frozenset({"or", "and", "not"})
 
 
 def candidate_search_text(question: str) -> str:
     phrases = [next(value for value in match if value) for match in QUOTED_PHRASE.findall(question)]
     return max(phrases, key=len) if phrases else question
+
+
+def fallback_search_tokens(question: str) -> list[str]:
+    tokens = re.findall(r"[a-z0-9]+", question.lower())
+    return list(
+        dict.fromkeys(token for token in tokens if token not in FALLBACK_SEARCH_EXCLUDED_TOKENS)
+    )[:24]
+
+
+@dataclass(frozen=True)
+class CandidateDocument:
+    document: Document
+    fts_match: bool
 
 
 @dataclass(frozen=True)
@@ -58,7 +72,7 @@ class CorpusRouter:
         question: str,
         constraints: MetadataConstraints,
         restrict_ids: list[uuid.UUID] | None = None,
-    ) -> list[Document]:
+    ) -> list[CandidateDocument]:
         filters: list[Any] = [Document.status == DocumentStatus.ready]
         if constraints.arxiv_ids:
             filters.append(Document.arxiv_id.in_(constraints.arxiv_ids))
@@ -72,39 +86,66 @@ class CorpusRouter:
             filters.append(Document.submitted_date <= constraints.date_to)
         if restrict_ids is not None:
             filters.append(Document.id.in_(restrict_ids))
-        query = func.websearch_to_tsquery("english", candidate_search_text(question))
-        rank = func.ts_rank_cd(Document.search_vector, query)
-        text_filter = Document.search_vector.op("@@")(query)
-        statement = (
+        and_query = func.websearch_to_tsquery("english", candidate_search_text(question))
+        rank = func.ts_rank_cd(Document.search_vector, and_query)
+        text_filter = Document.search_vector.op("@@")(and_query)
+        match_statement = (
             select(Document)
             .where(and_(*filters), or_(text_filter, Document.arxiv_id.in_([question])))
             .order_by(rank.desc(), Document.created_at.desc())
             .limit(self.settings.candidate_limit)
         )
-        return list((await session.scalars(statement)).all())
-
-    async def select(self, question: str, candidates: list[Document]) -> list[Document]:
-        if len(candidates) <= self.settings.document_limit:
+        matched = list((await session.scalars(match_statement)).all())
+        candidates = [CandidateDocument(document=document, fts_match=True) for document in matched]
+        if len(matched) >= self.settings.candidate_limit:
             return candidates
+
+        fill_filters = list(filters)
+        matched_ids = [document.id for document in matched]
+        if matched_ids:
+            fill_filters.append(Document.id.not_in(matched_ids))
+        tokens = fallback_search_tokens(question)
+        fill_statement = select(Document).where(and_(*fill_filters))
+        if tokens:
+            or_query = func.websearch_to_tsquery("english", " or ".join(tokens))
+            fill_statement = fill_statement.order_by(
+                func.ts_rank_cd(Document.search_vector, or_query).desc(),
+                Document.created_at.desc(),
+            )
+        else:
+            fill_statement = fill_statement.order_by(Document.created_at.desc())
+        fill_statement = fill_statement.limit(self.settings.candidate_limit - len(matched))
+        filled = list((await session.scalars(fill_statement)).all())
+        candidates.extend(
+            CandidateDocument(document=document, fts_match=False) for document in filled
+        )
+        return candidates
+
+    async def select(self, question: str, candidates: list[CandidateDocument]) -> list[Document]:
+        if len(candidates) <= self.settings.document_limit:
+            return [candidate.document for candidate in candidates]
         candidate_payload = [
             {
-                "id": str(document.id),
-                "arxiv_id": document.arxiv_id,
-                "title": document.title,
-                "abstract": (document.abstract or "")[:2_000],
-                "topics": document.topics,
+                "id": str(candidate.document.id),
+                "arxiv_id": candidate.document.arxiv_id,
+                "title": (candidate.document.title or "")[:300],
+                "abstract": (candidate.document.abstract or "")[:1_200],
+                "topics": [topic[:80] for topic in candidate.document.topics[:8]],
+                "fts_match": candidate.fts_match,
             }
-            for document in candidates
+            for candidate in candidates
         ]
         selection = await self.llm.structured(
             CandidateSelection,
             UNTRUSTED_DOCUMENT_SYSTEM
-            + "\nSelect only documents likely to contain evidence. Return at most eight IDs.",
+            + "\nSelect only documents likely to contain evidence. Return at most eight IDs. "
+            "Prefer documents marked fts_match when any exist; otherwise judge relevance from "
+            "title, abstract, and topics.",
             f"Question: {question}\nCandidates:\n"
             + wrap_untrusted_document(json.dumps(candidate_payload)),
             thinking=True,
         )
-        allowed = {document.id: document for document in candidates}
+        allowed = {candidate.document.id: candidate.document for candidate in candidates}
         selected: list[Document] = []
         for document_id in selection.document_ids:
             if document_id in allowed and document_id not in {item.id for item in selected}:
@@ -298,11 +339,11 @@ class VectorlessRetriever:
         candidates = await self.router.candidates(session, question, constraints, restrict_ids)
         selected = await self.router.select(question, candidates)
         if not selected:
-            return RetrievalResult([], [item.id for item in candidates], [], False, 0)
+            return RetrievalResult([], [item.document.id for item in candidates], [], False, 0)
         evidence, sufficient, rounds = await self.pageindex.retrieve(session, question, selected)
         return RetrievalResult(
             evidence,
-            [item.id for item in candidates],
+            [item.document.id for item in candidates],
             [item.id for item in selected],
             sufficient,
             rounds,

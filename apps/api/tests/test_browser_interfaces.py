@@ -11,7 +11,6 @@ from fastapi.routing import APIRoute
 
 import vectorless_rag.api as api_module
 from vectorless_rag.api import (
-    _execute_chat,
     app,
     decode_thread_cursor,
     encode_thread_cursor,
@@ -74,6 +73,11 @@ class _FailingRunner:
         raise RuntimeError("generated SQL failed")
 
 
+def _failing_runner(runtime: object) -> _FailingRunner:
+    del runtime
+    return _FailingRunner()
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -108,14 +112,14 @@ async def test_identity_returns_only_name_and_sorted_scopes() -> None:
 async def test_synchronous_chat_commits_failed_run_before_reraising(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(api_module, "_runner", lambda runtime: _FailingRunner())
+    monkeypatch.setattr(api_module, "_runner", _failing_runner)
     runtime = SimpleNamespace(settings=Settings())
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
     principal = Principal(uuid.uuid4(), "test", frozenset({"chat"}))
     session = _FailingChatSession()
 
     with pytest.raises(RuntimeError, match="generated SQL failed"):
-        await _execute_chat(
+        await api_module._execute_chat(  # pyright: ignore[reportPrivateUsage]
             request,  # pyright: ignore[reportArgumentType]
             ChatRequest(message="how many docs deal with rag"),
             principal,
