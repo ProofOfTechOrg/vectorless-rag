@@ -9,7 +9,12 @@ from typing import Any
 from sqlalchemy.exc import ProgrammingError
 
 from vectorless_rag.config import Settings
-from vectorless_rag.graph import GraphRunner, append_inline_citations, bounded_history
+from vectorless_rag.graph import (
+    GraphRunner,
+    bounded_history,
+    format_inline_citations,
+    remove_inline_citations,
+)
 from vectorless_rag.models import QueryRun, RunRoute
 from vectorless_rag.schemas import ChatRequest, RouteDecision, SQLPlan, SynthesisResult
 from vectorless_rag.sql_guard import SQLResult
@@ -45,10 +50,16 @@ def test_bounded_history_truncates_one_oversized_recent_answer() -> None:
     assert bounded_history([run], char_limit=20) == [{"question": "question", "answer": "a" * 12}]
 
 
-def test_missing_inline_citations_are_appended_once() -> None:
-    assert append_inline_citations("Grounded claim [E1]", ["E1", "E2"]) == (
-        "Grounded claim [E1] [E2]"
+def test_internal_evidence_labels_become_user_facing_citation_numbers() -> None:
+    assert format_inline_citations("Grounded claim [E1]", ["E1", "E2"]) == (
+        "Grounded claim [1] [2]"
     )
+    assert format_inline_citations("Grounded claim [1]", ["E1"]) == "Grounded claim [1]"
+
+
+def test_sql_evidence_labels_are_removed_when_the_audit_is_not_user_visible() -> None:
+    assert remove_inline_citations("Catalog result [E1]", ["E1"]) == "Catalog result"
+    assert remove_inline_citations("Catalog result [1]", ["E1"]) == "Catalog result"
 
 
 class _Scalars:
@@ -148,8 +159,9 @@ async def test_runner_routes_with_scoped_completed_history() -> None:
 
 
 class _SQLLLM:
-    def __init__(self) -> None:
+    def __init__(self, *, synthesis_insufficient: bool = False) -> None:
         self.system_prompts: list[str] = []
+        self.synthesis_insufficient = synthesis_insufficient
 
     async def structured(
         self,
@@ -176,14 +188,16 @@ class _SQLLLM:
             return SynthesisResult(
                 answer="The catalog contains One-page verification fixture.",
                 citation_ids=[],
+                insufficient=self.synthesis_insufficient,
             )
         raise AssertionError(f"unexpected schema: {schema}")
 
 
 class _SQLAdapter:
-    def __init__(self, *, fail_first: bool = False) -> None:
+    def __init__(self, *, fail_first: bool = False, empty: bool = False) -> None:
         self.calls = 0
         self.fail_first = fail_first
+        self.empty = empty
 
     async def execute(self, query: object) -> SQLResult:
         del query
@@ -192,14 +206,23 @@ class _SQLAdapter:
             raise ProgrammingError("SELECT missing", {}, Exception("undefined column"))
         return SQLResult(
             columns=["document_id", "title"],
-            rows=[{"document_id": str(uuid.uuid4()), "title": "One-page verification fixture"}],
+            rows=(
+                []
+                if self.empty
+                else [
+                    {
+                        "document_id": str(uuid.uuid4()),
+                        "title": "One-page verification fixture",
+                    }
+                ]
+            ),
             explain_cost=1.0,
             payload_bytes=100,
             result_hash="result-hash",
         )
 
 
-async def test_sql_synthesis_gets_resolvable_inline_audit_citation() -> None:
+async def test_sql_synthesis_keeps_audit_provenance_internal() -> None:
     api_key_id = uuid.uuid4()
     current = QueryRun(
         id=uuid.uuid4(),
@@ -225,13 +248,48 @@ async def test_sql_synthesis_gets_resolvable_inline_audit_citation() -> None:
         current,
     )
 
-    assert result["answer"].endswith("[E1]")
+    assert result["answer"] == "The catalog contains One-page verification fixture."
+    assert current.route == RunRoute.sql
     assert result["insufficient"] is False
-    assert len(result["citations"]) == 1
-    assert result["citations"][0]["source_type"] == "sql"
+    assert result["citations"] == []
     assert result.get("sql_audit_id") is not None
-    assert result["citations"][0]["sql_audit_id"] == result.get("sql_audit_id")
     assert sql_adapter.calls == 2
     assert any(
-        "agent.ingestion_summary_v1(status, document_count" in value for value in llm.system_prompts
+        "agent.ingestion_summary_v1(status text, document_count bigint" in value
+        for value in llm.system_prompts
     )
+    assert any("authors text[]" in value for value in llm.system_prompts)
+    assert any("array_to_string(column, ' ')" in value for value in llm.system_prompts)
+    assert any("PostgreSQL regex word boundaries" in value for value in llm.system_prompts)
+    assert any("authors and topics are text[]" in value for value in llm.system_prompts)
+
+
+async def test_empty_sql_result_is_sufficient_without_a_user_citation() -> None:
+    current = QueryRun(
+        id=uuid.uuid4(),
+        trace_id=uuid.uuid4().hex,
+        thread_id="thread-empty-sql",
+        api_key_id=uuid.uuid4(),
+        question="what are they",
+        created_at=datetime.now(UTC),
+    )
+    llm = _SQLLLM(synthesis_insufficient=True)
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
+        _SQLAdapter(empty=True),  # pyright: ignore[reportArgumentType]
+        _Observability(),  # pyright: ignore[reportArgumentType]
+    )
+
+    result = await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(message=current.question, thread_id=current.thread_id),
+        current,
+    )
+
+    assert result["answer"] == "No matching catalog records were found."
+    assert result["insufficient"] is False
+    assert result["citations"] == []
+    assert result.get("sql_audit_id") is not None
+    assert any("including a zero count or empty row set" in value for value in llm.system_prompts)

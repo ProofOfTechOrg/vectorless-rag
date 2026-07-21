@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -31,6 +32,7 @@ DANGEROUS_FUNCTIONS = frozenset(
 )
 APPROVED_FUNCTIONS = frozenset(
     {
+        "array_to_string",
         "avg",
         "cardinality",
         "coalesce",
@@ -40,9 +42,15 @@ APPROVED_FUNCTIONS = frozenset(
         "max",
         "min",
         "sum",
+        "unnest",
         "upper",
     }
 )
+FUNCTION_NAME_ALIASES = {
+    "arraytostring": "array_to_string",
+    "timestamptrunc": "date_trunc",
+}
+SHORT_REGEX_TERM = re.compile(r"(?<![A-Za-z\\])([A-Za-z]{2,3})(?![A-Za-z])")
 
 
 class SQLRejected(ValueError):
@@ -73,6 +81,42 @@ def _relation_name(table: exp.Table) -> str:
     database = table.db
     parts = [part for part in (catalog, database, table.name) if part]
     return ".".join(parts)
+
+
+def _callable_name(function: exp.Func) -> str | None:
+    if isinstance(function, (exp.Predicate, exp.Binary, exp.Cast, exp.TryCast, exp.Array)):
+        return None
+    if isinstance(function, exp.Anonymous):
+        return function.name.lower()
+    return FUNCTION_NAME_ALIASES.get(function.key, function.key)
+
+
+def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
+    for predicate in statement.find_all(exp.Like, exp.ILike):
+        pattern = predicate.expression
+        if not isinstance(pattern, exp.Literal) or not pattern.is_string:
+            continue
+        value = str(pattern.this)
+        token = value[1:-1] if value.startswith("%") and value.endswith("%") else ""
+        if token.isalnum() and len(token) <= 3:
+            raise SQLRejected(
+                f"short term {token!r} cannot use an unbounded substring match; "
+                "use a whole-token predicate"
+            )
+    for predicate in statement.find_all(exp.RegexpLike, exp.RegexpILike):
+        pattern = predicate.expression
+        if not isinstance(pattern, exp.Literal) or not pattern.is_string:
+            continue
+        value = str(pattern.this)
+        for match in SHORT_REGEX_TERM.finditer(value):
+            prefix = value[: match.start()]
+            suffix = value[match.end() :]
+            left_bounded = r"\m" in prefix or r"\y" in prefix
+            right_bounded = r"\M" in suffix or r"\y" in suffix
+            if not left_bounded or not right_bounded:
+                raise SQLRejected(
+                    f"short term {match.group(1)!r} must use explicit regex word boundaries"
+                )
 
 
 def validate_sql(sql: str, maximum_limit: int = 200) -> ValidatedSQL:
@@ -121,11 +165,14 @@ def validate_sql(sql: str, maximum_limit: int = 200) -> ValidatedSQL:
     if unapproved:
         raise SQLRejected(f"unapproved relation(s): {', '.join(sorted(unapproved))}")
     for function in statement.find_all(exp.Func):
-        name = function.name.lower() if isinstance(function, exp.Anonymous) else function.key
+        name = _callable_name(function)
+        if name is None:
+            continue
         if name in DANGEROUS_FUNCTIONS:
             raise SQLRejected(f"dangerous function is not allowed: {name}")
         if name not in APPROVED_FUNCTIONS:
             raise SQLRejected(f"function is not approved: {name}")
+    _reject_unsafe_short_term_matches(statement)
     limit = statement.args.get("limit")
     if limit is None:
         statement = statement.limit(maximum_limit)

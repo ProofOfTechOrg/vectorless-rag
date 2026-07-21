@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
+import vectorless_rag.api as api_module
 from vectorless_rag.api import (
+    _execute_chat,
     app,
     decode_thread_cursor,
     encode_thread_cursor,
@@ -17,6 +20,9 @@ from vectorless_rag.api import (
     threads,
 )
 from vectorless_rag.auth import Principal
+from vectorless_rag.config import Settings
+from vectorless_rag.models import QueryRun, RunRoute
+from vectorless_rag.schemas import ChatRequest
 
 
 class _Mappings:
@@ -43,6 +49,29 @@ class _Session:
     async def execute(self, statement: Any) -> _Result:
         self.statement = statement
         return _Result(self.rows)
+
+
+class _FailingChatSession:
+    def __init__(self) -> None:
+        self.run: QueryRun | None = None
+        self.commits = 0
+
+    def add(self, value: QueryRun) -> None:
+        self.run = value
+
+    async def flush(self) -> None:
+        assert self.run is not None
+        self.run.id = uuid.uuid4()
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+class _FailingRunner:
+    async def run(self, session: object, payload: object, run: QueryRun) -> None:
+        del session, payload
+        run.route = RunRoute.sql
+        raise RuntimeError("generated SQL failed")
 
 
 @pytest.mark.parametrize(
@@ -74,6 +103,31 @@ async def test_identity_returns_only_name_and_sorted_scopes() -> None:
         "scopes": ["chat", "documents:read"],
     }
     assert "key" not in response.model_dump_json()
+
+
+async def test_synchronous_chat_commits_failed_run_before_reraising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module, "_runner", lambda runtime: _FailingRunner())
+    runtime = SimpleNamespace(settings=Settings())
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
+    principal = Principal(uuid.uuid4(), "test", frozenset({"chat"}))
+    session = _FailingChatSession()
+
+    with pytest.raises(RuntimeError, match="generated SQL failed"):
+        await _execute_chat(
+            request,  # pyright: ignore[reportArgumentType]
+            ChatRequest(message="how many docs deal with rag"),
+            principal,
+            session,  # pyright: ignore[reportArgumentType]
+        )
+
+    assert session.commits == 1
+    assert session.run is not None
+    assert session.run.route == RunRoute.sql
+    assert session.run.error == "generated SQL failed"
+    assert session.run.insufficient is True
+    assert session.run.latency_ms is not None
 
 
 async def test_threads_normalize_titles_order_and_emit_opaque_cursor() -> None:

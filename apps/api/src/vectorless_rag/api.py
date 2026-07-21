@@ -182,15 +182,19 @@ async def _execute_chat(
         run.error = "request deadline exceeded"
         run.insufficient = True
         run.latency_ms = round((time.monotonic() - started) * 1000)
+        await session.commit()
         raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, run.error) from exc
     except asyncio.CancelledError:
         run.error = "client cancelled request"
         run.insufficient = True
+        run.latency_ms = round((time.monotonic() - started) * 1000)
+        await session.commit()
         raise
     except Exception as exc:
         run.error = str(exc)[:1000]
         run.insufficient = True
         run.latency_ms = round((time.monotonic() - started) * 1000)
+        await session.commit()
         raise
     route = RunRoute(result["route"])
     citations = [Citation.model_validate(item) for item in result.get("citations", [])]

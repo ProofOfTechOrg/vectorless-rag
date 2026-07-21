@@ -28,6 +28,73 @@ def test_curated_aggregate_functions_are_allowed() -> None:
     assert "COUNT(*)" in validated.normalized
 
 
+def test_boolean_regex_cast_and_date_predicates_are_allowed() -> None:
+    validated = validate_sql(
+        "SELECT date_trunc('day', created_at), count(*) "
+        "FROM agent.paper_catalog_v1 "
+        "WHERE (COALESCE(title, '') || ' ' || topics::text) ~* '\\mRAG\\M' "
+        "OR abstract ILIKE '%retrieval-augmented generation%' "
+        "GROUP BY date_trunc('day', created_at)"
+    )
+
+    assert "COUNT(*)" in validated.normalized
+    assert "~*" in validated.normalized
+    assert " OR " in validated.normalized
+    assert "CAST(topics AS TEXT)" in validated.normalized
+
+
+def test_array_search_helpers_and_exists_predicates_are_allowed() -> None:
+    validated = validate_sql(
+        "SELECT count(*) FROM agent.paper_catalog_v1 AS paper "
+        "WHERE array_to_string(topics, ' ') ~* '\\mRAG\\M' "
+        "OR EXISTS ("
+        "SELECT 1 FROM UNNEST(paper.authors) AS author "
+        "WHERE author ~* '\\mAI\\M'"
+        ")"
+    )
+
+    assert "ARRAY_TO_STRING" in validated.normalized
+    assert "EXISTS" in validated.normalized
+    assert "UNNEST" in validated.normalized
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract LIKE '%rag%'",
+        "SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ILIKE '%rag%'",
+    ],
+)
+def test_short_terms_cannot_use_unbounded_substring_matching(sql: str) -> None:
+    with pytest.raises(SQLRejected, match="cannot use an unbounded substring match"):
+        validate_sql(sql)
+
+
+def test_short_regex_terms_require_explicit_word_boundaries() -> None:
+    with pytest.raises(SQLRejected, match="must use explicit regex word boundaries"):
+        validate_sql(
+            "SELECT count(*) FROM agent.paper_catalog_v1 "
+            "WHERE abstract ~* 'rag|Retrieval-Augmented Generation'"
+        )
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        r"SELECT count(*) FROM agent.paper_catalog_v1 "
+        r"WHERE abstract ~* '\mRAG\M|\mRetrieval-Augmented Generation\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 "
+        r"WHERE abstract ~* '\m(RAG|Retrieval-Augmented Generation)\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 "
+        r"WHERE abstract ~* '\yRAG\y|\yRetrieval-Augmented Generation\y'",
+    ],
+)
+def test_short_regex_terms_accept_postgres_word_boundaries(sql: str) -> None:
+    validated = validate_sql(sql)
+
+    assert "~*" in validated.normalized
+
+
 @pytest.mark.parametrize(
     "sql",
     [
