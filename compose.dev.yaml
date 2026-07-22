@@ -35,6 +35,20 @@ services:
     environment:
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "250"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/@vite/client').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+    develop:
+      watch:
+        - action: rebuild
+          path: ./apps/web/package.json
+        - action: rebuild
+          path: ./package.json
+        - action: rebuild
+          path: ./pnpm-lock.yaml
+        - action: rebuild
+          path: ./pnpm-workspace.yaml
+        - action: rebuild
+          path: ./apps/web/Dockerfile
     volumes:
       - ./apps/web/src:/app/apps/web/src
       - ./apps/web/public:/app/apps/web/public:ro

@@ -213,7 +213,7 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "apps/web/scripts/verify-production-assets.mjs", "http://127.0.0.1:3001"]
       interval: 10s
       timeout: 5s
       retries: 12

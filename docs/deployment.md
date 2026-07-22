@@ -34,14 +34,14 @@ make health
 
 `make up` reuses existing images. `make rebuild` rebuilds every local application image and force-recreates the complete detached stack. `make restart-app` and `make restart-web` perform the same rebuild and recreation for their named application services. None of these commands removes named volumes.
 
-`compose.dev.yaml` adds source mounts, Uvicorn and worker reload, and Vite hot module replacement. Run it through the Make targets:
+`compose.dev.yaml` adds source mounts, Uvicorn and worker reload, Vite hot module replacement, and web-image rebuild watches. Docker Compose 2.22 or later is required. Run it through the Make targets:
 
 ```bash
 make dev
-make dev-build
+make dev-health
 ```
 
-`make dev` runs the stack in the foreground and builds only missing images. Use `make dev-build` after changing a Dockerfile, package manifest, or lockfile. `make compose-check` validates both Compose configurations.
+`make dev` is the canonical active-development command. It builds the current images and runs the stack in the foreground. Web source edits update through Vite hot module replacement. Changes to `apps/web/package.json`, the root `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, or `apps/web/Dockerfile` automatically rebuild and recreate the web service. `make dev-build` remains an optional image prebuild or troubleshooting command. Changes to `.env`, `compose.yaml`, or `compose.dev.yaml` require stopping and rerunning `make dev`. `make compose-check` validates both Compose configurations.
 
 Public local endpoints are web 3001 and Langfuse 3000. Compose publishes FastAPI only on host loopback at `127.0.0.1:8000`, so other hosts cannot connect to it directly.
 
@@ -56,7 +56,7 @@ make docker-build-api
 make docker-build-web
 ```
 
-The web runtime uses Node 22 as its non-root `node` user and exposes `/healthz`. The API remains non-root UID 10001.
+The web runtime uses Node 22 as its non-root `node` user and exposes `/healthz`. Its container healthcheck also fetches the SSR `/connect` document and requires every referenced same-origin stylesheet and module script to return the expected content type. Run the same check against a local production build with `make web-production-smoke`. The API remains non-root UID 10001.
 
 ## Helm
 

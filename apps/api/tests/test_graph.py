@@ -11,6 +11,7 @@ from sqlalchemy.exc import ProgrammingError
 
 from vectorless_rag.config import Settings
 from vectorless_rag.graph import (
+    CAPABILITY_HELP_ANSWER,
     CATALOG_FALLBACK_SQL,
     GraphRunner,
     _normalize_regex_boundary_escapes,  # pyright: ignore[reportPrivateUsage]
@@ -136,6 +137,104 @@ class _Observability:
         comment: str | None = None,
     ) -> None:
         self.scores.append((trace_id, name, value, comment))
+
+
+class _UnexpectedLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def structured(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        self.calls += 1
+        raise AssertionError("capability routing must not invoke the LLM")
+
+
+class _UnexpectedRetriever:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def retrieve(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        self.calls += 1
+        raise AssertionError("capability routing must not invoke retrieval")
+
+
+class _UnexpectedSQLAdapter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def execute(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        self.calls += 1
+        raise AssertionError("capability routing must not invoke SQL")
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "what do you do",
+        "abilities",
+        "what can you do",
+        "what tasks can you perform",
+        "capabilities",
+        "what are your capabilities",
+        "how can you help me",
+        "what can I ask you",
+        "  WHAT   CAN YOU DO?!  ",
+    ],
+)
+async def test_capability_requests_use_static_help_without_downstream_calls(message: str) -> None:
+    current = _current(message, "thread-capability-help")
+    llm = _UnexpectedLLM()
+    retriever = _UnexpectedRetriever()
+    sql_adapter = _UnexpectedSQLAdapter()
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
+        retriever,  # pyright: ignore[reportArgumentType]
+        sql_adapter,  # pyright: ignore[reportArgumentType]
+        _Observability(),  # pyright: ignore[reportArgumentType]
+    )
+
+    result = await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(message=message, thread_id=current.thread_id),
+        current,
+    )
+
+    assert current.route == RunRoute.help
+    assert result == {
+        "route": RunRoute.help.value,
+        "answer": CAPABILITY_HELP_ANSWER,
+        "citations": [],
+        "insufficient": False,
+    }
+    assert llm.calls == 0
+    assert retriever.calls == 0
+    assert sql_adapter.calls == 0
+
+
+async def test_domain_capability_question_is_not_misclassified_as_product_help() -> None:
+    message = "What can retrieval-augmented generation do?"
+    current = _current(message, "thread-domain-capability")
+    llm = _SQLLLM(route=RunRoute.clarify)
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
+        _UnexpectedSQLAdapter(),  # pyright: ignore[reportArgumentType]
+        _Observability(),  # pyright: ignore[reportArgumentType]
+    )
+
+    result = await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(message=message, thread_id=current.thread_id),
+        current,
+    )
+
+    assert current.route == RunRoute.clarify
+    assert result["route"] == RunRoute.clarify.value
+    assert llm.schemas == [RouteDecision]
 
 
 async def test_runner_routes_with_scoped_completed_history() -> None:

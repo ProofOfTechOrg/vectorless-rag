@@ -24,7 +24,8 @@ COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/apps/web/node_modules ./apps/web/node_modules
 COPY --from=build --chown=node:node /app/apps/web/package.json ./apps/web/package.json
 COPY --from=build --chown=node:node /app/apps/web/dist ./apps/web/dist
+COPY --from=build --chown=node:node /app/apps/web/scripts/verify-production-assets.mjs ./apps/web/scripts/verify-production-assets.mjs
 USER node
 EXPOSE 3001
-HEALTHCHECK --interval=10s --timeout=5s --retries=6 CMD node -e "fetch('http://127.0.0.1:3001/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+HEALTHCHECK --interval=10s --timeout=5s --retries=6 CMD ["node", "apps/web/scripts/verify-production-assets.mjs", "http://127.0.0.1:3001"]
 CMD ["apps/web/node_modules/.bin/srvx", "serve", "--prod", "--static=../client", "--entry=apps/web/dist/server/server.js"]

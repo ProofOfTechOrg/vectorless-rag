@@ -27,9 +27,9 @@ export UV_CACHE_DIR
 
 .PHONY: help env install api-install web-install format api-format web-format lint api-lint web-lint \
 	typecheck api-typecheck web-typecheck test api-test web-test test-unit test-integration \
-	api-build web-build playwright-install playwright playwright-live react-doctor react-doctor-diff astryx-doctor workflow-check migration-check \
+	api-build web-build web-production-smoke playwright-install playwright playwright-live react-doctor react-doctor-diff astryx-doctor workflow-check migration-check \
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
-	check api-check web-check deploy-check ci up rebuild dev dev-build down stop restart restart-app restart-web \
+	check api-check web-check deploy-check ci up rebuild dev dev-build dev-health down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
 	download-corpus sync-corpus upload-document pilot-report evaluation-build evaluation-seed \
 	secret-api-pepper secret-session secrets-langfuse
@@ -83,6 +83,8 @@ api-build: ## Build the Python distribution.
 	$(UV) build --project $(API_DIR)
 web-build: ## Build the TanStack Start production bundle.
 	$(PNPM) --filter @vectorless-rag/web build
+web-production-smoke: web-build ## Verify the built SSR document serves all referenced CSS and JavaScript assets.
+	$(PNPM) --filter @vectorless-rag/web production-smoke
 playwright-install: ## Install Chromium and its operating-system dependencies for Playwright.
 	$(PNPM) --filter @vectorless-rag/web exec playwright install --with-deps chromium
 playwright: ## Run deterministic Playwright against the local mock upstream.
@@ -118,7 +120,7 @@ docker-build-web: ## Build the production frontend image.
 docker-build: docker-build-api docker-build-web ## Build both production images.
 
 api-check: api-lint api-typecheck api-test migration-check ## Validate the API package.
-web-check: web-lint web-typecheck web-test react-doctor web-build astryx-doctor ## Validate the web package.
+web-check: web-lint web-typecheck web-test react-doctor web-production-smoke astryx-doctor ## Validate the web package.
 deploy-check: workflow-check compose-check helm-check ## Validate CI and deployment manifests.
 check: api-check web-check deploy-check ## Validate the full repository without browser or image builds.
 ci: ENV_FILE := .env.example
@@ -128,10 +130,14 @@ up: ## Start the complete Compose stack in the background without forcing rebuil
 	$(COMPOSE) up -d
 rebuild: ## Rebuild and recreate the complete Compose stack in the background.
 	$(COMPOSE) up -d --build --force-recreate
-dev: env ## Run the complete Compose stack with API, worker, and web hot reload.
-	$(DEV_COMPOSE) up
+dev: env ## Run the current development stack with source reload and rebuild watches.
+	$(DEV_COMPOSE) up --build --watch --remove-orphans
 dev-build: env ## Rebuild the development API, worker, and web images.
 	$(DEV_COMPOSE) build api worker web
+dev-health: ## Check that development web health and the Vite client are both available.
+	curl --fail --silent --show-error http://127.0.0.1:$${FRONTEND_PORT:-3001}/healthz
+	@printf '\n'
+	curl --fail --silent --show-error http://127.0.0.1:$${FRONTEND_PORT:-3001}/@vite/client >/dev/null
 down: ## Stop and remove containers and networks while preserving volumes.
 	$(COMPOSE) down
 stop: ## Stop Compose containers without removing them.

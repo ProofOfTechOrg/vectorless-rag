@@ -31,7 +31,7 @@ jobs:
       - name: React Doctor (full 100/100 gate)
         timeout-minutes: 10
         run: make react-doctor
-      - run: make web-build
+      - run: make web-production-smoke
       - run: make astryx-doctor
       - run: make playwright
 

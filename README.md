@@ -8,7 +8,7 @@ PostgreSQL narrows the corpus, DeepSeek selects papers, and PageIndex retrieves 
 
 ## Quick start
 
-Requirements: Docker Compose v2 and GNU Make. Local package development also uses Python 3.12, `uv`, Node 22, and pnpm. Helm 3 is required only to validate or deploy the Kubernetes chart.
+Requirements: Docker Compose 2.22 or later and GNU Make. Local package development also uses Python 3.12, `uv`, Node 22, and pnpm. Helm 3 is required only to validate or deploy the Kubernetes chart.
 
 Run `make download-corpus` before `make up` if you want the full test corpus. The download is optional and requires Bash, `curl`, and approximately 1.5 GB of free space.
 
@@ -90,7 +90,8 @@ arxiv-pdfs/                 Git-ignored, user-owned local corpus
 
 ```bash
 make dev              # full Compose stack with API, worker, and web reload
-make dev-build        # rebuild development images after dependency changes
+make dev-health       # verify the web service is running through Vite
+make dev-build        # optional development image prebuild/troubleshooting
 make web-dev          # host web on :3001 against the Compose API on :8000
 make install          # install host API and web dependencies
 make api-check
@@ -104,9 +105,11 @@ make ci               # local CI equivalent
 
 Use `make help` or the [command reference](docs/commands.md) for every target. Follow the [live verification workflow](docs/operator-guide.md#verify-a-disposable-live-stack) before running `make playwright-live`.
 
-`make dev` runs in the foreground and mounts local API and web source into the containers. Stop it with Ctrl+C. Compose builds missing images on the first run, but it does not force rebuilds afterward. Run `make dev-build` after changing a Dockerfile, package manifest, or lockfile.
+`make dev` is the canonical active-development command. It runs in the foreground, builds the current images, and mounts local API and web source into the containers. Web source edits update through Vite hot module replacement. Changes to `apps/web/package.json`, either workspace manifest, `pnpm-lock.yaml`, or `apps/web/Dockerfile` automatically rebuild and recreate the web service. `make dev-build` remains available as an optional image prebuild or troubleshooting command. Docker Compose 2.22 or later is required for these watch rules.
 
-`make up` starts the deployment-style stack in the background without forcing image rebuilds. Run `make rebuild` to rebuild and recreate the complete stack. `make restart-app` rebuilds only API and worker, while `make restart-web` rebuilds only the frontend. These commands preserve named volumes.
+Changes to `.env`, `compose.yaml`, or `compose.dev.yaml` require stopping `make dev` with Ctrl+C and rerunning it so Compose can resolve the updated service configuration.
+
+`make up` starts an immutable deployment-style stack in the background and does not hot-reload or force image rebuilds. Run `make rebuild` to rebuild and recreate the complete stack. `make restart-app` rebuilds only API and worker, while `make restart-web` rebuilds only the production-style frontend. These commands preserve named volumes.
 
 ## Ingestion safety
 

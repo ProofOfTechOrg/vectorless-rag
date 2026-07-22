@@ -50,6 +50,7 @@ class RunRoute(StrEnum):
     documents = "documents"
     hybrid = "hybrid"
     clarify = "clarify"
+    help = "help"
 
 
 class TimestampMixin:

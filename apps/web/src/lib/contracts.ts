@@ -22,7 +22,7 @@ export type Citation = z.infer<typeof citationSchema>
 export const chatResponseSchema = z.object({
   answer: z.string(),
   thread_id: z.string(),
-  route: z.enum(['sql', 'documents', 'hybrid', 'clarify']),
+  route: z.enum(['sql', 'documents', 'hybrid', 'clarify', 'help']),
   trace_id: z.string(),
   citations: z.array(citationSchema),
   sql_audit_id: z.string().nullable().optional(),
@@ -42,7 +42,7 @@ export const chatErrorSchema = z.object({
 
 const threadRunSchema = z.object({
   trace_id: z.string(),
-  route: z.enum(['sql', 'documents', 'hybrid', 'clarify']).nullable(),
+  route: z.enum(['sql', 'documents', 'hybrid', 'clarify', 'help']).nullable(),
   question: z.string(),
   answer: z.string().nullable(),
   citations: z.array(citationSchema),

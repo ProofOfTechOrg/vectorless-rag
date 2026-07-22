@@ -41,6 +41,14 @@ def test_route_schema_is_closed() -> None:
         ).route
         == RunRoute.hybrid
     )
+    assert (
+        RouteDecision(
+            route=RunRoute.help,
+            reason="product capabilities",
+            standalone_question="What can you do?",
+        ).route
+        == RunRoute.help
+    )
     with pytest.raises(ValidationError):
         RouteDecision.model_validate(
             {

@@ -12,13 +12,13 @@ This page lists every public Make target and the variables that alter operator c
 | Linting | `make lint`, `make api-lint`, `make web-lint` |
 | Type checking | `make typecheck`, `make api-typecheck`, `make web-typecheck` |
 | Unit and integration tests | `make test`, `make api-test`, `make web-test`, `make test-unit`, `make test-integration` |
-| Package builds | `make api-build`, `make web-build` |
+| Package builds | `make api-build`, `make web-build`, `make web-production-smoke` |
 | Browser tests | `make playwright-install`, `make playwright`, `make playwright-live PLAYWRIGHT_BASE_URL=http://127.0.0.1:3001` |
 | Web diagnostics | `make react-doctor`, `make react-doctor-diff`, `make astryx-doctor` |
 | Manifest validation | `make workflow-check`, `make migration-check`, `make compose-check`, `make helm-lint`, `make helm-template`, `make helm-check` |
 | Image builds | `make docker-build-api`, `make docker-build-web`, `make docker-build` |
 | Validation suites | `make api-check`, `make web-check`, `make deploy-check`, `make check ENV_FILE=.env.example`, `make ci` |
-| Lifecycle | `make up`, `make rebuild`, `make dev`, `make dev-build`, `make down`, `make stop`, `make restart`, `make restart-app`, `make restart-web`, `make restart-langfuse`, `make restart-observability`, `make ps`, `make logs SERVICE=worker`, `make health`, `make web-dev` |
+| Lifecycle | `make up`, `make rebuild`, `make dev`, `make dev-build`, `make dev-health`, `make down`, `make stop`, `make restart`, `make restart-app`, `make restart-web`, `make restart-langfuse`, `make restart-observability`, `make ps`, `make logs SERVICE=worker`, `make health`, `make web-dev` |
 | Corpus | `make download-corpus`, `make download-corpus ARXIV_PDF_HOST_DIR=/srv/vectorless/arxiv-pdfs` |
 | Operator | `make migrate`, `make bootstrap-key NAME=operator`, `make sync-corpus`, `make upload-document PDF=/path/file.pdf`, `make pilot-report` |
 | Evaluation | `make evaluation-build`, `make evaluation-seed DATASET=apps/api/evaluation/release-v1.jsonl` |
@@ -30,26 +30,27 @@ This page lists every public Make target and the variables that alter operator c
 
 ## Run the local development stack
 
-Use the development Compose override when you need API, worker, and web source changes to reload without rebuilding images.
+Use the development Compose override when actively changing API, worker, or web code. Docker Compose 2.22 or later is required.
 
 ```bash
 make dev
 ```
 
-The command reads `.env`, runs in the foreground, and displays logs from the complete stack. Stop it with Ctrl+C. Named volumes remain available for the next run. Pass `ENV_FILE=path/to/env` to select another environment file.
+The command reads `.env`, builds the current images, runs in the foreground, watches rebuild inputs, and displays logs from the complete stack. Stop it with Ctrl+C. Named volumes remain available for the next run. Pass `ENV_FILE=path/to/env` to select another environment file.
 
-Compose builds any missing development image on the first run. Rebuild the development images after changing a Dockerfile, package manifest, or lockfile:
+Python changes restart Uvicorn and the ingestion worker. Web source changes use Vite hot module replacement. Changes to `apps/web/package.json`, the root `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, or `apps/web/Dockerfile` automatically rebuild and recreate the web service. Confirm that Vite is serving the frontend with:
 
 ```bash
-make dev-build
-make dev
+make dev-health
 ```
 
-Python changes restart Uvicorn and the ingestion worker. Web source changes use Vite hot module replacement. Migration changes require `make migrate` or a development-stack restart.
+`make dev-build` remains available as an optional image prebuild or troubleshooting command. Migration changes require `make migrate` or a development-stack restart. Changes to `.env`, `compose.yaml`, or `compose.dev.yaml` require stopping and rerunning `make dev` so Compose re-resolves service configuration.
 
 Use `make web-dev` when you want only the web process on the host. It runs the Start development server on port 3001 against FastAPI on port 8000 and requires `SESSION_SECRET` in your shell or `.env`.
 
-`make up` starts the deployment-style Compose stack in the background without forcing rebuilds. Run `make rebuild` to rebuild every local application image and force-recreate the complete stack. Use `make restart-app` or `make restart-web` when only one application area needs a new image. All four commands preserve named volumes.
+`make up` starts the immutable deployment-style Compose stack in the background without hot reload or forced rebuilds. Run `make rebuild` to rebuild every local application image and force-recreate the complete stack. Use `make restart-app` or `make restart-web` when only one application area needs a new production-style image. All four commands preserve named volumes.
+
+`make web-production-smoke` builds the frontend, starts its production server on an isolated local port, and verifies that `/connect` serves every same-origin stylesheet and module script referenced by its SSR HTML.
 
 ## Download the test corpus
 
