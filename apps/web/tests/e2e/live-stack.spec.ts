@@ -57,7 +57,7 @@ test('verifies the authorized live stack through the operator console', async ({
     await expect(page.locator('dt', { hasText: 'Pages' }).locator('xpath=following-sibling::dd[1]')).toContainText('1')
 
     await page.goto('/chat')
-    await expect(page.getByLabel('Recent threads')).toContainText(uniquePhrase)
+    await expect(page.getByRole('complementary', { name: 'Recent chats' })).toContainText(uniquePhrase)
 
     await page.goto('/settings')
     await waitForHydration(page)

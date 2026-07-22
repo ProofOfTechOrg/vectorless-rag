@@ -1,6 +1,5 @@
 import { Badge } from '@astryxdesign/core/Badge'
 import { Button } from '@astryxdesign/core/Button'
-import { Card } from '@astryxdesign/core/Card'
 import {
   ChatComposer,
   ChatLayout,
@@ -10,16 +9,19 @@ import {
   ChatMessageMetadata,
 } from '@astryxdesign/core/Chat'
 import { Citation as CitationChip } from '@astryxdesign/core/Citation'
+import { Collapsible } from '@astryxdesign/core/Collapsible'
 import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Heading } from '@astryxdesign/core/Heading'
 import { HStack } from '@astryxdesign/core/HStack'
 import { IconButton } from '@astryxdesign/core/IconButton'
+import { List, ListItem } from '@astryxdesign/core/List'
 import { Markdown } from '@astryxdesign/core/Markdown'
 import { Text } from '@astryxdesign/core/Text'
+import { Timestamp } from '@astryxdesign/core/Timestamp'
 import { VStack } from '@astryxdesign/core/VStack'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate, useRouter } from '@tanstack/react-router'
 import { ThumbsDown, ThumbsUp } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useHydrated } from '../hooks/use-hydrated'
 import {
   chatErrorSchema,
@@ -28,6 +30,8 @@ import {
   runStartedSchema,
   type Citation,
   type FailureCode,
+  type ThreadRun,
+  type ThreadSummary,
 } from '../lib/contracts'
 import { parseSseStream } from '../lib/sse'
 import { submitFeedback } from '../server/functions'
@@ -44,23 +48,7 @@ interface Message {
   retryQuestion?: string
 }
 
-interface ThreadRun {
-  trace_id: string
-  route: string | null
-  question: string
-  answer: string | null
-  citations: Citation[]
-  status: 'completed' | 'failed'
-  failure_code: FailureCode | null
-}
-
 const EMPTY_RUNS: ThreadRun[] = []
-
-interface ThreadSummary {
-  thread_id: string
-  title: string
-  run_count: number
-}
 
 export function ChatWorkspace({
   threadId,
@@ -71,7 +59,83 @@ export function ChatWorkspace({
   runs?: ThreadRun[]
   threads: ThreadSummary[]
 }) {
+  return (
+    <main className="chat-page" data-testid="chat-page">
+      <aside aria-label="Recent chats" className="chat-history-panel">
+        <RecentChatList activeThreadId={threadId} showHeader threads={threads} />
+      </aside>
+      <div className="chat-main" data-testid="chat-main">
+        <div className="chat-history-mobile">
+          <Collapsible
+            data-testid="recent-chats-collapsible"
+            defaultIsOpen={false}
+            trigger={`Recent chats (${threads.length})`}
+          >
+            <div className="chat-history-mobile-list">
+              <RecentChatList activeThreadId={threadId} threads={threads} />
+            </div>
+          </Collapsible>
+        </div>
+        <ChatConversation
+          key={conversationKey(threadId, runs)}
+          runs={runs}
+          threadId={threadId}
+        />
+      </div>
+    </main>
+  )
+}
+
+function RecentChatList({
+  activeThreadId,
+  showHeader = false,
+  threads,
+}: {
+  activeThreadId?: string
+  showHeader?: boolean
+  threads: ThreadSummary[]
+}) {
+  const header = showHeader ? <Text type="label">Recent chats</Text> : undefined
+
+  if (threads.length === 0) {
+    return (
+      <VStack gap={2}>
+        {header}
+        <Text as="p" display="block" type="supporting">No recent chats yet.</Text>
+      </VStack>
+    )
+  }
+
+  return (
+    <List density="compact" hasDividers header={header}>
+      {threads.map((thread) => (
+        <ListItem
+          key={thread.thread_id}
+          description={(
+            <span className="chat-thread-meta">
+              <span>{turnLabel(thread.run_count)}</span>
+              <span aria-hidden="true">·</span>
+              <Timestamp format="auto" value={thread.last_activity_at} />
+            </span>
+          )}
+          href={`/chat/${encodeURIComponent(thread.thread_id)}`}
+          isSelected={thread.thread_id === activeThreadId}
+          label={<span className="chat-thread-title" title={thread.title}>{thread.title}</span>}
+        />
+      ))}
+    </List>
+  )
+}
+
+function ChatConversation({
+  threadId,
+  runs,
+}: {
+  threadId?: string
+  runs: ThreadRun[]
+}) {
   const navigate = useNavigate()
+  const router = useRouter()
   const abortRef = useRef<AbortController | null>(null)
   const hydrated = useHydrated()
   const [composer, setComposer] = useState('')
@@ -93,6 +157,12 @@ export function ChatWorkspace({
   )
   const isStreaming = messages.some((message) => message.streaming)
 
+  useEffect(() => () => {
+    const controller = abortRef.current
+    abortRef.current = null
+    controller?.abort()
+  }, [])
+
   async function send(value: string) {
     const question = value.trim()
     if (!question || isStreaming) return
@@ -109,6 +179,7 @@ export function ChatWorkspace({
     let traceId: string | undefined
     let finished = false
     let shouldNavigate = true
+    let hasCanonicalTerminalEvent = false
     try {
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
@@ -138,6 +209,7 @@ export function ChatWorkspace({
           setMessages((current) => updateLast(current, { citations: [...(current.at(-1)?.citations ?? []), citation] }))
         } else if (event.event === 'run.completed') {
           const result = chatResponseSchema.parse(JSON.parse(event.data))
+          hasCanonicalTerminalEvent = true
           completedThread = result.thread_id
           setMessages((current) => updateLast(current, {
             text: result.answer,
@@ -152,6 +224,7 @@ export function ChatWorkspace({
           setStatus(result.insufficient ? 'Completed with insufficient evidence' : 'Completed')
         } else if (event.event === 'error') {
           const failure = chatErrorSchema.parse(JSON.parse(event.data))
+          hasCanonicalTerminalEvent = true
           completedThread = failure.thread_id
           traceId = failure.trace_id
           setMessages((current) => updateLast(current, {
@@ -168,12 +241,14 @@ export function ChatWorkspace({
     } catch (reason) {
       if (controller.signal.aborted) {
         shouldNavigate = false
-        setStatus('Cancelled')
-        setMessages((current) => updateLast(current, {
-          text: 'Run cancelled.',
-          streaming: false,
-          failureCode: 'request_failed',
-        }))
+        if (abortRef.current === controller) {
+          setStatus('Cancelled')
+          setMessages((current) => updateLast(current, {
+            text: 'Run cancelled.',
+            streaming: false,
+            failureCode: 'request_failed',
+          }))
+        }
       } else {
         const message = reason instanceof Error ? reason.message : 'Chat failed'
         setStatus('Failed')
@@ -185,15 +260,17 @@ export function ChatWorkspace({
         }))
       }
     } finally {
-      abortRef.current = null
+      if (abortRef.current === controller) abortRef.current = null
     }
     if (shouldNavigate && completedThread && completedThread !== threadId) {
       await navigate({ to: '/chat/$threadId', params: { threadId: completedThread }, replace: true })
+    } else if (shouldNavigate && hasCanonicalTerminalEvent && completedThread === threadId) {
+      await router.invalidate({ sync: true })
     }
   }
 
   return (
-    <main className="chat-page" data-testid="chat-page">
+    <>
       <div className="chat-intro">
         <VStack className="chat-column" data-testid="chat-intro-column" gap={4}>
           <HStack align="start" gap={3} justify="between" wrap="wrap">
@@ -203,22 +280,8 @@ export function ChatWorkspace({
                 Answers stay tied to indexed documents and page ranges.
               </Text>
             </VStack>
-            <Button label="New thread" href="/chat" variant="secondary" />
+            <Button label="New chat" href="/chat" variant="secondary" />
           </HStack>
-          {threads.length > 0 && (
-            <Card padding={3}>
-              <VStack aria-label="Recent threads" gap={2}>
-                <Text type="label">Recent</Text>
-                <HStack gap={2} wrap="wrap">
-                  {threads.slice(0, 5).map((thread) => (
-                    <Link key={thread.thread_id} to="/chat/$threadId" params={{ threadId: thread.thread_id }}>
-                      {thread.title} ({thread.run_count})
-                    </Link>
-                  ))}
-                </HStack>
-              </VStack>
-            </Card>
-          )}
         </VStack>
       </div>
       <ChatLayout
@@ -331,19 +394,28 @@ export function ChatWorkspace({
           </ChatMessageList>
         ) : null}
       </ChatLayout>
-    </main>
+    </>
   )
+}
+
+function conversationKey(threadId: string | undefined, runs: ThreadRun[]): string {
+  const latestRun = runs.at(-1)
+  return [threadId ?? 'new', runs.length, latestRun?.trace_id ?? '', latestRun?.status ?? ''].join(':')
+}
+
+function turnLabel(runCount: number): string {
+  return `${runCount} ${runCount === 1 ? 'turn' : 'turns'}`
 }
 
 function WaitingForResponse() {
   return (
-    <span aria-label="Waiting for response" className="chat-waiting" role="status">
+    <output aria-label="Waiting for response" className="chat-waiting">
       <span aria-hidden="true" className="chat-waiting-dots">
         <span className="chat-waiting-dot" />
         <span className="chat-waiting-dot" />
         <span className="chat-waiting-dot" />
       </span>
-    </span>
+    </output>
   )
 }
 

@@ -51,6 +51,7 @@ const threadRunSchema = z.object({
   failure_code: failureCodeSchema.nullable(),
   created_at: z.string(),
 })
+export type ThreadRun = z.infer<typeof threadRunSchema>
 export const threadSchema = z.object({ thread_id: z.string(), runs: z.array(threadRunSchema) })
 const threadSummarySchema = z.object({
   thread_id: z.string(),
@@ -58,6 +59,7 @@ const threadSummarySchema = z.object({
   run_count: z.number().int(),
   last_activity_at: z.string(),
 })
+export type ThreadSummary = z.infer<typeof threadSummarySchema>
 export const threadPageSchema = z.object({
   items: z.array(threadSummarySchema),
   next_cursor: z.string().nullable(),

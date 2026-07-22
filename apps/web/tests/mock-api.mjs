@@ -7,6 +7,8 @@ const documentId = '11111111-1111-4111-8111-111111111111'
 const failedDocumentId = '71309511-00aa-4d06-a60b-728e1fdd3269'
 const identity = { name: 'playwright-full', scopes: ['chat', 'documents:read', 'admin:ingest'] }
 const documentsOnlyIdentity = { name: 'playwright-documents-only', scopes: ['documents:read'] }
+const secondChatIdentity = { name: 'playwright-second-chat', scopes: ['chat'] }
+const refreshChatIdentity = { name: 'playwright-refresh-chat', scopes: ['chat'] }
 const document = {
   id: documentId,
   arxiv_id: '2607.00001',
@@ -31,6 +33,15 @@ const failedDocument = {
 }
 const citation = { source_type: 'document', source_id: documentId, title: document.title, page_start: 1, page_end: 2 }
 const completed = { answer: 'The fixture confirms cobalt lantern retrieval [1].', thread_id: 'thread-1', route: 'documents', trace_id: 'trace-1', citations: [citation], sql_audit_id: null, insufficient: false }
+const cobaltRun = { trace_id: completed.trace_id, route: completed.route, question: 'What does the cobalt lantern fixture prove?', answer: completed.answer, citations: completed.citations, insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:02:00Z' }
+const amberRuns = [
+  { trace_id: 'trace-amber-1', route: 'documents', question: 'Compare amber prism retrieval.', answer: 'The amber prism thread starts with a retrieval comparison.', citations: [], insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:03:00Z' },
+  { trace_id: 'trace-amber-2', route: 'hybrid', question: 'What changed in the second pass?', answer: 'The amber prism second pass adds catalog evidence.', citations: [], insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:04:00Z' },
+]
+const secondAccountRun = { trace_id: 'trace-second-account', route: 'clarify', question: 'Which chat belongs to this account?', answer: 'Only the second account can see this answer.', citations: [], insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:05:00Z' }
+let refreshRuns = [
+  { trace_id: 'trace-refresh-1', route: 'documents', question: 'What is the initial refresh state?', answer: 'The refresh thread starts with one turn.', citations: [], insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:06:00Z' },
+]
 
 function json(response, status, value) {
   response.writeHead(status, { 'content-type': 'application/json' })
@@ -42,13 +53,43 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/health/ready') return json(response, 200, { status: 'ready' })
   const apiKey = request.headers['x-api-key']
   if (!apiKey) return json(response, 401, { detail: 'missing API key' })
-  if (apiKey !== 'vrag_test_full' && apiKey !== 'mock-documents-only') return json(response, 401, { detail: 'invalid API key' })
-  const requestIdentity = apiKey === 'mock-documents-only' ? documentsOnlyIdentity : identity
+  if (!['vrag_test_full', 'mock-documents-only', 'mock-second-chat', 'mock-refresh-chat'].includes(apiKey)) return json(response, 401, { detail: 'invalid API key' })
+  const requestIdentity = apiKey === 'mock-documents-only'
+    ? documentsOnlyIdentity
+    : apiKey === 'mock-second-chat'
+      ? secondChatIdentity
+      : apiKey === 'mock-refresh-chat'
+        ? refreshChatIdentity
+        : identity
   if (url.pathname === '/v1/auth/me') return json(response, 200, requestIdentity)
-  if (url.pathname === '/v1/threads') return json(response, 200, { items: [{ thread_id: 'thread-1', title: 'Cobalt lantern question', run_count: 1, last_activity_at: '2026-07-20T00:02:00Z' }], next_cursor: null })
+  if (url.pathname === '/v1/threads') {
+    if (apiKey === 'mock-second-chat') return json(response, 200, {
+      items: [{ thread_id: 'thread-1', title: secondAccountRun.question, run_count: 1, last_activity_at: secondAccountRun.created_at }],
+      next_cursor: null,
+    })
+    if (apiKey === 'mock-refresh-chat') return json(response, 200, {
+      items: [{ thread_id: 'thread-refresh', title: refreshRuns[0].question, run_count: refreshRuns.length, last_activity_at: refreshRuns.at(-1).created_at }],
+      next_cursor: null,
+    })
+    return json(response, 200, {
+      items: [
+        { thread_id: 'thread-2', title: amberRuns[0].question, run_count: amberRuns.length, last_activity_at: amberRuns.at(-1).created_at },
+        { thread_id: 'thread-1', title: cobaltRun.question, run_count: 1, last_activity_at: cobaltRun.created_at },
+      ],
+      next_cursor: null,
+    })
+  }
   if (url.pathname === '/v1/threads/thread-1') return json(response, 200, {
     thread_id: 'thread-1',
-    runs: [{ trace_id: completed.trace_id, route: completed.route, question: 'What does the cobalt lantern fixture prove?', answer: completed.answer, citations: completed.citations, insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:02:00Z' }],
+    runs: apiKey === 'mock-second-chat' ? [secondAccountRun] : [cobaltRun],
+  })
+  if (url.pathname === '/v1/threads/thread-2') return json(response, 200, {
+    thread_id: 'thread-2',
+    runs: amberRuns,
+  })
+  if (url.pathname === '/v1/threads/thread-refresh' && apiKey === 'mock-refresh-chat') return json(response, 200, {
+    thread_id: 'thread-refresh',
+    runs: refreshRuns,
   })
   if (url.pathname === '/v1/threads/thread-failed') return json(response, 200, {
     thread_id: 'thread-failed',
@@ -102,6 +143,33 @@ const server = createServer(async (request, response) => {
     for await (const chunk of request) chunks.push(chunk)
     const payload = JSON.parse(Buffer.concat(chunks).toString())
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+    if (apiKey === 'mock-refresh-chat' && payload.thread_id === 'thread-refresh') {
+      const runNumber = refreshRuns.length + 1
+      const createdAt = `2026-07-20T00:${String(5 + runNumber).padStart(2, '0')}:00Z`
+      const result = {
+        answer: `The refresh thread now has ${runNumber} turns.`,
+        thread_id: 'thread-refresh',
+        route: 'documents',
+        trace_id: `trace-refresh-${runNumber}`,
+        citations: [],
+        sql_audit_id: null,
+        insufficient: false,
+      }
+      refreshRuns = [...refreshRuns, {
+        trace_id: result.trace_id,
+        route: result.route,
+        question: payload.message,
+        answer: result.answer,
+        citations: [],
+        insufficient: false,
+        status: 'completed',
+        failure_code: null,
+        created_at: createdAt,
+      }]
+      response.write(`event: run.started\ndata: ${JSON.stringify({ thread_id: result.thread_id, trace_id: result.trace_id })}\n\n`)
+      response.write(`event: run.completed\ndata: ${JSON.stringify(result)}\n\n`)
+      return response.end()
+    }
     if (payload.message === 'Hold the response') {
       response.flushHeaders()
       await delay(2_000)

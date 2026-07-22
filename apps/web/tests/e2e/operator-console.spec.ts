@@ -28,10 +28,10 @@ async function captureWaitingIndicator(page: import('@playwright/test').Page) {
   return snapshot
 }
 
-async function connectToChat(page: import('@playwright/test').Page) {
+async function connectToChat(page: import('@playwright/test').Page, apiKey = key) {
   await page.goto('/connect')
   await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled()
-  await page.getByLabel('API key').fill(key)
+  await page.getByLabel('API key').fill(apiKey)
   await page.getByRole('button', { name: 'Connect' }).click()
   await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
   await waitForHydration(page)
@@ -44,9 +44,9 @@ async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
       '[data-testid="chat-message-list"], .chat-empty-state',
       '[data-testid="chat-composer"]',
     ]
-    const shellContent = document.querySelector<HTMLElement>('#astryx-app-shell-main')
-    if (!shellContent) throw new Error('Missing AppShell content')
-    const shellRect = shellContent.getBoundingClientRect()
+    const chatMain = document.querySelector<HTMLElement>('[data-testid="chat-main"]')
+    if (!chatMain) throw new Error('Missing chat main pane')
+    const chatMainRect = chatMain.getBoundingClientRect()
     const columns = selectors.map((selector) => {
       const element = document.querySelector<HTMLElement>(selector)
       if (!element) throw new Error(`Missing chat column: ${selector}`)
@@ -55,7 +55,7 @@ async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
     })
     return {
       columns,
-      shellCenter: shellRect.left + shellRect.width / 2,
+      chatMainCenter: chatMainRect.left + chatMainRect.width / 2,
       scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
       viewportWidth: window.innerWidth,
     }
@@ -63,7 +63,7 @@ async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
 
   expect(Math.max(...geometry.columns.map(({ center }) => center)) - Math.min(...geometry.columns.map(({ center }) => center))).toBeLessThanOrEqual(1)
   for (const column of geometry.columns) {
-    expect(Math.abs(column.center - geometry.shellCenter)).toBeLessThanOrEqual(1)
+    expect(Math.abs(column.center - geometry.chatMainCenter)).toBeLessThanOrEqual(1)
     expect(column.width).toBeLessThanOrEqual(chatWidth + 1)
     expect(column.width).toBeLessThanOrEqual(geometry.viewportWidth + 1)
   }
@@ -248,7 +248,7 @@ test('connects through the UI and exercises the operator workflows', async ({ pa
   await page.getByLabel('Message input').press('Enter')
   await expect(page.getByText(/cobalt lantern retrieval/)).toBeVisible()
   await expect(page.getByText('documents', { exact: true })).toBeVisible()
-  await expect(page.getByLabel('Recent threads')).toContainText('Cobalt lantern question')
+  await expect(page.getByRole('complementary', { name: 'Recent chats' })).toContainText('What does the cobalt lantern fixture prove?')
   await expect(page.locator('.citation-list a')).toHaveAttribute(
     'href',
     '/documents/11111111-1111-4111-8111-111111111111',
@@ -367,6 +367,11 @@ test('keeps the chat on one centered reading axis at desktop and mobile sizes', 
   await page.setViewportSize({ width: 390, height: 844 })
   await expectAlignedChatColumns(page)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+  const recentChats = page.getByRole('button', { name: 'Recent chats (2)' })
+  await expect(recentChats).toHaveAttribute('aria-expanded', 'false')
+  await recentChats.click()
+  await expect(recentChats).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('link', { name: /Compare amber prism retrieval/ })).toBeVisible()
 
   const mobileBounds = await page.evaluate(() => {
     const chat = document.querySelector<HTMLElement>('[data-testid="chat-page"]')
@@ -407,8 +412,80 @@ test('animates the assistant waiting indicator while a response is pending', asy
     count: 3,
     label: 'Waiting for response',
   })
-  await expect(page.getByText('Delayed test response')).toBeVisible()
+  await expect(page.getByText('The API could not complete this run.')).toBeVisible()
   await expect(page.locator('.chat-waiting')).toHaveCount(0)
+})
+
+test('distinguishes recent chats and replaces conversation state when switching threads', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await connectToChat(page)
+
+  const history = page.getByRole('complementary', { name: 'Recent chats' })
+  await expect(history).toBeVisible()
+  await expect(history.getByRole('link', { name: /Compare amber prism retrieval/ })).toContainText('2 turns')
+  await expect(history.getByRole('link', { name: /cobalt lantern fixture prove/i })).toContainText('1 turn')
+
+  await history.getByRole('link', { name: /cobalt lantern fixture prove/i }).click()
+  await expect(page).toHaveURL(/\/chat\/thread-1$/)
+  await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toBeVisible()
+  await expect(history.locator('.astryx-list-item[aria-selected="true"]')).toContainText('cobalt lantern')
+
+  await history.getByRole('link', { name: /Compare amber prism retrieval/ }).click()
+  await expect(page).toHaveURL(/\/chat\/thread-2$/)
+  await expect(page.getByText('The amber prism second pass adds catalog evidence.')).toBeVisible()
+  await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toHaveCount(0)
+  await expect(history.locator('.astryx-list-item[aria-selected="true"]')).toContainText('Compare amber prism retrieval')
+})
+
+test('clears route data when a different identity reconnects to the same thread URL', async ({ page }) => {
+  await connectToChat(page)
+  await page.getByRole('complementary', { name: 'Recent chats' }).getByRole('link', { name: /cobalt lantern fixture prove/i }).click()
+  await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toBeVisible()
+
+  await page.goto('/settings')
+  await waitForHydration(page)
+  await page.getByRole('button', { name: 'Log out' }).click()
+  await expect(page.getByRole('heading', { name: 'Connect to Vectorless RAG' })).toBeVisible()
+
+  await page.getByLabel('API key').fill('mock-second-chat')
+  await page.getByRole('button', { name: 'Connect' }).click()
+  await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
+  await page.getByRole('complementary', { name: 'Recent chats' }).getByRole('link', { name: /Which chat belongs to this account/ }).click()
+
+  await expect(page).toHaveURL(/\/chat\/thread-1$/)
+  await expect(page.getByText('Only the second account can see this answer.')).toBeVisible()
+  await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toHaveCount(0)
+})
+
+test('refreshes existing-thread history after a completed stream', async ({ page }) => {
+  await connectToChat(page, 'mock-refresh-chat')
+  const history = page.getByRole('complementary', { name: 'Recent chats' })
+  const refreshThread = history.getByRole('link', { name: /initial refresh state/i })
+  await expect(refreshThread).toContainText('1 turn')
+  await refreshThread.click()
+  await expect(page).toHaveURL(/\/chat\/thread-refresh$/)
+  await expect(page.getByText('The refresh thread starts with one turn.')).toBeVisible()
+  await expect(refreshThread).not.toHaveAttribute('data-transitioning', 'transitioning')
+
+  await page.getByLabel('Message input').fill('Add another refresh turn')
+  await page.getByLabel('Message input').press('Enter')
+
+  await expect(page.getByText('The refresh thread now has 2 turns.')).toBeVisible({ timeout: 10_000 })
+  await expect(refreshThread).toContainText('2 turns', { timeout: 10_000 })
+})
+
+test('aborts an in-flight stream when navigating to another recent chat', async ({ page }) => {
+  await connectToChat(page)
+  await page.getByLabel('Message input').fill('Hold the response')
+  await page.getByLabel('Message input').press('Enter')
+  await expect(page.locator('.chat-waiting')).toBeVisible()
+
+  await page.getByRole('complementary', { name: 'Recent chats' }).getByRole('link', { name: /cobalt lantern fixture prove/i }).click()
+  await expect(page).toHaveURL(/\/chat\/thread-1$/)
+  await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toBeVisible()
+  await page.waitForTimeout(2_200)
+  await expect(page.getByText('Delayed test response')).toHaveCount(0)
+  await expect(page.getByText('Run cancelled.')).toHaveCount(0)
 })
 
 test('surfaces feedback failures and allows a retry', async ({ page }) => {

@@ -3,7 +3,7 @@ import { Banner } from '@astryxdesign/core/Banner'
 import { Button } from '@astryxdesign/core/Button'
 import { Card } from '@astryxdesign/core/Card'
 import { Selector } from '@astryxdesign/core/Selector'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useAppearance, type Appearance } from '../components/AppearanceProvider'
 import { getReadiness, logout } from '../server/functions'
@@ -17,6 +17,7 @@ function SettingsPage() {
   const { session } = Route.useRouteContext()
   const readiness = Route.useLoaderData()
   const navigate = useNavigate()
+  const router = useRouter()
   const { appearance, setAppearance } = useAppearance()
   const [loggingOut, setLoggingOut] = useState(false)
   return (
@@ -62,8 +63,12 @@ function SettingsPage() {
             isLoading={loggingOut}
             clickAction={async () => {
               setLoggingOut(true)
-              await logout()
-              await navigate({ to: '/connect' })
+              try {
+                await logout()
+                await navigate({ to: '/connect' })
+              } finally {
+                router.clearCache()
+              }
             }}
           />
         </div>

@@ -2,7 +2,7 @@ import { Banner } from '@astryxdesign/core/Banner'
 import { Button } from '@astryxdesign/core/Button'
 import { Card } from '@astryxdesign/core/Card'
 import { TextInput } from '@astryxdesign/core/TextInput'
-import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, redirect, useNavigate, useRouter } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useHydrated } from '../hooks/use-hydrated'
 import { homeForScopes } from '../lib/scopes'
@@ -18,6 +18,7 @@ export const Route = createFileRoute('/connect')({
 
 function ConnectPage() {
   const navigate = useNavigate()
+  const router = useRouter()
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
@@ -31,6 +32,7 @@ function ConnectPage() {
     setPending(true)
     try {
       const identity = await connect({ data: { apiKey: key } })
+      router.clearCache()
       await navigate({ to: homeForScopes(identity.scopes) })
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to connect')
