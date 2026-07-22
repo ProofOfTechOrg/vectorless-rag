@@ -1,6 +1,6 @@
 import { Theme } from '@astryxdesign/core/theme'
 import { neutralTheme } from '@astryxdesign/theme-neutral'
-import { createContext, use, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, use, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 export type Appearance = 'system' | 'light' | 'dark'
 const STORAGE_KEY = 'vectorless:appearance'
@@ -13,16 +13,48 @@ const AppearanceContext = createContext<{
   setAppearance: (appearance: Appearance) => void
 } | null>(null)
 
-export function AppearanceProvider({ children }: { children: ReactNode }) {
-  const [appearance, setAppearance] = useState<Appearance>(() => {
-    if (typeof window === 'undefined') return 'system'
+function readStoredAppearance(): Appearance {
+  try {
     const saved = window.localStorage.getItem(STORAGE_KEY)
     return saved === 'system' || saved === 'light' || saved === 'dark' ? saved : 'system'
-  })
-  useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, appearance)
-  }, [appearance])
-  const value = useMemo(() => ({ appearance, setAppearance }), [appearance])
+  } catch {
+    return 'system'
+  }
+}
+
+function createAppearanceStore() {
+  let current: Appearance | null = null
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot() {
+      current ??= readStoredAppearance()
+      return current
+    },
+    setAppearance(next: Appearance) {
+      current = next
+      try {
+        window.localStorage.setItem(STORAGE_KEY, next)
+      } catch {
+        // Persistence is best-effort; the current session still changes.
+      }
+      listeners.forEach((listener) => listener())
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+}
+
+function getServerAppearance(): Appearance {
+  return 'system'
+}
+
+export function AppearanceProvider({ children }: { children: ReactNode }) {
+  const [store] = useState(createAppearanceStore)
+  const appearance = useSyncExternalStore(store.subscribe, store.getSnapshot, getServerAppearance)
+  const setAppearance = store.setAppearance
+  const value = useMemo(() => ({ appearance, setAppearance }), [appearance, setAppearance])
   return (
     <AppearanceContext.Provider value={value}>
       <Theme theme={prebuiltNeutralTheme} mode={appearance}>{children}</Theme>

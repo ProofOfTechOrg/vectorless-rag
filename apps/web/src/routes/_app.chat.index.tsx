@@ -3,7 +3,7 @@ import { ChatWorkspace } from '../components/ChatWorkspace'
 import { getThreads } from '../server/functions'
 
 export const Route = createFileRoute('/_app/chat/')({
-  loader: () => getThreads({ data: {} }),
+  loader: ({ abortController }) => getThreads({ data: {}, signal: abortController.signal }),
   component: ChatIndex,
 })
 

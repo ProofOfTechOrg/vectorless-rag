@@ -1,4 +1,5 @@
 import type { ZodType } from 'zod'
+import { getRequest } from '@tanstack/react-start/server'
 import { apiErrorSchema, identitySchema } from '../lib/contracts'
 import { clearSession, requireSession } from './session.server'
 
@@ -24,7 +25,8 @@ export async function apiFetch(
   const session = requireSession()
   const headers = new Headers(init.headers)
   headers.set('X-API-Key', session.apiKey)
-  const response = await fetch(apiUrl(path), { ...init, headers, signal })
+  const requestSignal = signal ?? init.signal ?? getRequest().signal
+  const response = await fetch(apiUrl(path), { ...init, headers, signal: requestSignal })
   if (response.status === 401) clearSession()
   if (!response.ok) {
     let message = `API request failed (${response.status})`
@@ -52,6 +54,7 @@ export async function apiJson<T>(
 export async function validateApiKey(apiKey: string) {
   const response = await fetch(apiUrl('/v1/auth/me'), {
     headers: { 'X-API-Key': apiKey },
+    signal: getRequest().signal,
   })
   if (!response.ok) throw new ApiError(response.status === 401 ? 'Invalid API key' : 'API unavailable', response.status)
   return identitySchema.parse(await response.json())

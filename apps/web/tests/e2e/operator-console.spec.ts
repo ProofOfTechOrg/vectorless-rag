@@ -12,6 +12,87 @@ async function waitForHydration(page: import('@playwright/test').Page) {
   await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true')
 }
 
+interface AppearanceSnapshot {
+  bodyBackground: string
+  cardBackground: string
+  colorScheme: string
+  explicitTheme: string | null
+  theme: string | null
+  wrapperColorScheme: string
+}
+
+async function inspectAppearanceBeforeHydration(
+  page: import('@playwright/test').Page,
+  {
+    appearance,
+    colorScheme,
+    throwOnRead = false,
+  }: {
+    appearance: string | null
+    colorScheme: 'light' | 'dark'
+    throwOnRead?: boolean
+  },
+) {
+  await page.emulateMedia({ colorScheme })
+  await page.addInitScript(({ savedAppearance, storageThrows }) => {
+    if (storageThrows) {
+      Object.defineProperty(Storage.prototype, 'getItem', {
+        configurable: true,
+        value: () => { throw new Error('Storage is unavailable') },
+      })
+      return
+    }
+    if (savedAppearance === null) window.localStorage.removeItem('vectorless:appearance')
+    else window.localStorage.setItem('vectorless:appearance', savedAppearance)
+  }, { savedAppearance: appearance, storageThrows: throwOnRead })
+
+  const browserErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text())
+  })
+  page.on('pageerror', (error) => browserErrors.push(error.message))
+
+  let releaseScripts = () => {}
+  const scriptsReleased = new Promise<void>((resolve) => { releaseScripts = resolve })
+  await page.route('**/*', async (route) => {
+    if (route.request().resourceType() === 'script') await scriptsReleased
+    await route.continue()
+  })
+
+  const snapshot = () => page.evaluate((): AppearanceSnapshot => {
+    const root = document.documentElement
+    const wrapper = document.querySelector<HTMLElement>('body > [data-astryx-theme="neutral"]')
+    const card = document.querySelector<HTMLElement>('.astryx-card')
+    if (!document.body || !wrapper || !card) throw new Error('Appearance fixture did not render')
+    return {
+      bodyBackground: getComputedStyle(document.body).backgroundColor,
+      cardBackground: getComputedStyle(card).backgroundColor,
+      colorScheme: getComputedStyle(root).colorScheme,
+      explicitTheme: root.getAttribute('data-theme'),
+      theme: root.getAttribute('data-astryx-theme'),
+      wrapperColorScheme: getComputedStyle(wrapper).colorScheme,
+    }
+  })
+
+  try {
+    await page.goto('/connect', { waitUntil: 'commit' })
+    await page.waitForFunction(() => {
+      const card = document.querySelector<HTMLElement>('.astryx-card')
+      return document.body && card && getComputedStyle(document.body).backgroundColor !== 'rgba(0, 0, 0, 0)'
+    })
+    await expect(page.locator('html')).not.toHaveAttribute('data-hydrated', 'true')
+    const before = await snapshot()
+
+    releaseScripts()
+    await waitForHydration(page)
+    const after = await snapshot()
+    return { after, before, browserErrors }
+  } finally {
+    releaseScripts()
+    await page.unroute('**/*')
+  }
+}
+
 async function captureWaitingIndicator(page: import('@playwright/test').Page) {
   const handle = await page.waitForFunction(() => {
     const indicator = document.querySelector<HTMLElement>('.chat-waiting')
@@ -235,6 +316,108 @@ async function expectAppWidthTiers(page: import('@playwright/test').Page, sideNa
   await expectCenteredSurface(page, '.page.page-reading', readingWidth)
 }
 
+for (const scenario of [
+  {
+    appearance: 'dark',
+    colorScheme: 'light' as const,
+    expected: {
+      bodyBackground: 'rgb(27, 27, 27)',
+      cardBackground: 'rgb(27, 27, 27)',
+      colorScheme: 'dark',
+      explicitTheme: 'dark',
+      theme: 'neutral',
+      wrapperColorScheme: 'dark',
+    },
+  },
+  {
+    appearance: 'light',
+    colorScheme: 'dark' as const,
+    expected: {
+      bodyBackground: 'rgb(241, 241, 241)',
+      cardBackground: 'rgb(255, 255, 255)',
+      colorScheme: 'light',
+      explicitTheme: 'light',
+      theme: 'neutral',
+      wrapperColorScheme: 'light',
+    },
+  },
+]) {
+  test(`applies saved ${scenario.appearance} appearance before hydration`, async ({ page }) => {
+    const result = await inspectAppearanceBeforeHydration(page, scenario)
+    expect(result.before).toEqual(scenario.expected)
+    expect(result.after).toEqual(result.before)
+    expect(result.browserErrors).toEqual([])
+  })
+}
+
+test('follows system appearance before hydration and after an OS change', async ({ page }) => {
+  const result = await inspectAppearanceBeforeHydration(page, {
+    appearance: 'system',
+    colorScheme: 'light',
+  })
+  expect(result.before).toEqual({
+    bodyBackground: 'rgb(241, 241, 241)',
+    cardBackground: 'rgb(255, 255, 255)',
+    colorScheme: 'light dark',
+    explicitTheme: null,
+    theme: 'neutral',
+    wrapperColorScheme: 'light dark',
+  })
+  expect(result.after).toEqual(result.before)
+  expect(result.browserErrors).toEqual([])
+
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe('rgb(27, 27, 27)')
+  expect(await page.locator('html').getAttribute('data-theme')).toBeNull()
+  await expect(page.locator('.astryx-card')).toHaveCSS('background-color', 'rgb(27, 27, 27)')
+})
+
+test('falls back to system appearance before hydration when storage throws', async ({ page }) => {
+  const result = await inspectAppearanceBeforeHydration(page, {
+    appearance: null,
+    colorScheme: 'dark',
+    throwOnRead: true,
+  })
+  expect(result.before.explicitTheme).toBeNull()
+  expect(result.before.theme).toBe('neutral')
+  expect(result.before.bodyBackground).toBe('rgb(27, 27, 27)')
+  expect(result.before.cardBackground).toBe('rgb(27, 27, 27)')
+  expect(result.after).toEqual(result.before)
+  expect(result.browserErrors).toEqual([])
+})
+
+test('falls back to system appearance before hydration for an invalid stored value', async ({ page }) => {
+  const result = await inspectAppearanceBeforeHydration(page, {
+    appearance: 'sepia',
+    colorScheme: 'light',
+  })
+  expect(result.before.explicitTheme).toBeNull()
+  expect(result.before.theme).toBe('neutral')
+  expect(result.before.bodyBackground).toBe('rgb(241, 241, 241)')
+  expect(result.before.cardBackground).toBe('rgb(255, 255, 255)')
+  expect(result.after).toEqual(result.before)
+  expect(result.browserErrors).toEqual([])
+})
+
+test('marks personalized responses no-store without changing stream caching', async ({ page }) => {
+  const documentResponse = await page.goto('/connect')
+  expect(documentResponse?.headers()['cache-control']).toBe('private, no-store')
+
+  await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled()
+  await page.getByLabel('API key').fill(key)
+  const serverFunctionResponse = page.waitForResponse((response) => (
+    response.url().includes('/_serverFn/') && response.request().method() === 'POST'
+  ))
+  await page.getByRole('button', { name: 'Connect' }).click()
+  expect((await serverFunctionResponse).headers()['cache-control']).toBe('private, no-store')
+  await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
+
+  const streamResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/chat/stream')
+  await page.getByLabel('Message input').fill('What does the cobalt lantern fixture prove?')
+  await page.getByLabel('Message input').press('Enter')
+  expect((await streamResponse).headers()['cache-control']).toBe('no-cache, no-transform')
+})
+
 test('connects through the UI and exercises the operator workflows', async ({ page }) => {
   await page.goto('/connect')
   const connectButton = page.getByRole('button', { name: 'Connect' })
@@ -457,12 +640,39 @@ test('clears route data when a different identity reconnects to the same thread 
   await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toHaveCount(0)
 })
 
-test('refreshes existing-thread history after a completed stream', async ({ page }) => {
-  await connectToChat(page, 'mock-refresh-chat')
+test('refreshes existing-thread history after a completed stream', async ({ page }, testInfo) => {
+  const refreshApiKey = [
+    'mock-refresh-chat',
+    testInfo.project.name,
+    testInfo.workerIndex,
+    testInfo.parallelIndex,
+    testInfo.repeatEachIndex,
+    testInfo.retry,
+  ].join(':')
+  let chatSubmissions = 0
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/chat/stream') chatSubmissions += 1
+  })
+
+  await connectToChat(page, refreshApiKey)
   const history = page.getByRole('complementary', { name: 'Recent chats' })
   const refreshThread = history.getByRole('link', { name: /initial refresh state/i })
   await expect(refreshThread).toContainText('1 turn')
-  await refreshThread.click()
+  await refreshThread.evaluate((link: HTMLAnchorElement) => link.click())
+  await expect(page).toHaveURL(/\/chat\/thread-refresh$/)
+
+  await expect.poll(async () => {
+    const response = await page.request.get('http://127.0.0.1:8010/__test/refresh-state', {
+      headers: { 'X-API-Key': refreshApiKey },
+    })
+    return (await response.json()).thread_list_requests
+  }).toBeGreaterThanOrEqual(2)
+  await page.locator('a[href="/settings"]').first().evaluate((link: HTMLAnchorElement) => link.click())
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await page.locator('a[href="/chat"]').first().evaluate((link: HTMLAnchorElement) => link.click())
+  await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
+
+  await refreshThread.evaluate((link: HTMLAnchorElement) => link.click())
   await expect(page).toHaveURL(/\/chat\/thread-refresh$/)
   await expect(page.getByText('The refresh thread starts with one turn.')).toBeVisible()
   await expect(refreshThread).not.toHaveAttribute('data-transitioning', 'transitioning')
@@ -472,6 +682,8 @@ test('refreshes existing-thread history after a completed stream', async ({ page
 
   await expect(page.getByText('The refresh thread now has 2 turns.')).toBeVisible({ timeout: 10_000 })
   await expect(refreshThread).toContainText('2 turns', { timeout: 10_000 })
+  await expect(page.getByText('Add another refresh turn', { exact: true })).toHaveCount(1)
+  expect(chatSubmissions).toBe(1)
 })
 
 test('aborts an in-flight stream when navigating to another recent chat', async ({ page }) => {

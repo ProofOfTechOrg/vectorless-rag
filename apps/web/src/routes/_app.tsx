@@ -12,8 +12,8 @@ import type { Identity } from '../lib/contracts'
 import { getReadiness, getSession } from '../server/functions'
 
 export const Route = createFileRoute('/_app')({
-  beforeLoad: async () => {
-    const session = await getSession()
+  beforeLoad: async ({ abortController }) => {
+    const session = await getSession({ signal: abortController.signal })
     if (!session) throw redirect({ to: '/connect' })
     return { session }
   },
@@ -40,7 +40,13 @@ function OperatorShell() {
   )
   const source = useMemo(() => createStaticSource(allowedDestinations), [allowedDestinations])
   useEffect(() => {
-    getReadiness().then((value) => setReady(value.ready)).catch(() => setReady(false))
+    const abortController = new AbortController()
+    getReadiness({ signal: abortController.signal })
+      .then((value) => setReady(value.ready))
+      .catch(() => {
+        if (!abortController.signal.aborted) setReady(false)
+      })
+    return () => abortController.abort()
   }, [])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

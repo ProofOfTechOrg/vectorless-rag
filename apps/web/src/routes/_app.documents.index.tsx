@@ -12,7 +12,7 @@ export const Route = createFileRoute('/_app/documents/')({
     cursor: typeof search.cursor === 'string' ? search.cursor : undefined,
   }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),
-  loader: ({ deps }) => getDocuments({ data: deps }),
+  loader: ({ deps, abortController }) => getDocuments({ data: deps, signal: abortController.signal }),
   pendingComponent: () => <div className="page"><p>Loading documents…</p></div>,
   errorComponent: ({ error }) => <RouteError error={error} title="Documents unavailable" />,
   component: DocumentsPage,

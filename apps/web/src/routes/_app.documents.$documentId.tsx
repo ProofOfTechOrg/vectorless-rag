@@ -10,7 +10,10 @@ import type { Job } from '../lib/contracts'
 import { getDocument, retryDocument } from '../server/functions'
 
 export const Route = createFileRoute('/_app/documents/$documentId')({
-  loader: ({ params }) => getDocument({ data: { documentId: params.documentId } }),
+  loader: ({ params, abortController }) => getDocument({
+    data: { documentId: params.documentId },
+    signal: abortController.signal,
+  }),
   pendingComponent: () => <div className="page page-reading"><p>Loading document…</p></div>,
   errorComponent: ({ error }) => <RouteError error={error} title="Document unavailable" />,
   component: DocumentDetail,

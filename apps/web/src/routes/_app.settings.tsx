@@ -9,7 +9,7 @@ import { useAppearance, type Appearance } from '../components/AppearanceProvider
 import { getReadiness, logout } from '../server/functions'
 
 export const Route = createFileRoute('/_app/settings')({
-  loader: () => getReadiness(),
+  loader: ({ abortController }) => getReadiness({ signal: abortController.signal }),
   component: SettingsPage,
 })
 

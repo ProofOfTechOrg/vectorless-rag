@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
+import { getRequest } from '@tanstack/react-start/server'
 import { z } from 'zod'
 import {
   documentPageSchema,
@@ -42,6 +43,7 @@ export const getReadiness = createServerFn({ method: 'GET' }).handler(async () =
   const session = requireSession()
   const response = await fetch(
     new URL('/health/ready', process.env.VECTORLESS_API_URL ?? 'http://127.0.0.1:8000'),
+    { signal: getRequest().signal },
   )
   return { ready: response.ok, identity: session.identity }
 })

@@ -6,7 +6,7 @@ import { RouteError } from '../components/RouteError'
 
 import appCss from '../styles.css?url'
 
-const THEME_INIT_SCRIPT = `(function(){try{var key='vectorless:appearance';var mode=localStorage.getItem(key);if(mode!=='light'&&mode!=='dark')mode='system';var dark=mode==='dark'||(mode==='system'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.style.colorScheme=dark?'dark':'light';}catch(_){}})();`
+const THEME_INIT_SCRIPT = `(function(){try{var mode=localStorage.getItem('vectorless:appearance');if(mode==='light'||mode==='dark'){document.documentElement.setAttribute('data-theme',mode);}else{document.documentElement.removeAttribute('data-theme');}}catch(_){document.documentElement.removeAttribute('data-theme');}})();`
 
 export const Route = createRootRoute({
   head: () => ({
@@ -29,13 +29,14 @@ export const Route = createRootRoute({
       },
     ],
   }),
+  headers: () => ({ 'Cache-Control': 'private, no-store' }),
   errorComponent: ({ error }) => <RouteError error={error} title="Unable to load the console" fullPage />,
   shellComponent: RootDocument,
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" data-astryx-theme="neutral" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <HeadContent />

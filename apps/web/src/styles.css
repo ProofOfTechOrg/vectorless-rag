@@ -9,6 +9,7 @@
 @import "tailwindcss/utilities.css" layer(utilities);
 
 @layer components {
+  body > [data-astryx-theme="neutral"] { color-scheme: inherit; }
   :root {
     --app-shell-width: 80rem;
     --app-content-width: 64rem;

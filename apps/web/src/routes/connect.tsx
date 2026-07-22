@@ -9,8 +9,8 @@ import { homeForScopes } from '../lib/scopes'
 import { connect, getSession } from '../server/functions'
 
 export const Route = createFileRoute('/connect')({
-  beforeLoad: async () => {
-    const identity = await getSession()
+  beforeLoad: async ({ abortController }) => {
+    const identity = await getSession({ signal: abortController.signal })
     if (identity) throw redirect({ to: homeForScopes(identity.scopes) })
   },
   component: ConnectPage,

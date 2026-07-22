@@ -3,9 +3,9 @@ import { ChatWorkspace } from '../components/ChatWorkspace'
 import { getThread, getThreads } from '../server/functions'
 
 export const Route = createFileRoute('/_app/chat/$threadId')({
-  loader: ({ params }) => Promise.all([
-    getThread({ data: { threadId: params.threadId } }),
-    getThreads({ data: {} }),
+  loader: ({ params, abortController }) => Promise.all([
+    getThread({ data: { threadId: params.threadId }, signal: abortController.signal }),
+    getThreads({ data: {}, signal: abortController.signal }),
   ]),
   component: ThreadChat,
 })
