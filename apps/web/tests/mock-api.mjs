@@ -40,6 +40,7 @@ const amberRuns = [
 ]
 const secondAccountRun = { trace_id: 'trace-second-account', route: 'clarify', question: 'Which chat belongs to this account?', answer: 'Only the second account can see this answer.', citations: [], insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:05:00Z' }
 const refreshStates = new Map()
+let documentsOnlyThreadRequests = 0
 
 function isRefreshApiKey(apiKey) {
   return typeof apiKey === 'string' && apiKey.startsWith('mock-refresh-chat:')
@@ -50,7 +51,6 @@ function getRefreshState(apiKey) {
   if (!state) {
     state = {
       chatRequests: 0,
-      releaseStaleThreadList: null,
       runs: [
         { trace_id: 'trace-refresh-1', route: 'documents', question: 'What is the initial refresh state?', answer: 'The refresh thread starts with one turn.', citations: [], insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:06:00Z' },
       ],
@@ -77,6 +77,9 @@ const server = createServer(async (request, response) => {
       thread_list_requests: state.threadListRequests,
     })
   }
+  if (url.pathname === '/__test/documents-only-state' && apiKey === 'mock-documents-only') {
+    return json(response, 200, { thread_list_requests: documentsOnlyThreadRequests })
+  }
   if (!apiKey) return json(response, 401, { detail: 'missing API key' })
   const isRefresh = isRefreshApiKey(apiKey)
   if (!['vrag_test_full', 'mock-documents-only', 'mock-second-chat'].includes(apiKey) && !isRefresh) return json(response, 401, { detail: 'invalid API key' })
@@ -89,6 +92,7 @@ const server = createServer(async (request, response) => {
         : identity
   if (url.pathname === '/v1/auth/me') return json(response, 200, requestIdentity)
   if (url.pathname === '/v1/threads') {
+    if (apiKey === 'mock-documents-only') documentsOnlyThreadRequests += 1
     if (apiKey === 'mock-second-chat') return json(response, 200, {
       items: [{ thread_id: 'thread-1', title: secondAccountRun.question, run_count: 1, last_activity_at: secondAccountRun.created_at }],
       next_cursor: null,
@@ -97,22 +101,10 @@ const server = createServer(async (request, response) => {
       const state = getRefreshState(apiKey)
       state.threadListRequests += 1
       const runs = [...state.runs]
-      if (runs.length === 1 && state.threadListRequests === 2) {
-        await Promise.race([
-          new Promise((resolve) => { state.releaseStaleThreadList = resolve }),
-          delay(10_000),
-        ])
-        state.releaseStaleThreadList = null
-      }
-      json(response, 200, {
+      return json(response, 200, {
         items: [{ thread_id: 'thread-refresh', title: runs[0].question, run_count: runs.length, last_activity_at: runs.at(-1).created_at }],
         next_cursor: null,
       })
-      if (runs.length > 1 && state.releaseStaleThreadList) {
-        await delay(50)
-        state.releaseStaleThreadList()
-      }
-      return
     }
     return json(response, 200, {
       items: [

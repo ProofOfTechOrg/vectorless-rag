@@ -9,15 +9,12 @@ import {
   ChatMessageMetadata,
 } from '@astryxdesign/core/Chat'
 import { Citation as CitationChip } from '@astryxdesign/core/Citation'
-import { Collapsible } from '@astryxdesign/core/Collapsible'
 import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Heading } from '@astryxdesign/core/Heading'
 import { HStack } from '@astryxdesign/core/HStack'
 import { IconButton } from '@astryxdesign/core/IconButton'
-import { List, ListItem } from '@astryxdesign/core/List'
 import { Markdown } from '@astryxdesign/core/Markdown'
 import { Text } from '@astryxdesign/core/Text'
-import { Timestamp } from '@astryxdesign/core/Timestamp'
 import { VStack } from '@astryxdesign/core/VStack'
 import { Link, useNavigate, useRouter } from '@tanstack/react-router'
 import { ThumbsDown, ThumbsUp } from 'lucide-react'
@@ -31,7 +28,6 @@ import {
   type Citation,
   type FailureCode,
   type ThreadRun,
-  type ThreadSummary,
 } from '../lib/contracts'
 import { parseSseStream } from '../lib/sse'
 import { submitFeedback } from '../server/functions'
@@ -53,77 +49,18 @@ const EMPTY_RUNS: ThreadRun[] = []
 export function ChatWorkspace({
   threadId,
   runs = EMPTY_RUNS,
-  threads,
 }: {
   threadId?: string
   runs?: ThreadRun[]
-  threads: ThreadSummary[]
 }) {
   return (
     <main className="chat-page" data-testid="chat-page">
-      <aside aria-label="Recent chats" className="chat-history-panel">
-        <RecentChatList activeThreadId={threadId} showHeader threads={threads} />
-      </aside>
-      <div className="chat-main" data-testid="chat-main">
-        <div className="chat-history-mobile">
-          <Collapsible
-            data-testid="recent-chats-collapsible"
-            defaultIsOpen={false}
-            trigger={`Recent chats (${threads.length})`}
-          >
-            <div className="chat-history-mobile-list">
-              <RecentChatList activeThreadId={threadId} threads={threads} />
-            </div>
-          </Collapsible>
-        </div>
-        <ChatConversation
-          key={conversationKey(threadId, runs)}
-          runs={runs}
-          threadId={threadId}
-        />
-      </div>
+      <ChatConversation
+        key={conversationKey(threadId, runs)}
+        runs={runs}
+        threadId={threadId}
+      />
     </main>
-  )
-}
-
-function RecentChatList({
-  activeThreadId,
-  showHeader = false,
-  threads,
-}: {
-  activeThreadId?: string
-  showHeader?: boolean
-  threads: ThreadSummary[]
-}) {
-  const header = showHeader ? <Text type="label">Recent chats</Text> : undefined
-
-  if (threads.length === 0) {
-    return (
-      <VStack gap={2}>
-        {header}
-        <Text as="p" display="block" type="supporting">No recent chats yet.</Text>
-      </VStack>
-    )
-  }
-
-  return (
-    <List density="compact" hasDividers header={header}>
-      {threads.map((thread) => (
-        <ListItem
-          key={thread.thread_id}
-          description={(
-            <span className="chat-thread-meta">
-              <span>{turnLabel(thread.run_count)}</span>
-              <span aria-hidden="true">·</span>
-              <Timestamp format="auto" value={thread.last_activity_at} />
-            </span>
-          )}
-          href={`/chat/${encodeURIComponent(thread.thread_id)}`}
-          isSelected={thread.thread_id === activeThreadId}
-          label={<span className="chat-thread-title" title={thread.title}>{thread.title}</span>}
-        />
-      ))}
-    </List>
   )
 }
 
@@ -264,7 +201,8 @@ function ChatConversation({
     }
     if (shouldNavigate && completedThread && completedThread !== threadId) {
       await navigate({ to: '/chat/$threadId', params: { threadId: completedThread }, replace: true })
-    } else if (shouldNavigate && hasCanonicalTerminalEvent && completedThread === threadId) {
+    }
+    if (shouldNavigate && hasCanonicalTerminalEvent) {
       await router.invalidate({ sync: true })
     }
   }
@@ -401,10 +339,6 @@ function ChatConversation({
 function conversationKey(threadId: string | undefined, runs: ThreadRun[]): string {
   const latestRun = runs.at(-1)
   return [threadId ?? 'new', runs.length, latestRun?.trace_id ?? '', latestRun?.status ?? ''].join(':')
-}
-
-function turnLabel(runCount: number): string {
-  return `${runCount} ${runCount === 1 ? 'turn' : 'turns'}`
 }
 
 function WaitingForResponse() {

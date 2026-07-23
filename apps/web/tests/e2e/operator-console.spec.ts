@@ -118,6 +118,14 @@ async function connectToChat(page: import('@playwright/test').Page, apiKey = key
   await waitForHydration(page)
 }
 
+function sideNavigation(page: import('@playwright/test').Page) {
+  return page.getByRole('navigation', { name: 'Side navigation' })
+}
+
+function recentChatsGroup(page: import('@playwright/test').Page) {
+  return sideNavigation(page).getByRole('group', { name: 'Recent chats' })
+}
+
 async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
   const geometry = await page.evaluate(() => {
     const selectors = [
@@ -125,9 +133,9 @@ async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
       '[data-testid="chat-message-list"], .chat-empty-state',
       '[data-testid="chat-composer"]',
     ]
-    const chatMain = document.querySelector<HTMLElement>('[data-testid="chat-main"]')
-    if (!chatMain) throw new Error('Missing chat main pane')
-    const chatMainRect = chatMain.getBoundingClientRect()
+    const chatPage = document.querySelector<HTMLElement>('[data-testid="chat-page"]')
+    if (!chatPage) throw new Error('Missing chat page')
+    const chatPageRect = chatPage.getBoundingClientRect()
     const columns = selectors.map((selector) => {
       const element = document.querySelector<HTMLElement>(selector)
       if (!element) throw new Error(`Missing chat column: ${selector}`)
@@ -136,7 +144,7 @@ async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
     })
     return {
       columns,
-      chatMainCenter: chatMainRect.left + chatMainRect.width / 2,
+      chatPageCenter: chatPageRect.left + chatPageRect.width / 2,
       scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
       viewportWidth: window.innerWidth,
     }
@@ -144,7 +152,7 @@ async function expectAlignedChatColumns(page: import('@playwright/test').Page) {
 
   expect(Math.max(...geometry.columns.map(({ center }) => center)) - Math.min(...geometry.columns.map(({ center }) => center))).toBeLessThanOrEqual(1)
   for (const column of geometry.columns) {
-    expect(Math.abs(column.center - geometry.chatMainCenter)).toBeLessThanOrEqual(1)
+    expect(Math.abs(column.center - geometry.chatPageCenter)).toBeLessThanOrEqual(1)
     expect(column.width).toBeLessThanOrEqual(chatWidth + 1)
     expect(column.width).toBeLessThanOrEqual(geometry.viewportWidth + 1)
   }
@@ -431,7 +439,7 @@ test('connects through the UI and exercises the operator workflows', async ({ pa
   await page.getByLabel('Message input').press('Enter')
   await expect(page.getByText(/cobalt lantern retrieval/)).toBeVisible()
   await expect(page.getByText('documents', { exact: true })).toBeVisible()
-  await expect(page.getByRole('complementary', { name: 'Recent chats' })).toContainText('What does the cobalt lantern fixture prove?')
+  await expect(recentChatsGroup(page)).toContainText('What does the cobalt lantern fixture prove?')
   await expect(page.locator('.citation-list a')).toHaveAttribute(
     'href',
     '/documents/11111111-1111-4111-8111-111111111111',
@@ -550,11 +558,15 @@ test('keeps the chat on one centered reading axis at desktop and mobile sizes', 
   await page.setViewportSize({ width: 390, height: 844 })
   await expectAlignedChatColumns(page)
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
-  const recentChats = page.getByRole('button', { name: 'Recent chats (2)' })
-  await expect(recentChats).toHaveAttribute('aria-expanded', 'false')
-  await recentChats.click()
-  await expect(recentChats).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.getByRole('link', { name: /Compare amber prism retrieval/ })).toBeVisible()
+  await expect(page.getByTestId('recent-chats-collapsible')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Open navigation' }).click()
+  const navigationDrawer = page.getByRole('dialog', { name: 'Navigation' })
+  const drawerHistory = navigationDrawer.getByRole('group', { name: 'Recent chats' })
+  await expect(navigationDrawer).toBeVisible()
+  await expect(drawerHistory.getByRole('link', { name: /Compare amber prism retrieval/ })).toBeVisible()
+  await drawerHistory.getByRole('link', { name: /Compare amber prism retrieval/ }).click()
+  await expect(page).toHaveURL(/\/chat\/thread-2$/)
+  await expect(navigationDrawer).not.toBeVisible()
 
   const mobileBounds = await page.evaluate(() => {
     const chat = document.querySelector<HTMLElement>('[data-testid="chat-page"]')
@@ -603,26 +615,40 @@ test('distinguishes recent chats and replaces conversation state when switching 
   await page.setViewportSize({ width: 1440, height: 1000 })
   await connectToChat(page)
 
-  const history = page.getByRole('complementary', { name: 'Recent chats' })
+  const navigation = sideNavigation(page)
+  const history = recentChatsGroup(page)
   await expect(history).toBeVisible()
+  const settingsBox = await navigation.getByRole('link', { name: 'Settings', exact: true }).boundingBox()
+  const historyBox = await history.boundingBox()
+  expect(settingsBox).not.toBeNull()
+  expect(historyBox).not.toBeNull()
+  expect((historyBox?.y ?? 0)).toBeGreaterThan(settingsBox?.y ?? Number.POSITIVE_INFINITY)
   await expect(history.getByRole('link', { name: /Compare amber prism retrieval/ })).toContainText('2 turns')
   await expect(history.getByRole('link', { name: /cobalt lantern fixture prove/i })).toContainText('1 turn')
+  await expect(page.getByRole('complementary', { name: 'Recent chats' })).toHaveCount(0)
+  await expect(page.getByTestId('recent-chats-collapsible')).toHaveCount(0)
+
+  for (const destination of ['Settings', 'Documents', 'Ingestion'] as const) {
+    await navigateFromSideNav(page, destination)
+    await expect(page.getByRole('heading', { name: destination, exact: true })).toBeVisible()
+    await expect(history).toBeVisible()
+  }
 
   await history.getByRole('link', { name: /cobalt lantern fixture prove/i }).click()
   await expect(page).toHaveURL(/\/chat\/thread-1$/)
   await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toBeVisible()
-  await expect(history.locator('.astryx-list-item[aria-selected="true"]')).toContainText('cobalt lantern')
+  await expect(history.getByRole('link', { name: /cobalt lantern fixture prove/i })).toHaveAttribute('aria-current', 'page')
 
   await history.getByRole('link', { name: /Compare amber prism retrieval/ }).click()
   await expect(page).toHaveURL(/\/chat\/thread-2$/)
   await expect(page.getByText('The amber prism second pass adds catalog evidence.')).toBeVisible()
   await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toHaveCount(0)
-  await expect(history.locator('.astryx-list-item[aria-selected="true"]')).toContainText('Compare amber prism retrieval')
+  await expect(history.getByRole('link', { name: /Compare amber prism retrieval/ })).toHaveAttribute('aria-current', 'page')
 })
 
 test('clears route data when a different identity reconnects to the same thread URL', async ({ page }) => {
   await connectToChat(page)
-  await page.getByRole('complementary', { name: 'Recent chats' }).getByRole('link', { name: /cobalt lantern fixture prove/i }).click()
+  await recentChatsGroup(page).getByRole('link', { name: /cobalt lantern fixture prove/i }).click()
   await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toBeVisible()
 
   await page.goto('/settings')
@@ -633,7 +659,7 @@ test('clears route data when a different identity reconnects to the same thread 
   await page.getByLabel('API key').fill('mock-second-chat')
   await page.getByRole('button', { name: 'Connect' }).click()
   await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
-  await page.getByRole('complementary', { name: 'Recent chats' }).getByRole('link', { name: /Which chat belongs to this account/ }).click()
+  await recentChatsGroup(page).getByRole('link', { name: /Which chat belongs to this account/ }).click()
 
   await expect(page).toHaveURL(/\/chat\/thread-1$/)
   await expect(page.getByText('Only the second account can see this answer.')).toBeVisible()
@@ -655,33 +681,24 @@ test('refreshes existing-thread history after a completed stream', async ({ page
   })
 
   await connectToChat(page, refreshApiKey)
-  const history = page.getByRole('complementary', { name: 'Recent chats' })
+  const history = recentChatsGroup(page)
   const refreshThread = history.getByRole('link', { name: /initial refresh state/i })
   await expect(refreshThread).toContainText('1 turn')
   await refreshThread.evaluate((link: HTMLAnchorElement) => link.click())
   await expect(page).toHaveURL(/\/chat\/thread-refresh$/)
-
-  await expect.poll(async () => {
-    const response = await page.request.get('http://127.0.0.1:8010/__test/refresh-state', {
-      headers: { 'X-API-Key': refreshApiKey },
-    })
-    return (await response.json()).thread_list_requests
-  }).toBeGreaterThanOrEqual(2)
-  await page.locator('a[href="/settings"]').first().evaluate((link: HTMLAnchorElement) => link.click())
-  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
-  await page.locator('a[href="/chat"]').first().evaluate((link: HTMLAnchorElement) => link.click())
-  await expect(page.getByRole('heading', { name: 'Grounded research chat' })).toBeVisible()
-
-  await refreshThread.evaluate((link: HTMLAnchorElement) => link.click())
-  await expect(page).toHaveURL(/\/chat\/thread-refresh$/)
   await expect(page.getByText('The refresh thread starts with one turn.')).toBeVisible()
-  await expect(refreshThread).not.toHaveAttribute('data-transitioning', 'transitioning')
 
   await page.getByLabel('Message input').fill('Add another refresh turn')
   await page.getByLabel('Message input').press('Enter')
 
   await expect(page.getByText('The refresh thread now has 2 turns.')).toBeVisible({ timeout: 10_000 })
   await expect(refreshThread).toContainText('2 turns', { timeout: 10_000 })
+  await expect.poll(async () => {
+    const response = await page.request.get('http://127.0.0.1:8010/__test/refresh-state', {
+      headers: { 'X-API-Key': refreshApiKey },
+    })
+    return (await response.json()).thread_list_requests
+  }).toBeGreaterThanOrEqual(2)
   await expect(page.getByText('Add another refresh turn', { exact: true })).toHaveCount(1)
   expect(chatSubmissions).toBe(1)
 })
@@ -692,7 +709,7 @@ test('aborts an in-flight stream when navigating to another recent chat', async 
   await page.getByLabel('Message input').press('Enter')
   await expect(page.locator('.chat-waiting')).toBeVisible()
 
-  await page.getByRole('complementary', { name: 'Recent chats' }).getByRole('link', { name: /cobalt lantern fixture prove/i }).click()
+  await recentChatsGroup(page).getByRole('link', { name: /cobalt lantern fixture prove/i }).click()
   await expect(page).toHaveURL(/\/chat\/thread-1$/)
   await expect(page.getByText('The fixture confirms cobalt lantern retrieval [1].')).toBeVisible()
   await page.waitForTimeout(2_200)
@@ -749,13 +766,17 @@ test('centers operational, reading, connection, and navigation surfaces app-wide
 
   await navigateFromSideNav(page, 'Documents')
   await expect(page.getByRole('heading', { name: 'Documents', exact: true })).toBeVisible()
+  const history = recentChatsGroup(page)
+  await expect(history.getByRole('link')).toHaveCount(2)
   await page.getByRole('button', { name: 'Collapse sidebar' }).click()
   await expect(page.getByRole('button', { name: 'Expand sidebar' })).toBeVisible()
+  await expect(history.getByRole('link')).toHaveCount(0)
   await expectCenteredSurface(page, '.page:not(.page-reading)', operationalWidth)
   await expectBoundedOperatorShell(page, 48)
 
   await page.getByRole('button', { name: 'Expand sidebar' }).click()
   await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible()
+  await expect(history.getByRole('link')).toHaveCount(2)
   await expectBoundedOperatorShell(page, 260)
 
   await setAppearance(page, 'Dark')
@@ -777,6 +798,11 @@ test('returns an existing documents-only session to its scoped home', async ({ p
   await page.getByRole('button', { name: 'Connect' }).click()
   await expect(page).toHaveURL(/\/documents$/)
   await expect(page.getByRole('heading', { name: 'Documents' })).toBeVisible()
+  await expect(sideNavigation(page).getByRole('group', { name: 'Recent chats' })).toHaveCount(0)
+  const stateResponse = await page.request.get('http://127.0.0.1:8010/__test/documents-only-state', {
+    headers: { 'X-API-Key': 'mock-documents-only' },
+  })
+  expect((await stateResponse.json()).thread_list_requests).toBe(0)
 
   await page.goto('/connect')
   await expect(page).toHaveURL(/\/documents$/)

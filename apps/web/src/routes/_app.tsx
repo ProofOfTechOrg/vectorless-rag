@@ -3,13 +3,14 @@ import { Badge } from '@astryxdesign/core/Badge'
 import { Button } from '@astryxdesign/core/Button'
 import { CommandPalette } from '@astryxdesign/core/CommandPalette'
 import { SideNav, SideNavItem, SideNavSection } from '@astryxdesign/core/SideNav'
+import { Text } from '@astryxdesign/core/Text'
 import { TopNav, TopNavHeading } from '@astryxdesign/core/TopNav'
 import { createStaticSource } from '@astryxdesign/core/Typeahead'
 import { createFileRoute, Outlet, redirect, useNavigate, useRouterState } from '@tanstack/react-router'
 import { FileUp, Library, MessageSquare, Search, Settings } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { Identity } from '../lib/contracts'
-import { getReadiness, getSession } from '../server/functions'
+import { getReadiness, getSession, getThreads } from '../server/functions'
 
 export const Route = createFileRoute('/_app')({
   beforeLoad: async ({ abortController }) => {
@@ -17,6 +18,10 @@ export const Route = createFileRoute('/_app')({
     if (!session) throw redirect({ to: '/connect' })
     return { session }
   },
+  loader: ({ context, abortController }) =>
+    context.session.scopes.includes('chat')
+      ? getThreads({ data: {}, signal: abortController.signal })
+      : null,
   component: OperatorShell,
 })
 
@@ -29,6 +34,7 @@ const destinations = [
 
 function OperatorShell() {
   const { session } = Route.useRouteContext()
+  const threadPage = Route.useLoaderData()
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const [isSideNavCollapsed, setIsSideNavCollapsed] = useState(false)
@@ -77,6 +83,24 @@ function OperatorShell() {
           />
         ))}
       </SideNavSection>
+      {threadPage ? (
+        <SideNavSection title="Recent chats">
+          {threadPage.items.length > 0 ? threadPage.items.map((thread) => {
+            const href = `/chat/${encodeURIComponent(thread.thread_id)}`
+            return (
+              <SideNavItem
+                key={thread.thread_id}
+                endContent={<Text type="supporting">{turnLabel(thread.run_count)}</Text>}
+                href={href}
+                isSelected={pathname === href}
+                label={thread.title}
+              />
+            )
+          }) : (
+            <SideNavItem isDisabled label="No recent chats yet" />
+          )}
+        </SideNavSection>
+      ) : null}
     </SideNav>
   )
 
@@ -117,4 +141,8 @@ function OperatorShell() {
       />
     </>
   )
+}
+
+function turnLabel(runCount: number): string {
+  return `${runCount} ${runCount === 1 ? 'turn' : 'turns'}`
 }
