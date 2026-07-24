@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     pageindex_model: str = "deepseek/deepseek-v4-pro"
     pageindex_source_dir: Path = Path("/opt/pageindex")
     pageindex_work_dir: Path = Path("/workspaces")
-    pageindex_version: Literal["190f8b378be58199ca993566a9214dba72089c54+vr2"] = (
-        "190f8b378be58199ca993566a9214dba72089c54+vr2"
+    pageindex_version: Literal["190f8b378be58199ca993566a9214dba72089c54+vr3"] = (
+        "190f8b378be58199ca993566a9214dba72089c54+vr3"
     )
     pageindex_llm_max_attempts: int = 3
     pageindex_timeout_seconds: int = 3_600

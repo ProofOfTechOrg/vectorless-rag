@@ -116,10 +116,15 @@ diff --git a/pageindex/page_index.py b/pageindex/page_index.py
 index 083b26e..62a1d03 100644
 --- a/pageindex/page_index.py
 +++ b/pageindex/page_index.py
-@@ -105,3 +105,3 @@ async def check_title_appearance(item, page_list, start_index=1, model=None):
+@@ -105,3 +105,8 @@ async def check_title_appearance(item, page_list, start_index=1, model=None):
  
 -    response = await llm_acompletion(model=model, prompt=prompt)
-+    response = await llm_acompletion(model=model, prompt=prompt, expect_json=True)
++    response = await llm_acompletion(
++        model=model,
++        prompt=prompt,
++        expect_json=True,
++        invalid_json_fallback={"answer": "no"},
++    )
      response = extract_json(response)
 @@ -134,3 +134,3 @@ async def check_title_appearance_in_start(title, page_text, model=None, logger=N
  
@@ -171,4 +176,3 @@ index 083b26e..62a1d03 100644
 -    response = await llm_acompletion(model=model, prompt=prompt)
 +    response = await llm_acompletion(model=model, prompt=prompt, expect_json=True)
      json_content = extract_json(response)    
-

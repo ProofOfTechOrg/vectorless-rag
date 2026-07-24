@@ -235,3 +235,49 @@ async def test_async_invalid_then_valid() -> None:
         '{"answer": "yes"}'
     )
     assert all(call["extra_body"] == {"thinking": {"type": "disabled"}} for call in calls)
+
+
+async def test_async_invalid_json_fallback_is_explicit_and_applied_after_retries() -> None:
+    calls = 0
+
+    async def invalid(**kwargs: object) -> object:
+        nonlocal calls
+        del kwargs
+        calls += 1
+        return _response("not json")
+
+    def unused_sync(**kwargs: object) -> object:
+        del kwargs
+        return _response("unused")
+
+    runtime = _runtime(unused_sync, acompletion=invalid)
+    assert (
+        await runtime.acomplete(
+            "provider/model",
+            "prompt",
+            expect_json=True,
+            invalid_json_fallback={"answer": "no"},
+        )
+        == '{"answer":"no"}'
+    )
+    assert calls == 3
+
+
+async def test_async_json_fallback_does_not_mask_provider_rejection() -> None:
+    async def rejected(**kwargs: object) -> object:
+        del kwargs
+        raise BadRequestError("invalid request", "model", "provider")
+
+    def unused_sync(**kwargs: object) -> object:
+        del kwargs
+        return _response("unused")
+
+    runtime = _runtime(unused_sync, acompletion=rejected)
+    with pytest.raises(PageIndexLLMError) as error:
+        await runtime.acomplete(
+            "provider/model",
+            "prompt",
+            expect_json=True,
+            invalid_json_fallback={"answer": "no"},
+        )
+    assert error.value.failure_code == "pageindex_provider_rejected"

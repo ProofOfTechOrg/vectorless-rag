@@ -391,7 +391,14 @@ class PageIndexRuntime:
             finish_reason=last_error.finish_reason,
         ) from last_error
 
-    async def acomplete(self, model: str | None, prompt: str, *, expect_json: bool = False) -> str:
+    async def acomplete(
+        self,
+        model: str | None,
+        prompt: str,
+        *,
+        expect_json: bool = False,
+        invalid_json_fallback: dict[str, Any] | list[Any] | None = None,
+    ) -> str:
         provider_model = (model or self.settings.pageindex_model).removeprefix("litellm/")
         corrected = False
         last_error: PageIndexLLMError | None = None
@@ -455,6 +462,11 @@ class PageIndexRuntime:
                 if attempt < self.settings.pageindex_llm_max_attempts:
                     await self.async_sleep(self._delay(attempt))
         assert last_error is not None
+        if invalid_json_fallback is not None and last_error.failure_code in {
+            "pageindex_empty_response",
+            "pageindex_invalid_json",
+        }:
+            return json.dumps(invalid_json_fallback, separators=(",", ":"))
         raise PageIndexLLMError(
             "pageindex_llm_retry_exhausted",
             "The PageIndex provider request failed after all retry attempts.",
@@ -489,5 +501,15 @@ def llm_completion(
     )
 
 
-async def llm_acompletion(model: str | None, prompt: str, expect_json: bool = False) -> str:
-    return await _runtime().acomplete(model, prompt, expect_json=expect_json)
+async def llm_acompletion(
+    model: str | None,
+    prompt: str,
+    expect_json: bool = False,
+    invalid_json_fallback: dict[str, Any] | list[Any] | None = None,
+) -> str:
+    return await _runtime().acomplete(
+        model,
+        prompt,
+        expect_json=expect_json,
+        invalid_json_fallback=invalid_json_fallback,
+    )
