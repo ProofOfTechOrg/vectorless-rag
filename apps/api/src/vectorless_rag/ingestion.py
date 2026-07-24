@@ -22,15 +22,23 @@ from vectorless_rag.llm import (
     wrap_untrusted_document,
 )
 from vectorless_rag.models import (
+    ArtifactAction,
     Document,
     DocumentStatus,
     IndexVersion,
+    IngestionAttempt,
+    IngestionAttemptStatus,
     IngestionJob,
     JobStatus,
+    ModelCall,
+    ModelCallOutcome,
+    ModelCallStage,
 )
 from vectorless_rag.pageindex_adapter import PageIndexAdapter, PageIndexError, artifact_version_key
+from vectorless_rag.reporting import build_pilot_report as build_pilot_report
 from vectorless_rag.schemas import DocumentMetadata, SyncResponse
 from vectorless_rag.storage import ObjectStore
+from vectorless_rag.usage import UsageOwner, usage_context
 
 ARXIV_FILENAME = re.compile(r"^(?P<id>\d{4}\.\d{4,5})(?:v\d+)?\.pdf$", re.IGNORECASE)
 PLACEHOLDER_TITLES = frozenset(
@@ -48,8 +56,23 @@ PLACEHOLDER_TITLES = frozenset(
 )
 
 
+UNSUPPORTED_PDF_DIAGNOSTICS = {
+    "unsupported_file_type": "Only PDF files are accepted.",
+    "pdf_too_large": "The PDF exceeds the configured upload limit.",
+    "invalid_pdf_signature": "The file does not have a PDF signature.",
+    "pdf_parsing_failed": "The PDF could not be parsed.",
+    "pdf_text_extraction_insufficient": (
+        "The PDF has insufficient extractable text; OCR is not enabled."
+    ),
+}
+
+
 class UnsupportedPDF(ValueError):
-    pass
+    def __init__(self, failure_code: str) -> None:
+        diagnostic = UNSUPPORTED_PDF_DIAGNOSTICS[failure_code]
+        super().__init__(diagnostic)
+        self.failure_code = failure_code
+        self.diagnostic = diagnostic
 
 
 class IngestionRetryConflict(ValueError):
@@ -75,11 +98,11 @@ def normalize_document_title(extracted: str, embedded: str | None, filename: str
 
 def validate_pdf(data: bytes, filename: str, maximum_bytes: int) -> None:
     if not filename.lower().endswith(".pdf"):
-        raise UnsupportedPDF("only .pdf files are accepted")
+        raise UnsupportedPDF("unsupported_file_type")
     if len(data) > maximum_bytes:
-        raise UnsupportedPDF(f"PDF exceeds the {maximum_bytes} byte limit")
+        raise UnsupportedPDF("pdf_too_large")
     if not data.startswith(b"%PDF-"):
-        raise UnsupportedPDF("file does not have a PDF signature")
+        raise UnsupportedPDF("invalid_pdf_signature")
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -98,7 +121,7 @@ def extract_first_pages(data: bytes, count: int = 3) -> tuple[str, int, float, s
             raw_title = pdf_metadata.get("title")
             embedded_title = (raw_title.strip() or None) if isinstance(raw_title, str) else None
     except Exception as exc:
-        raise UnsupportedPDF(f"PDF parsing failed: {exc}") from exc
+        raise UnsupportedPDF("pdf_parsing_failed") from exc
     combined = "\n\n".join(texts).strip()
     non_space = sum(not char.isspace() for char in combined)
     quality = min(1.0, non_space / max(1, min(page_count, count) * 1_500))
@@ -110,9 +133,7 @@ async def extract_metadata(
 ) -> tuple[DocumentMetadata, int, float]:
     text, page_count, quality, embedded_title = await asyncio.to_thread(extract_first_pages, data)
     if len(text) < settings.extraction_min_characters:
-        raise UnsupportedPDF(
-            f"extraction-poor PDF: first pages yielded {len(text)} characters; OCR is not enabled"
-        )
+        raise UnsupportedPDF("pdf_text_extraction_insufficient")
     arxiv_id = arxiv_id_from_filename(filename)
     prompt = (
         "Extract bibliographic metadata from these first PDF pages. Do not invent missing values. "
@@ -120,7 +141,11 @@ async def extract_metadata(
         + wrap_untrusted_document(text[:60_000])
     )
     metadata = await llm.structured(
-        DocumentMetadata, UNTRUSTED_DOCUMENT_SYSTEM, prompt, thinking=False
+        DocumentMetadata,
+        UNTRUSTED_DOCUMENT_SYSTEM,
+        prompt,
+        thinking=False,
+        stage=ModelCallStage.ingestion_metadata,
     )
     metadata = metadata.model_copy(
         update={"title": normalize_document_title(metadata.title, embedded_title, filename)}
@@ -260,148 +285,206 @@ class IngestionProcessor:
         self.llm = llm
         self.pageindex = pageindex
 
-    async def process(self, session: AsyncSession, job: IngestionJob) -> None:
+    async def process(
+        self,
+        session: AsyncSession,
+        job: IngestionJob,
+        attempt: IngestionAttempt,
+    ) -> None:
         started = time.monotonic()
+        if attempt.job_id != job.id or attempt.status != IngestionAttemptStatus.running:
+            raise RuntimeError("ingestion attempt is no longer active")
         document = await session.get(Document, job.document_id, with_for_update=True)
         if document is None:
-            raise RuntimeError(f"document {job.document_id} no longer exists")
+            raise RuntimeError("ingestion document no longer exists")
         document.status = DocumentStatus.indexing
-        try:
-            pdf_data = await self.store.get_bytes(document.pdf_object_key)
-            metadata, page_count, quality = await extract_metadata(
-                pdf_data, document.original_filename, self.llm, self.settings
-            )
-            document.title = metadata.title
-            document.authors = metadata.authors
-            document.abstract = metadata.abstract
-            document.description = metadata.description
-            document.topics = metadata.topics
-            document.submitted_date = metadata.submitted_date
-            document.page_count = page_count
-            version_key = artifact_version_key(
-                document.sha256,
-                self.settings.pageindex_version,
-                self.settings.metadata_prompt_version,
-                self.settings.pageindex_model,
-            )
-            existing = await session.scalar(
-                select(IndexVersion).where(
-                    IndexVersion.document_id == document.id,
-                    IndexVersion.version_key == version_key,
+        with usage_context(UsageOwner(trace_id=attempt.trace_id, ingestion_attempt_id=attempt.id)):
+            try:
+                pdf_data = await self.store.get_bytes(document.pdf_object_key)
+                metadata, page_count, quality = await extract_metadata(
+                    pdf_data, document.original_filename, self.llm, self.settings
                 )
-            )
-            if existing is not None and not job.force:
-                document.active_index_version_id = existing.id
+                document.title = metadata.title
+                document.authors = metadata.authors
+                document.abstract = metadata.abstract
+                document.description = metadata.description
+                document.topics = metadata.topics
+                document.submitted_date = metadata.submitted_date
+                document.page_count = page_count
+                attempt.page_count = page_count
+                attempt.extraction_quality = quality
+                version_key = artifact_version_key(
+                    document.sha256,
+                    self.settings.pageindex_version,
+                    self.settings.metadata_prompt_version,
+                    self.settings.pageindex_model,
+                )
+                existing = await session.scalar(
+                    select(IndexVersion).where(
+                        IndexVersion.document_id == document.id,
+                        IndexVersion.version_key == version_key,
+                    )
+                )
+                if existing is not None and not job.force:
+                    document.active_index_version_id = existing.id
+                    document.status = DocumentStatus.ready
+                    document.diagnostic = None
+                    attempt.artifact_action = ArtifactAction.reused
+                    await self._finish(
+                        session,
+                        job,
+                        attempt,
+                        JobStatus.completed,
+                        IngestionAttemptStatus.completed,
+                        None,
+                        started,
+                    )
+                    return
+                metadata_payload = metadata.model_dump(mode="json")
+                with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
+                    await asyncio.to_thread(handle.write, pdf_data)
+                    await asyncio.to_thread(handle.flush)
+                    artifact = await self.pageindex.index(
+                        Path(handle.name),
+                        str(document.id),
+                        metadata_payload,
+                        ingestion_attempt_id=attempt.id,
+                        trace_id=attempt.trace_id,
+                    )
+                artifact_digest = sha256_bytes(artifact)
+                artifact_key = f"artifacts/{document.id}/{version_key}.json"
+                await self.store.put_bytes(artifact_key, artifact, "application/json")
+                index = existing or IndexVersion(
+                    document_id=document.id,
+                    version_key=version_key,
+                    pageindex_version=self.settings.pageindex_version,
+                    prompt_version=self.settings.metadata_prompt_version,
+                    model_name=self.settings.pageindex_model,
+                    artifact_object_key=artifact_key,
+                    artifact_sha256=artifact_digest,
+                )
+                index.artifact_object_key = artifact_key
+                index.artifact_sha256 = artifact_digest
+                index.extraction_quality = quality
+                index.elapsed_seconds = time.monotonic() - started
+                attempt.artifact_action = (
+                    ArtifactAction.created if existing is None else ArtifactAction.rebuilt
+                )
+                attempt.artifact_bytes = len(artifact)
+                if existing is None:
+                    session.add(index)
+                await session.flush()
+                totals = await self._usage_summary(session, attempt.id)
+                index.input_tokens = totals["input_tokens"]
+                index.output_tokens = totals["output_tokens"]
+                document.active_index_version_id = index.id
                 document.status = DocumentStatus.ready
-                self._finish(job, JobStatus.completed, "existing artifact reused", started)
-                return
-            metadata_payload = metadata.model_dump(mode="json")
-            with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
-                await asyncio.to_thread(handle.write, pdf_data)
-                await asyncio.to_thread(handle.flush)
-                artifact = await self.pageindex.index(
-                    Path(handle.name), str(document.id), metadata_payload
+                document.diagnostic = None
+                await self._finish(
+                    session,
+                    job,
+                    attempt,
+                    JobStatus.completed,
+                    IngestionAttemptStatus.completed,
+                    None,
+                    started,
+                    usage=totals,
                 )
-            artifact_digest = sha256_bytes(artifact)
-            artifact_key = f"artifacts/{document.id}/{version_key}.json"
-            await self.store.put_bytes(artifact_key, artifact, "application/json")
-            index = existing or IndexVersion(
-                document_id=document.id,
-                version_key=version_key,
-                pageindex_version=self.settings.pageindex_version,
-                prompt_version=self.settings.metadata_prompt_version,
-                model_name=self.settings.pageindex_model,
-                artifact_object_key=artifact_key,
-                artifact_sha256=artifact_digest,
-            )
-            index.artifact_object_key = artifact_key
-            index.artifact_sha256 = artifact_digest
-            index.extraction_quality = quality
-            index.elapsed_seconds = time.monotonic() - started
-            if existing is None:
-                session.add(index)
-            await session.flush()
-            document.active_index_version_id = index.id
-            document.status = DocumentStatus.ready
-            document.diagnostic = None
-            self._finish(job, JobStatus.completed, None, started)
-            job.metrics = {
-                "page_count": page_count,
-                "extraction_quality": quality,
-                "elapsed_seconds": round(time.monotonic() - started, 3),
-                "artifact_bytes": len(artifact),
-            }
-        except UnsupportedPDF as exc:
-            document.status = DocumentStatus.unsupported
-            document.diagnostic = str(exc)
-            self._finish(job, JobStatus.unsupported, str(exc), started)
-        except Exception as exc:
-            failure_code = "ingestion_failed"
-            diagnostic = "Ingestion failed unexpectedly."
-            finish_reason: str | None = None
-            attempts = 0
-            if isinstance(exc, (PageIndexError, LLMError)):
-                failure_code = exc.failure_code
-                diagnostic = exc.diagnostic
-                finish_reason = exc.finish_reason
-                attempts = exc.attempts
-            document.status = DocumentStatus.failed
-            document.diagnostic = diagnostic
-            self._finish(job, JobStatus.failed, diagnostic, started)
-            failure_metrics: dict[str, object] = {"failure_code": failure_code}
-            if finish_reason is not None:
-                failure_metrics["provider_finish_reason"] = finish_reason
-            if attempts:
-                failure_metrics["llm_attempts"] = attempts
-            job.metrics = {**job.metrics, **failure_metrics}
-            raise
+            except UnsupportedPDF as exc:
+                document.status = DocumentStatus.unsupported
+                document.diagnostic = exc.diagnostic
+                await self._finish(
+                    session,
+                    job,
+                    attempt,
+                    JobStatus.unsupported,
+                    IngestionAttemptStatus.unsupported,
+                    exc.failure_code,
+                    started,
+                    diagnostic=exc.diagnostic,
+                )
+            except Exception as exc:
+                failure_code = "ingestion_failed"
+                diagnostic = "Ingestion failed unexpectedly."
+                finish_reason: str | None = None
+                attempts = 0
+                if isinstance(exc, (PageIndexError, LLMError)):
+                    failure_code = exc.failure_code
+                    diagnostic = exc.diagnostic
+                    finish_reason = exc.finish_reason
+                    attempts = exc.attempts
+                document.status = DocumentStatus.failed
+                document.diagnostic = diagnostic
+                await self._finish(
+                    session,
+                    job,
+                    attempt,
+                    JobStatus.failed,
+                    IngestionAttemptStatus.failed,
+                    failure_code,
+                    started,
+                    diagnostic=diagnostic,
+                )
+                failure_metrics: dict[str, object] = {"failure_code": failure_code}
+                if finish_reason is not None:
+                    failure_metrics["provider_finish_reason"] = finish_reason
+                if attempts:
+                    failure_metrics["llm_attempts"] = attempts
+                job.metrics = {**job.metrics, **failure_metrics}
+                raise
 
     @staticmethod
-    def _finish(
-        job: IngestionJob, status: JobStatus, diagnostic: str | None, started: float
+    async def _usage_summary(session: AsyncSession, attempt_id: UUID) -> dict[str, int | bool]:
+        calls = list(
+            (
+                await session.scalars(
+                    select(ModelCall).where(ModelCall.ingestion_attempt_id == attempt_id)
+                )
+            ).all()
+        )
+        available = [call for call in calls if call.usage_available]
+        return {
+            "model_call_count": len(calls),
+            "input_tokens": sum(call.input_tokens or 0 for call in available),
+            "output_tokens": sum(call.output_tokens or 0 for call in available),
+            "telemetry_complete": all(
+                call.outcome != ModelCallOutcome.started and call.usage_available for call in calls
+            ),
+        }
+
+    async def _finish(
+        self,
+        session: AsyncSession,
+        job: IngestionJob,
+        attempt: IngestionAttempt,
+        job_status: JobStatus,
+        attempt_status: IngestionAttemptStatus,
+        failure_code: str | None,
+        started: float,
+        *,
+        diagnostic: str | None = None,
+        usage: dict[str, int | bool] | None = None,
     ) -> None:
-        job.status = status
+        usage = usage or await self._usage_summary(session, attempt.id)
+        elapsed = round(time.monotonic() - started, 3)
+        job.status = job_status
         job.diagnostic = diagnostic
         job.completed_at = datetime.now(UTC)
-        job.metrics = {**job.metrics, "elapsed_seconds": round(time.monotonic() - started, 3)}
-
-
-def build_pilot_report(
-    jobs: list[IngestionJob],
-    *,
-    total_documents: int = 537,
-    input_cost_per_million_usd: float | None = None,
-    output_cost_per_million_usd: float | None = None,
-) -> dict[str, object]:
-    completed = [job for job in jobs if job.status == JobStatus.completed]
-    elapsed = sum(float(job.metrics.get("elapsed_seconds", 0)) for job in completed)
-    input_tokens = sum(int(job.metrics.get("input_tokens", 0)) for job in completed)
-    output_tokens = sum(int(job.metrics.get("output_tokens", 0)) for job in completed)
-    projection_factor = total_documents / max(1, len(completed))
-    projected_input = round(input_tokens * projection_factor)
-    projected_output = round(output_tokens * projection_factor)
-    projected_spend = None
-    if input_cost_per_million_usd is not None and output_cost_per_million_usd is not None:
-        projected_spend = round(
-            projected_input * input_cost_per_million_usd / 1_000_000
-            + projected_output * output_cost_per_million_usd / 1_000_000,
-            2,
-        )
-    return {
-        "documents": len(jobs),
-        "completed": len(completed),
-        "unsupported": sum(job.status == JobStatus.unsupported for job in jobs),
-        "failed": sum(job.status == JobStatus.failed for job in jobs),
-        "elapsed_seconds": elapsed,
-        "average_extraction_quality": (
-            sum(float(job.metrics.get("extraction_quality", 0)) for job in completed)
-            / max(1, len(completed))
-        ),
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "projected_full_corpus_input_tokens": projected_input,
-        "projected_full_corpus_output_tokens": projected_output,
-        "projected_full_corpus_spend_usd": projected_spend,
-        "full_corpus_approved": False,
-        "note": "Set ALLOW_FULL_CORPUS_INDEX=true only after explicit approval.",
-    }
+        attempt.status = attempt_status
+        attempt.failure_code = failure_code
+        attempt.completed_at = job.completed_at
+        attempt.elapsed_seconds = elapsed
+        attempt.telemetry_complete = bool(usage["telemetry_complete"])
+        job.metrics = {
+            "attempt_id": str(attempt.id),
+            "trace_id": attempt.trace_id,
+            "elapsed_seconds": elapsed,
+            "page_count": attempt.page_count,
+            "extraction_quality": attempt.extraction_quality,
+            "artifact_bytes": attempt.artifact_bytes,
+            "artifact_action": attempt.artifact_action.value,
+            "telemetry_complete": attempt.telemetry_complete,
+            "model_call_count": usage["model_call_count"],
+            "input_tokens": usage["input_tokens"],
+            "output_tokens": usage["output_tokens"],
+        }

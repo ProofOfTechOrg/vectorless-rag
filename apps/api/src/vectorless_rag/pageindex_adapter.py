@@ -10,6 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
+from uuid import UUID
 
 import fitz
 
@@ -32,6 +33,7 @@ PAGEINDEX_FAILURE_DIAGNOSTICS = {
     "pageindex_provider_rejected": "The PageIndex provider rejected the request.",
     "pageindex_transient_provider_error": ("The PageIndex provider request failed transiently."),
     "pageindex_unexpected_tool_call": "PageIndex received an unexpected tool call.",
+    "usage_persistence_failed": "Model usage accounting could not be persisted.",
 }
 
 
@@ -116,7 +118,15 @@ class PageIndexAdapter:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    async def index(self, pdf_path: Path, document_id: str, metadata: dict[str, Any]) -> bytes:
+    async def index(
+        self,
+        pdf_path: Path,
+        document_id: str,
+        metadata: dict[str, Any],
+        *,
+        ingestion_attempt_id: UUID,
+        trace_id: str,
+    ) -> bytes:
         workspace_root = self.settings.pageindex_work_dir
         workspace_root.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=f"{document_id}-", dir=workspace_root) as temp:
@@ -145,6 +155,10 @@ class PageIndexAdapter:
                 str(self.settings.pageindex_source_dir / "run_pageindex.py"),
                 "--failure-report",
                 str(workspace / "failure.json"),
+                "--ingestion-attempt-id",
+                str(ingestion_attempt_id),
+                "--trace-id",
+                trace_id,
                 "--pdf_path",
                 str(local_pdf),
                 "--model",

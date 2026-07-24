@@ -8,6 +8,7 @@ from typing import Any, Protocol, cast
 from langfuse import Langfuse
 
 from vectorless_rag.config import Settings
+from vectorless_rag.usage import TokenUsage, current_usage_owner, normalize_token_usage
 
 SENSITIVE_KEYS = frozenset(
     {
@@ -53,36 +54,8 @@ def content_fingerprint(value: str | bytes) -> dict[str, str | int]:
 
 
 def normalized_token_usage(usage: object) -> dict[str, int]:
-    if usage is None:
-        return {}
-    if isinstance(usage, dict):
-        values = cast(dict[str, object], usage)
-    else:
-        values = {
-            name: getattr(usage, name, None)
-            for name in (
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
-                "prompt_tokens",
-                "completion_tokens",
-            )
-        }
-    aliases = {
-        "input": ("input_tokens", "prompt_tokens"),
-        "output": ("output_tokens", "completion_tokens"),
-        "total": ("total_tokens",),
-    }
-    result: dict[str, int] = {}
-    for target, names in aliases.items():
-        for name in names:
-            value = values.get(name)
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                result[target] = value
-                break
-    if "total" not in result and "input" in result and "output" in result:
-        result["total"] = result["input"] + result["output"]
-    return result
+    normalized = usage if isinstance(usage, TokenUsage) else normalize_token_usage(usage)
+    return normalized.langfuse_details()
 
 
 class _GenerationHandle(Protocol):
@@ -97,26 +70,33 @@ class GenerationObservation:
         self.attempt = attempt
 
     def finish(
-        self, output: str | bytes, *, finish_reason: str | None, usage: object = None
+        self,
+        output: str | bytes,
+        *,
+        finish_reason: str | None,
+        usage: object | TokenUsage = None,
     ) -> None:
         if self.handle is None:
             return
         metadata: dict[str, object] = {"attempt": self.attempt}
         if finish_reason is not None:
             metadata["finish_reason"] = finish_reason
-        self.handle.update(
-            output=content_fingerprint(output),
-            metadata=metadata,
-            usage_details=normalized_token_usage(usage),
-        )
-        self.handle.end()
+        try:
+            self.handle.update(
+                output=content_fingerprint(output),
+                metadata=metadata,
+                usage_details=normalized_token_usage(usage),
+            )
+            self.handle.end()
+        except Exception:
+            return
 
     def fail(
         self,
         *,
         finish_reason: str | None = None,
         output: str | bytes | None = None,
-        usage: object = None,
+        usage: object | TokenUsage = None,
     ) -> None:
         if self.handle is None:
             return
@@ -129,8 +109,11 @@ class GenerationObservation:
         normalized_usage = normalized_token_usage(usage)
         if normalized_usage:
             payload["usage_details"] = normalized_usage
-        self.handle.update(**payload)
-        self.handle.end()
+        try:
+            self.handle.update(**payload)
+            self.handle.end()
+        except Exception:
+            return
 
 
 class Observability:
@@ -152,37 +135,70 @@ class Observability:
     ) -> AbstractContextManager[Any]:
         if self.client is None:
             return nullcontext()
-        context = self.client.start_as_current_observation(
-            name=name,
-            as_type="span",
-            trace_context={"trace_id": trace_id},
-            input=mask_payload(input),
-            metadata=mask_payload(metadata or {}),
-        )
+        try:
+            context = self.client.start_as_current_observation(
+                name=name,
+                as_type="span",
+                trace_context={"trace_id": trace_id},
+                input=mask_payload(input),
+                metadata=mask_payload(metadata or {}),
+            )
+        except Exception:
+            return nullcontext()
         return cast(AbstractContextManager[Any], context)
 
     def score(self, trace_id: str, name: str, value: float, comment: str | None = None) -> None:
         if self.client is None:
             return
-        self.client.create_score(trace_id=trace_id, name=name, value=value, comment=comment)
+        safe_comment = (
+            json.dumps(content_fingerprint(comment), sort_keys=True, separators=(",", ":"))
+            if comment is not None
+            else None
+        )
+        try:
+            self.client.create_score(
+                trace_id=trace_id,
+                name=name,
+                value=value,
+                comment=safe_comment,
+            )
+        except Exception:
+            return
 
     def generation(
         self, name: str, model: str, prompt: str | bytes, *, attempt: int
     ) -> GenerationObservation:
         if self.client is None:
             return GenerationObservation(None, attempt)
-        handle = self.client.start_observation(
-            name=name,
-            as_type="generation",
-            model=model,
-            input=content_fingerprint(prompt),
-            metadata={"attempt": attempt},
-        )
+        owner = current_usage_owner()
+        try:
+            if owner is None:
+                handle = self.client.start_observation(
+                    name=name,
+                    as_type="generation",
+                    model=model,
+                    input=content_fingerprint(prompt),
+                    metadata={"attempt": attempt},
+                )
+            else:
+                handle = self.client.start_observation(
+                    name=name,
+                    as_type="generation",
+                    model=model,
+                    input=content_fingerprint(prompt),
+                    metadata={"attempt": attempt},
+                    trace_context={"trace_id": owner.trace_id},
+                )
+        except Exception:
+            return GenerationObservation(None, attempt)
         return GenerationObservation(cast(_GenerationHandle, handle), attempt)
 
     def flush(self) -> None:
         if self.client is not None:
-            self.client.flush()
+            try:
+                self.client.flush()
+            except Exception:
+                return
 
 
 def redacted_locator_payload(items: list[dict[str, Any]]) -> dict[str, Any]:

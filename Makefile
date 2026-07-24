@@ -17,6 +17,7 @@ ARXIV_PDF_HOST_DIR ?= ./arxiv-pdfs
 NAME ?= operator
 SCOPES ?= chat,documents:read,admin:ingest
 FORCE ?= false
+DAYS ?= 30
 PDF ?=
 SERVICE ?=
 TAIL ?= 200
@@ -31,7 +32,7 @@ export UV_CACHE_DIR
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up rebuild dev dev-build dev-health down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
-	download-corpus sync-corpus upload-document pilot-report evaluation-build evaluation-seed \
+	download-corpus sync-corpus upload-document pilot-report query-cost-report evaluation-build evaluation-seed \
 	secret-api-pepper secret-session secrets-langfuse
 
 help: ## Show all supported project commands.
@@ -185,6 +186,8 @@ upload-document: ## Upload PDF through FastAPI with VECTORLESS_RAG_ADMIN_KEY.
 	@printf '\n'
 pilot-report: ## Print the ten-document pilot report from the API container.
 	@$(COMPOSE) exec -T api vectorless-rag pilot-report
+query-cost-report: ## Print aggregate query cost data for DAYS (default 30).
+	@$(COMPOSE) exec -T api vectorless-rag query-cost-report --days "$(DAYS)"
 evaluation-build: ## Build the deterministic evaluation dataset.
 	$(UV) run --project $(API_DIR) python $(API_DIR)/scripts/build_evaluation_dataset.py
 evaluation-seed: ## Seed DATASET into the running API container.

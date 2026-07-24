@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vectorless_rag.config import Settings
 from vectorless_rag.llm import UNTRUSTED_DOCUMENT_SYSTEM, StructuredLLM, wrap_untrusted_document
-from vectorless_rag.models import Document, DocumentStatus, IndexVersion
+from vectorless_rag.models import Document, DocumentStatus, IndexVersion, ModelCallStage
 from vectorless_rag.schemas import (
     CandidateSelection,
     Evidence,
@@ -144,6 +144,7 @@ class CorpusRouter:
             f"Question: {question}\nCandidates:\n"
             + wrap_untrusted_document(json.dumps(candidate_payload)),
             thinking=True,
+            stage=ModelCallStage.query_document_select,
         )
         allowed = {candidate.document.id: candidate.document for candidate in candidates}
         selected: list[Document] = []
@@ -223,6 +224,7 @@ class PageIndexRetriever:
                     + "\nChoose tree nodes whose page ranges can directly answer the question.",
                     selection_prompt,
                     thinking=True,
+                    stage=ModelCallStage.query_node_select,
                 )
                 selection = NodeSelection(selections=(forced + selected.selections)[:32])
             else:
@@ -240,6 +242,7 @@ class PageIndexRetriever:
                 + "\nDecide whether the evidence is sufficient for a grounded answer.",
                 sufficiency_prompt,
                 thinking=True,
+                stage=ModelCallStage.query_sufficiency,
             )
             if sufficiency.sufficient:
                 return evidence, True, round_number

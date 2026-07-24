@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
     deepseek_api_key: SecretStr | None = None
     deepseek_model: str = "deepseek-v4-pro"
     deepseek_input_cost_per_million_usd: float | None = None
+    deepseek_cache_hit_input_cost_per_million_usd: float | None = None
     deepseek_output_cost_per_million_usd: float | None = None
     pageindex_model: str = "deepseek/deepseek-v4-pro"
     pageindex_source_dir: Path = Path("/opt/pageindex")
@@ -78,6 +80,17 @@ class Settings(BaseSettings):
     def positive_limits(cls, value: int) -> int:
         if value < 1:
             raise ValueError("limits must be positive")
+        return value
+
+    @field_validator(
+        "deepseek_input_cost_per_million_usd",
+        "deepseek_cache_hit_input_cost_per_million_usd",
+        "deepseek_output_cost_per_million_usd",
+    )
+    @classmethod
+    def non_negative_prices(cls, value: float | None) -> float | None:
+        if value is not None and (not math.isfinite(value) or value < 0):
+            raise ValueError("prices must be finite and non-negative")
         return value
 
 

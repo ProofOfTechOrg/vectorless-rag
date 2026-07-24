@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -38,9 +39,18 @@ from vectorless_rag.ingestion import (
     retry_latest_document_ingestion,
     sync_corpus,
 )
-from vectorless_rag.llm import DeepSeekLLM
-from vectorless_rag.models import Document, IngestionJob, QueryRun, RunFeedback, RunRoute
+from vectorless_rag.llm import DeepSeekLLM, LLMError
+from vectorless_rag.models import (
+    Document,
+    IngestionJob,
+    ModelCall,
+    QueryRun,
+    RunFailureCode,
+    RunFeedback,
+    RunRoute,
+)
 from vectorless_rag.observability import Observability
+from vectorless_rag.operational_logging import emit_event
 from vectorless_rag.retrieval import CorpusRouter, PageIndexRetriever, VectorlessRetriever
 from vectorless_rag.schemas import (
     ChatRequest,
@@ -60,6 +70,16 @@ from vectorless_rag.schemas import (
 )
 from vectorless_rag.sql_guard import PostgreSQLAdapter
 from vectorless_rag.storage import S3ObjectStore
+from vectorless_rag.usage import UsageOwner, usage_context
+
+logger = logging.getLogger(__name__)
+
+SAFE_QUERY_FAILURE_DIAGNOSTICS = {
+    RunFailureCode.deadline_exceeded: "request deadline exceeded",
+    RunFailureCode.client_cancelled: "client cancelled request",
+    RunFailureCode.request_failed: "request failed",
+    RunFailureCode.usage_persistence_failed: "usage persistence failed",
+}
 
 
 @dataclass
@@ -154,6 +174,39 @@ def _runner(runtime: Runtime) -> GraphRunner:
     )
 
 
+async def _query_event_fields(
+    session: AsyncSession,
+    run: QueryRun,
+    runtime: Runtime,
+    started: float,
+) -> dict[str, object]:
+    telemetry_query_failed = False
+    try:
+        calls = list(
+            (await session.scalars(select(ModelCall).where(ModelCall.query_run_id == run.id))).all()
+        )
+    except Exception:
+        calls = []
+        telemetry_query_failed = True
+    known = [call for call in calls if call.usage_available]
+    fields: dict[str, object] = {
+        "trace_id": run.trace_id,
+        "status": "failed" if run.failure_code is not None else "completed",
+        "elapsed_ms": round((time.monotonic() - started) * 1000),
+        "model_call_count": len(calls),
+        "input_tokens": sum(call.input_tokens or 0 for call in known),
+        "output_tokens": sum(call.output_tokens or 0 for call in known),
+        "telemetry_complete": not telemetry_query_failed
+        and all(call.outcome.value != "started" and call.usage_available for call in calls),
+        "release": runtime.settings.release,
+    }
+    if run.route is not None:
+        fields["route"] = run.route.value
+    if run.failure_code is not None:
+        fields["failure_code"] = run.failure_code.value
+    return fields
+
+
 async def _execute_chat(
     request: Request,
     payload: ChatRequest,
@@ -167,35 +220,73 @@ async def _execute_chat(
     thread_id = thread_id or payload.thread_id or uuid.uuid4().hex
     trace_id = trace_id or uuid.uuid4().hex
     run = QueryRun(
+        id=uuid.uuid4(),
         trace_id=trace_id,
         thread_id=thread_id,
         api_key_id=principal.api_key_id,
         question=payload.message,
     )
     session.add(run)
-    await session.flush()
+    await session.commit()
     started = time.monotonic()
+    emit_event(
+        logger,
+        "query_started",
+        trace_id=trace_id,
+        status="running",
+        release=runtime.settings.release,
+    )
     try:
-        async with asyncio.timeout(runtime.settings.request_deadline_seconds):
-            result = await _runner(runtime).run(session, payload, run)
+        with usage_context(UsageOwner(trace_id=trace_id, query_run_id=run.id)):
+            async with asyncio.timeout(runtime.settings.request_deadline_seconds):
+                result = await _runner(runtime).run(session, payload, run)
     except TimeoutError as exc:
-        run.error = "request deadline exceeded"
+        failure_code = RunFailureCode.deadline_exceeded
+        run.failure_code = failure_code
+        run.error = SAFE_QUERY_FAILURE_DIAGNOSTICS[failure_code]
         run.insufficient = True
         run.latency_ms = round((time.monotonic() - started) * 1000)
         await session.commit()
+        emit_event(
+            logger,
+            "query_failed",
+            **await _query_event_fields(session, run, runtime, started),
+        )
         raise HTTPException(status.HTTP_504_GATEWAY_TIMEOUT, run.error) from exc
     except asyncio.CancelledError:
-        run.error = "client cancelled request"
+        failure_code = RunFailureCode.client_cancelled
+        run.failure_code = failure_code
+        run.error = SAFE_QUERY_FAILURE_DIAGNOSTICS[failure_code]
         run.insufficient = True
         run.latency_ms = round((time.monotonic() - started) * 1000)
         await session.commit()
+        emit_event(
+            logger,
+            "query_cancelled",
+            **await _query_event_fields(session, run, runtime, started),
+        )
         raise
     except Exception as exc:
-        run.error = str(exc)[:1000]
+        failure_code = (
+            RunFailureCode.usage_persistence_failed
+            if isinstance(exc, LLMError)
+            and exc.failure_code == RunFailureCode.usage_persistence_failed.value
+            else RunFailureCode.request_failed
+        )
+        run.failure_code = failure_code
+        run.error = SAFE_QUERY_FAILURE_DIAGNOSTICS[failure_code]
         run.insufficient = True
         run.latency_ms = round((time.monotonic() - started) * 1000)
         await session.commit()
-        raise
+        emit_event(
+            logger,
+            "query_failed",
+            **await _query_event_fields(session, run, runtime, started),
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "The API could not complete this run.",
+        ) from None
     route = RunRoute(result["route"])
     citations = [Citation.model_validate(item) for item in result.get("citations", [])]
     run.route = route
@@ -206,6 +297,12 @@ async def _execute_chat(
     sql_audit_value = result.get("sql_audit_id")
     sql_audit_id = uuid.UUID(sql_audit_value) if sql_audit_value else None
     runtime.observability.score(trace_id, "request_success", 1)
+    await session.commit()
+    emit_event(
+        logger,
+        "query_completed",
+        **await _query_event_fields(session, run, runtime, started),
+    )
     return ChatResponse(
         answer=result["answer"],
         thread_id=thread_id,
@@ -551,7 +648,8 @@ async def thread_history(
                     if run.error is None and run.answer is not None
                     else (
                         "deadline_exceeded"
-                        if run.error == "request deadline exceeded"
+                        if run.failure_code == RunFailureCode.deadline_exceeded
+                        or run.error == "request deadline exceeded"
                         else "request_failed"
                     )
                 ),

@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -43,6 +44,45 @@ class JobStatus(StrEnum):
     completed = "completed"
     failed = "failed"
     unsupported = "unsupported"
+
+
+class IngestionAttemptStatus(StrEnum):
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+    unsupported = "unsupported"
+    abandoned = "abandoned"
+
+
+class ArtifactAction(StrEnum):
+    created = "created"
+    rebuilt = "rebuilt"
+    reused = "reused"
+    none = "none"
+
+
+class ModelCallOutcome(StrEnum):
+    started = "started"
+    completed = "completed"
+    failed = "failed"
+
+
+class ModelCallStage(StrEnum):
+    ingestion_metadata = "ingestion_metadata"
+    pageindex_generation = "pageindex_generation"
+    query_route = "query_route"
+    query_sql = "query_sql"
+    query_document_select = "query_document_select"
+    query_node_select = "query_node_select"
+    query_sufficiency = "query_sufficiency"
+    query_synthesis = "query_synthesis"
+
+
+class RunFailureCode(StrEnum):
+    deadline_exceeded = "deadline_exceeded"
+    client_cancelled = "client_cancelled"
+    request_failed = "request_failed"
+    usage_persistence_failed = "usage_persistence_failed"
 
 
 class RunRoute(StrEnum):
@@ -142,6 +182,51 @@ class IngestionJob(TimestampMixin, Base):
     document: Mapped[Document] = relationship()
 
 
+class IngestionAttempt(TimestampMixin, Base):
+    __tablename__ = "ingestion_attempts"
+    __table_args__ = (
+        UniqueConstraint("job_id", "attempt_number", name="uq_ingestion_attempt_job_number"),
+        CheckConstraint("attempt_number > 0", name="ck_ingestion_attempt_number_positive"),
+        CheckConstraint("page_count IS NULL OR page_count >= 0", name="ck_attempt_page_count"),
+        CheckConstraint(
+            "artifact_bytes IS NULL OR artifact_bytes >= 0", name="ck_attempt_artifact_bytes"
+        ),
+        CheckConstraint(
+            "elapsed_seconds IS NULL OR elapsed_seconds >= 0", name="ck_attempt_elapsed"
+        ),
+        {"schema": "agent"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.ingestion_jobs.id"), nullable=False
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    trace_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    worker_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[IngestionAttemptStatus] = mapped_column(
+        Enum(IngestionAttemptStatus, name="ingestion_attempt_status", schema="agent"),
+        default=IngestionAttemptStatus.running,
+        nullable=False,
+    )
+    failure_code: Mapped[str | None] = mapped_column(String(80))
+    artifact_action: Mapped[ArtifactAction] = mapped_column(
+        Enum(ArtifactAction, name="artifact_action", schema="agent"),
+        default=ArtifactAction.none,
+        nullable=False,
+    )
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    extraction_quality: Mapped[float | None] = mapped_column(Float)
+    artifact_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    elapsed_seconds: Mapped[float | None] = mapped_column(Float)
+    telemetry_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    job: Mapped[IngestionJob] = relationship()
+
+
 class ApiKey(TimestampMixin, Base):
     __tablename__ = "api_keys"
     __table_args__ = ({"schema": "agent"},)
@@ -171,10 +256,106 @@ class QueryRun(Base):
     citations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
     insufficient: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     error: Mapped[str | None] = mapped_column(Text)
+    failure_code: Mapped[RunFailureCode | None] = mapped_column(
+        Enum(RunFailureCode, name="run_failure_code", schema="agent")
+    )
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ModelCall(TimestampMixin, Base):
+    __tablename__ = "model_calls"
+    __table_args__ = (
+        CheckConstraint(
+            "(query_run_id IS NULL) <> (ingestion_attempt_id IS NULL)",
+            name="ck_model_call_exactly_one_owner",
+        ),
+        CheckConstraint("provider_attempt > 0", name="ck_model_call_attempt_positive"),
+        CheckConstraint(
+            """
+            (NOT usage_available AND
+             input_tokens IS NULL AND cache_hit_input_tokens IS NULL AND
+             cache_miss_input_tokens IS NULL AND cache_write_input_tokens IS NULL AND
+             unattributed_input_tokens IS NULL AND output_tokens IS NULL AND
+             reasoning_output_tokens IS NULL AND total_tokens IS NULL)
+            OR
+            (usage_available AND
+             input_tokens IS NOT NULL AND cache_hit_input_tokens IS NOT NULL AND
+             cache_miss_input_tokens IS NOT NULL AND cache_write_input_tokens IS NOT NULL AND
+             unattributed_input_tokens IS NOT NULL AND output_tokens IS NOT NULL AND
+             reasoning_output_tokens IS NOT NULL AND total_tokens IS NOT NULL AND
+             input_tokens >= 0 AND cache_hit_input_tokens >= 0 AND
+             cache_miss_input_tokens >= 0 AND cache_write_input_tokens >= 0 AND
+             unattributed_input_tokens >= 0 AND output_tokens >= 0 AND
+             reasoning_output_tokens >= 0 AND total_tokens >= 0)
+            """,
+            name="ck_model_call_usage_availability",
+        ),
+        CheckConstraint(
+            """
+            NOT usage_available OR
+            input_tokens =
+              cache_hit_input_tokens + cache_miss_input_tokens + unattributed_input_tokens
+            """,
+            name="ck_model_call_input_partition",
+        ),
+        CheckConstraint(
+            "NOT usage_available OR cache_write_input_tokens <= cache_miss_input_tokens",
+            name="ck_model_call_cache_write_subset",
+        ),
+        CheckConstraint(
+            "NOT usage_available OR reasoning_output_tokens <= output_tokens",
+            name="ck_model_call_reasoning_subset",
+        ),
+        CheckConstraint(
+            "NOT usage_available OR total_tokens = input_tokens + output_tokens",
+            name="ck_model_call_total_partition",
+        ),
+        CheckConstraint(
+            "NOT cache_attribution_complete OR (usage_available AND unattributed_input_tokens = 0)",
+            name="ck_model_call_cache_attribution",
+        ),
+        Index("ix_model_calls_query_owner", "query_run_id"),
+        Index("ix_model_calls_ingestion_owner", "ingestion_attempt_id"),
+        Index("ix_model_calls_trace", "trace_id"),
+        {"schema": "agent"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    query_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.query_runs.id")
+    )
+    ingestion_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.ingestion_attempts.id")
+    )
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    stage: Mapped[ModelCallStage] = mapped_column(
+        Enum(ModelCallStage, name="model_call_stage", schema="agent"), nullable=False
+    )
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    finish_reason: Mapped[str | None] = mapped_column(String(80))
+    outcome: Mapped[ModelCallOutcome] = mapped_column(
+        Enum(ModelCallOutcome, name="model_call_outcome", schema="agent"),
+        default=ModelCallOutcome.started,
+        nullable=False,
+    )
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    cache_hit_input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    cache_miss_input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    cache_write_input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    unattributed_input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    reasoning_output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    total_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    usage_available: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    cache_attribution_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class SqlAudit(Base):

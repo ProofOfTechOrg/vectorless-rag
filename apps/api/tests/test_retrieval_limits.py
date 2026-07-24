@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from pytest import MonkeyPatch
 
 from vectorless_rag.config import Settings
-from vectorless_rag.models import Document
+from vectorless_rag.models import Document, ModelCallStage
 from vectorless_rag.retrieval import (
     CandidateDocument,
     CorpusRouter,
@@ -33,8 +33,9 @@ class UnusedLLM:
         user: str,
         *,
         thinking: bool,
+        stage: ModelCallStage,
     ) -> StructuredT:
-        del schema, system, user, thinking
+        del schema, system, user, thinking, stage
         raise AssertionError("the evidence cap test does not invoke the LLM")
 
 
@@ -109,8 +110,9 @@ class SelectionLLM:
         user: str,
         *,
         thinking: bool,
+        stage: ModelCallStage,
     ) -> StructuredT:
-        del thinking
+        del thinking, stage
         self.system = system
         self.user = user
         if schema is not CandidateSelection:
@@ -172,8 +174,9 @@ class SufficiencyOnlyLLM:
         user: str,
         *,
         thinking: bool,
+        stage: ModelCallStage,
     ) -> StructuredT:
-        del system, user, thinking
+        del system, user, thinking, stage
         self.schemas.append(schema)
         if schema is not SufficiencyDecision:
             raise AssertionError("a sole evidence node must be selected without the LLM")

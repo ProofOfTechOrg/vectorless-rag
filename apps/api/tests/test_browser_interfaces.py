@@ -20,7 +20,7 @@ from vectorless_rag.api import (
 )
 from vectorless_rag.auth import Principal
 from vectorless_rag.config import Settings
-from vectorless_rag.models import QueryRun, RunRoute
+from vectorless_rag.models import QueryRun, RunFailureCode, RunRoute
 from vectorless_rag.schemas import ChatRequest
 
 
@@ -118,7 +118,7 @@ async def test_synchronous_chat_commits_failed_run_before_reraising(
     principal = Principal(uuid.uuid4(), "test", frozenset({"chat"}))
     session = _FailingChatSession()
 
-    with pytest.raises(RuntimeError, match="generated SQL failed"):
+    with pytest.raises(HTTPException) as raised:
         await api_module._execute_chat(  # pyright: ignore[reportPrivateUsage]
             request,  # pyright: ignore[reportArgumentType]
             ChatRequest(message="how many docs deal with rag"),
@@ -126,10 +126,13 @@ async def test_synchronous_chat_commits_failed_run_before_reraising(
             session,  # pyright: ignore[reportArgumentType]
         )
 
-    assert session.commits == 1
+    assert raised.value.status_code == 500
+    assert raised.value.detail == "The API could not complete this run."
+    assert session.commits == 2
     assert session.run is not None
     assert session.run.route == RunRoute.sql
-    assert session.run.error == "generated SQL failed"
+    assert session.run.error == "request failed"
+    assert session.run.failure_code == RunFailureCode.request_failed
     assert session.run.insufficient is True
     assert session.run.latency_ms is not None
 

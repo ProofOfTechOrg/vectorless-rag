@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Sequence
 from typing import Any, Protocol, cast
 
 import fitz
@@ -18,7 +19,19 @@ from vectorless_rag.ingestion import (
     sha256_bytes,
     validate_pdf,
 )
-from vectorless_rag.models import Document, DocumentStatus, IngestionJob, JobStatus
+from vectorless_rag.models import (
+    ArtifactAction,
+    Document,
+    DocumentStatus,
+    IndexVersion,
+    IngestionAttempt,
+    IngestionAttemptStatus,
+    IngestionJob,
+    JobStatus,
+    ModelCall,
+    ModelCallOutcome,
+    ModelCallStage,
+)
 from vectorless_rag.pageindex_adapter import PageIndexError
 from vectorless_rag.schemas import DocumentMetadata
 
@@ -73,8 +86,17 @@ class _DocumentRetrySession(_RetrySession):
 
 
 class _ProcessingSession:
-    def __init__(self, document: Document) -> None:
+    def __init__(
+        self,
+        document: Document,
+        *,
+        existing: IndexVersion | None = None,
+        calls: list[ModelCall] | None = None,
+    ) -> None:
         self.document = document
+        self.existing = existing
+        self.calls = calls or []
+        self.added: list[object] = []
 
     async def get(
         self, model: object, identifier: object, *, with_for_update: bool = False
@@ -82,12 +104,27 @@ class _ProcessingSession:
         del model, identifier, with_for_update
         return self.document
 
-    async def scalar(self, statement: object) -> None:
+    async def scalar(self, statement: object) -> IndexVersion | None:
         del statement
-        return None
+        return self.existing
+
+    async def scalars(self, statement: object) -> "_Rows":
+        del statement
+        return _Rows(self.calls)
+
+    def add(self, value: object) -> None:
+        self.added.append(value)
 
     async def flush(self) -> None:
         return None
+
+
+class _Rows:
+    def __init__(self, rows: Sequence[object] | None = None) -> None:
+        self.rows = list(rows or [])
+
+    def all(self) -> list[object]:
+        return self.rows
 
 
 class _Store:
@@ -95,16 +132,45 @@ class _Store:
         del key
         return b"%PDF-private-document"
 
+    async def put_bytes(self, key: str, data: bytes, content_type: str) -> None:
+        del key, data, content_type
+
 
 class _FailingPageIndex:
-    async def index(self, path: object, document_id: str, metadata: object) -> bytes:
-        del path, document_id, metadata
+    async def index(
+        self,
+        path: object,
+        document_id: str,
+        metadata: object,
+        *,
+        ingestion_attempt_id: uuid.UUID,
+        trace_id: str,
+    ) -> bytes:
+        del path, document_id, metadata, ingestion_attempt_id, trace_id
         raise PageIndexError(
             "pageindex_content_filter",
             "The provider rejected PageIndex content under its content policy.",
             attempts=1,
             finish_reason="content_filter",
         )
+
+
+class _SuccessfulPageIndex:
+    def __init__(self) -> None:
+        self.owner: tuple[uuid.UUID, str] | None = None
+
+    async def index(
+        self,
+        path: object,
+        document_id: str,
+        metadata: object,
+        *,
+        ingestion_attempt_id: uuid.UUID,
+        trace_id: str,
+    ) -> bytes:
+        del path, document_id, metadata
+        self.owner = ingestion_attempt_id, trace_id
+        return b'{"artifact":"safe"}'
 
 
 def _document() -> Document:
@@ -131,7 +197,7 @@ def test_pdf_validation_checks_signature_type_and_size() -> None:
         validate_pdf(b"not pdf", "paper.pdf", 100)
     with pytest.raises(UnsupportedPDF, match="exceeds"):
         validate_pdf(b"%PDF-" + b"x" * 100, "paper.pdf", 10)
-    with pytest.raises(UnsupportedPDF, match="only .pdf"):
+    with pytest.raises(UnsupportedPDF, match="Only PDF"):
         validate_pdf(b"%PDF-1.7", "paper.txt", 100)
 
 
@@ -170,6 +236,17 @@ def test_pdf_extraction_reads_embedded_title() -> None:
     assert text == "A text-rich paper page"
     assert page_count == 1
     assert embedded_title == "Embedded Paper Title"
+
+
+def test_pdf_parser_failures_never_persist_raw_parser_diagnostics() -> None:
+    private_fragment = b"%PDF-private-corrupt-fragment"
+
+    with pytest.raises(UnsupportedPDF) as error:
+        extract_first_pages(private_fragment)
+
+    assert error.value.failure_code == "pdf_parsing_failed"
+    assert str(error.value) == "The PDF could not be parsed."
+    assert "private-corrupt-fragment" not in str(error.value)
 
 
 async def test_retry_requires_failed_job_and_no_pending_work() -> None:
@@ -245,6 +322,15 @@ async def test_provider_failures_persist_only_stable_safe_metadata(
         status=JobStatus.running,
         metrics={},
     )
+    attempt = IngestionAttempt(
+        id=uuid.uuid4(),
+        job_id=job.id,
+        attempt_number=1,
+        trace_id=uuid.uuid4().hex,
+        worker_id="test-worker",
+        status=IngestionAttemptStatus.running,
+        artifact_action=ArtifactAction.none,
+    )
 
     async def metadata(*args: object, **kwargs: object) -> tuple[DocumentMetadata, int, float]:
         del args, kwargs
@@ -273,7 +359,7 @@ async def test_provider_failures_persist_only_stable_safe_metadata(
     )
 
     with pytest.raises(PageIndexError):
-        await processor.process(cast(Any, _ProcessingSession(document)), job)
+        await processor.process(cast(Any, _ProcessingSession(document)), job, attempt)
 
     assert job.status == JobStatus.failed
     assert job.metrics["failure_code"] == "pageindex_content_filter"
@@ -283,3 +369,103 @@ async def test_provider_failures_persist_only_stable_safe_metadata(
         "The provider rejected PageIndex content under its content policy."
     )
     assert "private-document" not in repr((job.diagnostic, job.metrics, document.diagnostic))
+
+
+@pytest.mark.parametrize("force", [False, True])
+async def test_index_usage_totals_change_only_when_artifact_is_built(
+    monkeypatch: MonkeyPatch,
+    force: bool,
+) -> None:
+    document = _document()
+    job = IngestionJob(
+        id=uuid.uuid4(),
+        document_id=document.id,
+        status=JobStatus.running,
+        force=force,
+        metrics={},
+    )
+    attempt = IngestionAttempt(
+        id=uuid.uuid4(),
+        job_id=job.id,
+        attempt_number=1,
+        trace_id=uuid.uuid4().hex,
+        worker_id="test-worker",
+        status=IngestionAttemptStatus.running,
+        artifact_action=ArtifactAction.none,
+    )
+    existing = IndexVersion(
+        id=uuid.uuid4(),
+        document_id=document.id,
+        version_key="existing",
+        pageindex_version=Settings().pageindex_version,
+        prompt_version="metadata-v1",
+        model_name="provider/model",
+        artifact_object_key="artifacts/existing.json",
+        artifact_sha256="a" * 64,
+        input_tokens=77,
+        output_tokens=88,
+    )
+    call = ModelCall(
+        id=uuid.uuid4(),
+        ingestion_attempt_id=attempt.id,
+        trace_id=attempt.trace_id,
+        stage=ModelCallStage.ingestion_metadata,
+        model="provider/model",
+        provider_attempt=1,
+        outcome=ModelCallOutcome.completed,
+        input_tokens=12,
+        cache_hit_input_tokens=0,
+        cache_miss_input_tokens=12,
+        cache_write_input_tokens=0,
+        unattributed_input_tokens=0,
+        output_tokens=6,
+        reasoning_output_tokens=0,
+        total_tokens=18,
+        usage_available=True,
+        cache_attribution_complete=True,
+    )
+
+    async def metadata(*args: object, **kwargs: object) -> tuple[DocumentMetadata, int, float]:
+        del args, kwargs
+        return (
+            DocumentMetadata(
+                title="Paper",
+                authors=[],
+                abstract="Abstract",
+                topics=[],
+                description="Description",
+            ),
+            2,
+            1.0,
+        )
+
+    async def inline_to_thread(function: Any, *args: Any, **kwargs: Any) -> Any:
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr("vectorless_rag.ingestion.extract_metadata", metadata)
+    monkeypatch.setattr("vectorless_rag.ingestion.asyncio.to_thread", inline_to_thread)
+    pageindex = _SuccessfulPageIndex()
+    processor = IngestionProcessor(
+        Settings(),
+        cast(Any, _Store()),
+        cast(Any, object()),
+        cast(Any, pageindex),
+    )
+
+    await processor.process(
+        cast(Any, _ProcessingSession(document, existing=existing, calls=[call])),
+        job,
+        attempt,
+    )
+
+    assert job.status == JobStatus.completed
+    if force:
+        assert attempt.artifact_action == ArtifactAction.rebuilt
+        assert existing.input_tokens == 12
+        assert existing.output_tokens == 6
+        assert pageindex.owner == (attempt.id, attempt.trace_id)
+    else:
+        assert attempt.artifact_action == ArtifactAction.reused
+        assert existing.input_tokens == 77
+        assert existing.output_tokens == 88
+        assert pageindex.owner is None

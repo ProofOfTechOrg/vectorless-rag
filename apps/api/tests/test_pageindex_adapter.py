@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,24 @@ from vectorless_rag.pageindex_adapter import (
     normalize_artifact,
 )
 from vectorless_rag.run_pageindex import build_failure_report
+
+_ATTEMPT_ID = uuid.uuid4()
+_TRACE_ID = uuid.uuid4().hex
+
+
+async def _index(
+    adapter: PageIndexAdapter,
+    source: Path,
+    document_id: str,
+    metadata: dict[str, Any],
+) -> bytes:
+    return await adapter.index(
+        source,
+        document_id,
+        metadata,
+        ingestion_attempt_id=_ATTEMPT_ID,
+        trace_id=_TRACE_ID,
+    )
 
 
 class _Process:
@@ -151,7 +170,8 @@ async def test_single_page_builds_deterministic_artifact_without_pageindex(
     )
     adapter = PageIndexAdapter(Settings(pageindex_work_dir=tmp_path / "work"))
 
-    raw = await adapter.index(
+    raw = await _index(
+        adapter,
         source,
         "document-id",
         {"title": "One page", "description": "A verification document"},
@@ -179,7 +199,9 @@ async def test_subprocess_success_reads_only_the_artifact(
     process = _Process(0, stdout=b"private document output", stderr=b"private error output")
 
     async def create_process(*args: object, **kwargs: object) -> _Process:
-        del args
+        command = [str(value) for value in args]
+        assert command[command.index("--ingestion-attempt-id") + 1] == str(_ATTEMPT_ID)
+        assert command[command.index("--trace-id") + 1] == _TRACE_ID
         assert kwargs["stdout"] is asyncio.subprocess.DEVNULL
         assert kwargs["stderr"] is asyncio.subprocess.DEVNULL
         workspace = Path(str(kwargs["cwd"]))
@@ -193,7 +215,7 @@ async def test_subprocess_success_reads_only_the_artifact(
     )
     adapter = PageIndexAdapter(Settings(pageindex_work_dir=tmp_path / "work"))
 
-    artifact = json.loads(await adapter.index(source, "document-id", {"title": "Paper"}))
+    artifact = json.loads(await _index(adapter, source, "document-id", {"title": "Paper"}))
 
     assert artifact["tree"][0]["title"] == "Section"
     assert process.waited
@@ -231,7 +253,7 @@ async def test_failure_report_is_allowlisted_and_raw_pipes_are_never_exposed(
     adapter = PageIndexAdapter(Settings(pageindex_work_dir=tmp_path / "work"))
 
     with pytest.raises(PageIndexError) as error:
-        await adapter.index(source, "document-id", {"title": "Paper"})
+        await _index(adapter, source, "document-id", {"title": "Paper"})
 
     assert error.value.failure_code == "pageindex_content_filter"
     assert error.value.finish_reason == "content_filter"
@@ -258,10 +280,10 @@ async def test_missing_failure_report_and_artifact_use_safe_diagnostics(
     adapter = PageIndexAdapter(Settings(pageindex_work_dir=tmp_path / "work"))
 
     with pytest.raises(PageIndexError, match="isolated runtime") as failed:
-        await adapter.index(source, "first", {"title": "Paper"})
+        await _index(adapter, source, "first", {"title": "Paper"})
     assert failed.value.failure_code == "pageindex_child_failed"
     with pytest.raises(PageIndexError, match="without producing") as missing:
-        await adapter.index(source, "second", {"title": "Paper"})
+        await _index(adapter, source, "second", {"title": "Paper"})
     assert missing.value.failure_code == "pageindex_missing_artifact"
 
 
@@ -297,7 +319,7 @@ async def test_timeout_terminates_then_forces_kill_and_reaps(
     adapter = PageIndexAdapter(Settings(pageindex_work_dir=tmp_path / "work"))
 
     with pytest.raises(PageIndexError) as error:
-        await adapter.index(source, "document-id", {"title": "Paper"})
+        await _index(adapter, source, "document-id", {"title": "Paper"})
 
     assert error.value.failure_code == "pageindex_timeout"
     assert process.terminated
@@ -321,7 +343,7 @@ async def test_cancellation_terminates_and_reaps_before_propagating(
         "vectorless_rag.pageindex_adapter.asyncio.create_subprocess_exec", create_process
     )
     adapter = PageIndexAdapter(Settings(pageindex_work_dir=tmp_path / "work"))
-    task = asyncio.create_task(adapter.index(source, "document-id", {"title": "Paper"}))
+    task = asyncio.create_task(_index(adapter, source, "document-id", {"title": "Paper"}))
     await process.started.wait()
     task.cancel()
 

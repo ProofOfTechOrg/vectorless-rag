@@ -14,7 +14,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from vectorless_rag.config import Settings
 from vectorless_rag.db import claim_ingestion_job, make_engine
-from vectorless_rag.models import Document, DocumentStatus, IngestionJob, JobStatus
+from vectorless_rag.models import (
+    Document,
+    DocumentStatus,
+    IngestionAttempt,
+    IngestionAttemptStatus,
+    IngestionJob,
+    JobStatus,
+    ModelCallStage,
+)
 from vectorless_rag.retrieval import CorpusRouter
 from vectorless_rag.schemas import MetadataConstraints
 from vectorless_rag.sql_guard import PostgreSQLAdapter, validate_sql
@@ -32,8 +40,9 @@ class _UnusedRouterLLM:
         user: str,
         *,
         thinking: bool,
+        stage: ModelCallStage,
     ) -> StructuredT:
-        del schema, system, user, thinking
+        del schema, system, user, thinking, stage
         raise AssertionError("candidate lookup does not invoke the LLM")
 
 
@@ -77,6 +86,15 @@ async def test_migration_search_reader_permissions_and_guarded_execution() -> No
     reader_sync = READER_URL.replace("postgresql+psycopg://", "postgresql://")
     try:
         with psycopg.connect(owner_sync, autocommit=True) as connection:
+            privileges = connection.execute(
+                """SELECT
+                     has_table_privilege('rag_app', 'agent.ingestion_attempts', 'INSERT'),
+                     has_table_privilege('rag_app', 'agent.model_calls', 'INSERT'),
+                     has_table_privilege('rag_app', 'agent.model_calls', 'UPDATE'),
+                     has_table_privilege('rag_reader', 'agent.ingestion_attempts', 'SELECT'),
+                     has_table_privilege('rag_reader', 'agent.model_calls', 'SELECT')"""
+            ).fetchone()
+            assert privileges == (True, True, True, False, False)
             connection.execute(
                 """INSERT INTO agent.documents
                    (id, sha256, original_filename, pdf_object_key, title, abstract, topics, status)
@@ -358,22 +376,49 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
                 ]
             )
             session.add_all(jobs)
+            session.add_all(
+                [
+                    IngestionAttempt(
+                        id=uuid.uuid4(),
+                        job_id=job.id,
+                        attempt_number=job.attempts,
+                        trace_id=uuid.uuid4().hex,
+                        worker_id=job.worker_id or f"prior-worker-{index}",
+                        status=IngestionAttemptStatus.running,
+                        started_at=job.started_at or now,
+                    )
+                    for index, job in enumerate(jobs[2:5], 2)
+                ]
+            )
             await session.commit()
 
         async with sessions() as first, sessions() as second:
             first_claim = await claim_ingestion_job(first, "worker-1", settings)
             second_claim = await claim_ingestion_job(second, "worker-2", settings)
-            assert first_claim is not None and first_claim.id == jobs[0].id
-            assert second_claim is not None and second_claim.id == jobs[1].id
-            assert first_claim.attempts == 1
-            assert second_claim.attempts == 1
+            assert first_claim is not None and first_claim.job_id == jobs[0].id
+            assert second_claim is not None and second_claim.job_id == jobs[1].id
+            assert first_claim.attempt_number == 1
+            assert second_claim.attempt_number == 1
             await first.commit()
             await second.commit()
 
         async with sessions() as session:
             stale_claim = await claim_ingestion_job(session, "worker-3", settings)
-            assert stale_claim is not None and stale_claim.id == jobs[2].id
-            assert stale_claim.attempts == 2
+            assert stale_claim is not None and stale_claim.job_id == jobs[2].id
+            assert stale_claim.attempt_number == 2
+            stale_attempts = list(
+                (
+                    await session.scalars(
+                        select(IngestionAttempt)
+                        .where(IngestionAttempt.job_id == jobs[2].id)
+                        .order_by(IngestionAttempt.attempt_number)
+                    )
+                ).all()
+            )
+            assert [attempt.status for attempt in stale_attempts] == [
+                IngestionAttemptStatus.abandoned,
+                IngestionAttemptStatus.running,
+            ]
             await session.commit()
 
         async with sessions() as session:
@@ -386,6 +431,11 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
             assert failed_job.status == JobStatus.failed
             assert failed_job.metrics["failure_code"] == "ingestion_recovery_exhausted"
             assert document is not None and document.status == DocumentStatus.failed
+            exhausted_attempt = await session.scalar(
+                select(IngestionAttempt).where(IngestionAttempt.job_id == jobs[3].id)
+            )
+            assert exhausted_attempt is not None
+            assert exhausted_attempt.status == IngestionAttemptStatus.failed
 
         locked_job = IngestionJob(
             id=uuid.uuid4(),
@@ -411,7 +461,7 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
                 select(IngestionJob).where(IngestionJob.id == locked_job.id).with_for_update()
             )
             skipped_claim = await claim_ingestion_job(claiming, "worker-5", settings)
-            assert skipped_claim is not None and skipped_claim.id == fallback_job.id
+            assert skipped_claim is not None and skipped_claim.job_id == fallback_job.id
             await claiming.commit()
             await locking.rollback()
 
@@ -423,6 +473,13 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
             assert still_locked_job is not None and still_locked_job.attempts == 1
     finally:
         async with sessions() as session:
+            await session.execute(
+                delete(IngestionAttempt).where(
+                    IngestionAttempt.job_id.in_(
+                        select(IngestionJob.id).where(IngestionJob.document_id.in_(document_ids))
+                    )
+                )
+            )
             await session.execute(
                 delete(IngestionJob).where(IngestionJob.document_id.in_(document_ids))
             )

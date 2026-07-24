@@ -20,7 +20,7 @@ from vectorless_rag.graph import (
     format_inline_citations,
     remove_inline_citations,
 )
-from vectorless_rag.models import QueryRun, RunRoute, SqlAudit
+from vectorless_rag.models import ModelCallStage, QueryRun, RunRoute, SqlAudit
 from vectorless_rag.retrieval import RetrievalResult
 from vectorless_rag.schemas import ChatRequest, Evidence, RouteDecision, SQLPlan, SynthesisResult
 from vectorless_rag.sql_guard import SQLRejected, SQLResult, ValidatedSQL, validate_sql
@@ -109,8 +109,9 @@ class _LLM:
         user: str,
         *,
         thinking: bool,
+        stage: ModelCallStage,
     ) -> RouteDecision:
-        del schema, thinking
+        del schema, thinking, stage
         self.system = system
         self.user = user
         return RouteDecision(
@@ -306,8 +307,9 @@ class _SQLLLM:
         user: str,
         *,
         thinking: bool,
+        stage: ModelCallStage,
     ) -> RouteDecision | SQLPlan | SynthesisResult:
-        del thinking
+        del thinking, stage
         self.system_prompts.append(system)
         self.user_prompts.append(user)
         self.schemas.append(schema)

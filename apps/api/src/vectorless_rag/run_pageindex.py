@@ -11,8 +11,11 @@ import json
 import re
 import runpy
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
+
+from vectorless_rag.usage import UsageOwner, usage_context
 
 _SAFE_VALUE = re.compile(r"^[a-zA-Z0-9_.-]{1,80}$")
 _SAFE_DIAGNOSTICS = {
@@ -32,6 +35,7 @@ _SAFE_DIAGNOSTICS = {
     "pageindex_provider_rejected": "The PageIndex provider rejected the request.",
     "pageindex_transient_provider_error": ("The PageIndex provider request failed transiently."),
     "pageindex_unexpected_tool_call": "PageIndex received an unexpected tool call.",
+    "usage_persistence_failed": "Model usage accounting could not be persisted.",
 }
 
 
@@ -58,10 +62,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--pageindex-script", type=Path, required=True)
     parser.add_argument("--failure-report", type=Path, required=True)
+    parser.add_argument("--ingestion-attempt-id", type=uuid.UUID, required=True)
+    parser.add_argument("--trace-id", required=True)
     known, remaining = parser.parse_known_args()
     sys.argv = [str(known.pageindex_script), *remaining]
     try:
-        runpy.run_path(str(known.pageindex_script), run_name="__main__")
+        owner = UsageOwner(
+            trace_id=known.trace_id,
+            ingestion_attempt_id=known.ingestion_attempt_id,
+        )
+        with usage_context(owner):
+            runpy.run_path(str(known.pageindex_script), run_name="__main__")
     except BaseException as error:
         known.failure_report.write_text(
             json.dumps(build_failure_report(error), separators=(",", ":")), encoding="utf-8"

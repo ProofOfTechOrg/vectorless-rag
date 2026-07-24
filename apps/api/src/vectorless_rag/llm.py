@@ -9,7 +9,13 @@ from langchain_deepseek import ChatDeepSeek
 from pydantic import BaseModel, SecretStr
 
 from vectorless_rag.config import Settings
+from vectorless_rag.models import ModelCallOutcome, ModelCallStage
 from vectorless_rag.observability import Observability
+from vectorless_rag.usage import (
+    ModelCallLedger,
+    UsagePersistenceError,
+    normalize_token_usage,
+)
 
 StructuredT = TypeVar("StructuredT", bound=BaseModel)
 FORMAT_CORRECTION = "\nYour prior response was invalid or empty. Return only the required schema."
@@ -37,7 +43,13 @@ class StructuredOutputError(LLMError):
 
 class StructuredLLM(Protocol):
     async def structured(
-        self, schema: type[StructuredT], system: str, user: str, *, thinking: bool
+        self,
+        schema: type[StructuredT],
+        system: str,
+        user: str,
+        *,
+        thinking: bool,
+        stage: ModelCallStage,
     ) -> StructuredT: ...
 
 
@@ -76,12 +88,18 @@ def _raw_output(raw: object) -> str:
 
 
 class DeepSeekLLM:
-    def __init__(self, settings: Settings, observability: Observability | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        observability: Observability | None = None,
+        ledger: ModelCallLedger | None = None,
+    ) -> None:
         if settings.deepseek_api_key is None:
             raise RuntimeError("DEEPSEEK_API_KEY is required for LLM operations")
         self.settings = settings
         self.api_key: SecretStr = settings.deepseek_api_key
         self.observability = observability or Observability(settings)
+        self.ledger = ledger or ModelCallLedger(settings.database_url)
 
     def _client(self, thinking: bool) -> ChatDeepSeek:
         extra_body: dict[str, object] = {
@@ -102,6 +120,7 @@ class DeepSeekLLM:
         user: str,
         thinking: bool,
         *,
+        stage: ModelCallStage,
         attempt: int = 1,
     ) -> StructuredT:
         method = "json_mode" if thinking else "function_calling"
@@ -114,6 +133,7 @@ class DeepSeekLLM:
             schema, method=method, include_raw=True
         )
         prompt_fingerprint_source = f"{system}\0{user}"
+        call = await self.ledger.astart(stage, self.settings.deepseek_model, attempt)
         observation = self.observability.generation(
             "deepseek-structured",
             self.settings.deepseek_model,
@@ -123,30 +143,52 @@ class DeepSeekLLM:
         try:
             response = await runnable.ainvoke([("system", system), ("human", user)], config={})
         except Exception:
-            observation.fail()
+            try:
+                await self.ledger.afinish(
+                    call,
+                    ModelCallOutcome.failed,
+                    None,
+                    normalize_token_usage(None),
+                )
+            finally:
+                observation.fail()
             raise
 
         if isinstance(response, schema):
             encoded = response.model_dump_json()
-            observation.finish(encoded, finish_reason=None)
+            usage = normalize_token_usage(None)
+            try:
+                await self.ledger.afinish(call, ModelCallOutcome.completed, None, usage)
+            finally:
+                observation.finish(encoded, finish_reason=None, usage=usage)
             return response
         if not isinstance(response, dict):
-            observation.finish(_raw_output(response), finish_reason=_finish_reason(response))
+            finish_reason = _finish_reason(response)
+            usage = normalize_token_usage(getattr(response, "usage_metadata", None))
+            try:
+                await self.ledger.afinish(call, ModelCallOutcome.failed, finish_reason, usage)
+            finally:
+                observation.fail(
+                    output=_raw_output(response), finish_reason=finish_reason, usage=usage
+                )
             raise StructuredOutputError(
                 "structured_output_invalid",
                 "The model returned an invalid structured response.",
                 attempts=attempt,
-                finish_reason=_finish_reason(response),
+                finish_reason=finish_reason,
             )
 
         payload = response
         raw = payload.get("raw")
         finish_reason = _finish_reason(raw)
-        usage = getattr(raw, "usage_metadata", None)
+        usage = normalize_token_usage(getattr(raw, "usage_metadata", None))
         parsed = payload.get("parsed")
         parsing_error = payload.get("parsing_error")
         if parsing_error is not None or parsed is None:
-            observation.finish(_raw_output(raw), finish_reason=finish_reason, usage=usage)
+            try:
+                await self.ledger.afinish(call, ModelCallOutcome.failed, finish_reason, usage)
+            finally:
+                observation.fail(output=_raw_output(raw), finish_reason=finish_reason, usage=usage)
             raise StructuredOutputError(
                 "structured_output_invalid",
                 "The model returned an invalid structured response.",
@@ -156,25 +198,45 @@ class DeepSeekLLM:
         try:
             result = parsed if isinstance(parsed, schema) else schema.model_validate(parsed)
         except (TypeError, ValueError) as error:
-            observation.finish(_raw_output(raw), finish_reason=finish_reason, usage=usage)
+            try:
+                await self.ledger.afinish(call, ModelCallOutcome.failed, finish_reason, usage)
+            finally:
+                observation.fail(output=_raw_output(raw), finish_reason=finish_reason, usage=usage)
             raise StructuredOutputError(
                 "structured_output_invalid",
                 "The model returned an invalid structured response.",
                 attempts=attempt,
                 finish_reason=finish_reason,
             ) from error
-        observation.finish(result.model_dump_json(), finish_reason=finish_reason, usage=usage)
+        try:
+            await self.ledger.afinish(call, ModelCallOutcome.completed, finish_reason, usage)
+        finally:
+            observation.finish(result.model_dump_json(), finish_reason=finish_reason, usage=usage)
         return result
 
     async def structured(
-        self, schema: type[StructuredT], system: str, user: str, *, thinking: bool
+        self,
+        schema: type[StructuredT],
+        system: str,
+        user: str,
+        *,
+        thinking: bool,
+        stage: ModelCallStage,
     ) -> StructuredT:
         corrected = False
         last_error: Exception | None = None
         for attempt in range(1, 4):
             prompt = user + (FORMAT_CORRECTION if corrected else "")
             try:
-                return await self._invoke(schema, system, prompt, thinking, attempt=attempt)
+                return await self._invoke(
+                    schema, system, prompt, thinking, stage=stage, attempt=attempt
+                )
+            except UsagePersistenceError as error:
+                raise LLMError(
+                    UsagePersistenceError.failure_code,
+                    UsagePersistenceError.diagnostic,
+                    attempts=attempt,
+                ) from error
             except StructuredOutputError as error:
                 if error.finish_reason == "content_filter":
                     raise LLMError(

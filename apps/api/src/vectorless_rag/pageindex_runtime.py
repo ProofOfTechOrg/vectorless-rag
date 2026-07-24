@@ -22,7 +22,9 @@ from litellm.exceptions import (
 )
 
 from vectorless_rag.config import Settings
+from vectorless_rag.models import ModelCallOutcome, ModelCallStage
 from vectorless_rag.observability import Observability
+from vectorless_rag.usage import ModelCallLedger, UsagePersistenceError, normalize_token_usage
 
 FORMAT_CORRECTION = (
     "\nYour prior response was empty or invalid. Return only the requested format without prose."
@@ -176,6 +178,7 @@ class PageIndexRuntime:
         async_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         random_value: Callable[[], float] = random.random,
         observability: Observability | None = None,
+        ledger: ModelCallLedger | None = None,
     ) -> None:
         self.settings = settings
         self.completion = completion
@@ -184,6 +187,7 @@ class PageIndexRuntime:
         self.async_sleep = async_sleep
         self.random_value = random_value
         self.observability = observability or Observability(settings)
+        self.ledger = ledger or ModelCallLedger(settings.database_url)
         litellm.drop_params = True
 
     def _messages(
@@ -325,6 +329,7 @@ class PageIndexRuntime:
             current_prompt = prompt + (FORMAT_CORRECTION if corrected else "")
             messages = self._messages(current_prompt, chat_history)
             serialized_prompt = json.dumps(messages, sort_keys=True, separators=(",", ":"))
+            call = self.ledger.start(ModelCallStage.pageindex_generation, provider_model, attempt)
             observation = self.observability.generation(
                 "pageindex-completion", provider_model, serialized_prompt, attempt=attempt
             )
@@ -339,16 +344,36 @@ class PageIndexRuntime:
                 content, finish_reason, usage = self._read_response(
                     response, attempt=attempt, expect_json=expect_json
                 )
-                observation.finish(content, finish_reason=finish_reason, usage=usage)
+                normalized_usage = normalize_token_usage(usage)
+                try:
+                    self.ledger.finish(
+                        call,
+                        ModelCallOutcome.completed,
+                        finish_reason,
+                        normalized_usage,
+                    )
+                finally:
+                    observation.finish(content, finish_reason=finish_reason, usage=normalized_usage)
                 pageindex_reason = "max_output_reached" if finish_reason == "length" else "finished"
                 return (content, pageindex_reason) if return_finish_reason else content
+            except UsagePersistenceError:
+                raise
             except Exception as error:
                 safe_error = self._safe_error(error, attempt)
-                observation.fail(
-                    finish_reason=safe_error.finish_reason,
-                    output=safe_error.telemetry_output,
-                    usage=safe_error.telemetry_usage,
-                )
+                normalized_usage = normalize_token_usage(safe_error.telemetry_usage)
+                try:
+                    self.ledger.finish(
+                        call,
+                        ModelCallOutcome.failed,
+                        safe_error.finish_reason,
+                        normalized_usage,
+                    )
+                finally:
+                    observation.fail(
+                        finish_reason=safe_error.finish_reason,
+                        output=safe_error.telemetry_output,
+                        usage=normalized_usage,
+                    )
                 last_error = safe_error
                 if not self._retryable(error):
                     raise safe_error from error
@@ -374,6 +399,9 @@ class PageIndexRuntime:
             current_prompt = prompt + (FORMAT_CORRECTION if corrected else "")
             messages = self._messages(current_prompt, None)
             serialized_prompt = json.dumps(messages, sort_keys=True, separators=(",", ":"))
+            call = await self.ledger.astart(
+                ModelCallStage.pageindex_generation, provider_model, attempt
+            )
             observation = self.observability.generation(
                 "pageindex-completion", provider_model, serialized_prompt, attempt=attempt
             )
@@ -388,15 +416,35 @@ class PageIndexRuntime:
                 content, finish_reason, usage = self._read_response(
                     response, attempt=attempt, expect_json=expect_json
                 )
-                observation.finish(content, finish_reason=finish_reason, usage=usage)
+                normalized_usage = normalize_token_usage(usage)
+                try:
+                    await self.ledger.afinish(
+                        call,
+                        ModelCallOutcome.completed,
+                        finish_reason,
+                        normalized_usage,
+                    )
+                finally:
+                    observation.finish(content, finish_reason=finish_reason, usage=normalized_usage)
                 return content
+            except UsagePersistenceError:
+                raise
             except Exception as error:
                 safe_error = self._safe_error(error, attempt)
-                observation.fail(
-                    finish_reason=safe_error.finish_reason,
-                    output=safe_error.telemetry_output,
-                    usage=safe_error.telemetry_usage,
-                )
+                normalized_usage = normalize_token_usage(safe_error.telemetry_usage)
+                try:
+                    await self.ledger.afinish(
+                        call,
+                        ModelCallOutcome.failed,
+                        safe_error.finish_reason,
+                        normalized_usage,
+                    )
+                finally:
+                    observation.fail(
+                        finish_reason=safe_error.finish_reason,
+                        output=safe_error.telemetry_output,
+                        usage=normalized_usage,
+                    )
                 last_error = safe_error
                 if not self._retryable(error):
                     raise safe_error from error

@@ -15,6 +15,7 @@ existingSecret: vectorless-rag-secrets
 release: dev
 deepseekModel: deepseek-v4-pro
 deepseekInputCostPerMillionUsd: ""
+deepseekCacheHitInputCostPerMillionUsd: ""
 deepseekOutputCostPerMillionUsd: ""
 pageindexModel: deepseek/deepseek-v4-pro
 pageindexLlmMaxAttempts: 3

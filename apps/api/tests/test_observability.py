@@ -57,6 +57,27 @@ class _LangfuseClient:
         return self.handle
 
 
+class _ScoreClient:
+    def __init__(self) -> None:
+        self.payload: dict[str, Any] | None = None
+
+    def create_score(self, **kwargs: Any) -> None:
+        self.payload = kwargs
+
+
+def test_score_comments_are_fingerprinted_before_langfuse() -> None:
+    private_comment = "private user feedback"
+    client = _ScoreClient()
+    telemetry = Observability(Settings())
+    telemetry.client = cast(Any, client)
+
+    telemetry.score("trace", "user_feedback", 1, private_comment)
+
+    assert client.payload is not None
+    assert private_comment not in repr(client.payload)
+    assert '"bytes":21' in str(client.payload["comment"])
+
+
 def test_native_generation_telemetry_contains_only_hashes_and_normalized_tokens() -> None:
     prompt = "private prompt with api-key-secret"
     response = "private response with reasoning_content and cache_read_input_tokens"
@@ -73,8 +94,9 @@ def test_native_generation_telemetry_contains_only_hashes_and_normalized_tokens(
             "prompt_tokens": 11,
             "completion_tokens": 7,
             "total_tokens": 18,
-            "cache_read_input_tokens": 999,
-            "reasoning_tokens": 888,
+            "cache_read_input_tokens": 4,
+            "cache_creation_input_tokens": 2,
+            "reasoning_tokens": 3,
         },
     )
 
@@ -88,7 +110,16 @@ def test_native_generation_telemetry_contains_only_hashes_and_normalized_tokens(
     assert handle.update_payload == {
         "output": content_fingerprint(response),
         "metadata": {"attempt": 2, "finish_reason": "stop"},
-        "usage_details": {"input": 11, "output": 7, "total": 18},
+        "usage_details": {
+            "input": 11,
+            "cache_read_input_tokens": 4,
+            "cache_miss_input_tokens": 7,
+            "cache_write_input_tokens": 2,
+            "unattributed_input_tokens": 0,
+            "output": 7,
+            "reasoning_output_tokens": 3,
+            "total": 18,
+        },
     }
     assert handle.ended
     serialized = repr((client.start_payload, handle.update_payload))
@@ -97,15 +128,23 @@ def test_native_generation_telemetry_contains_only_hashes_and_normalized_tokens(
         response,
         "api-key-secret",
         "reasoning_content",
-        "cache_read_input_tokens",
     ):
         assert forbidden not in serialized
 
 
-def test_token_normalization_derives_total_without_leaking_buckets() -> None:
+def test_token_normalization_preserves_valid_buckets_and_repairs_invalid_partitions() -> None:
     assert normalized_token_usage(
         {"input_tokens": 3, "output_tokens": 4, "cache_creation_input_tokens": 99}
-    ) == {"input": 3, "output": 4, "total": 7}
+    ) == {
+        "input": 3,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "unattributed_input_tokens": 3,
+        "output": 4,
+        "reasoning_output_tokens": 0,
+        "total": 7,
+    }
 
 
 def test_failed_generation_hashes_provider_output_and_normalizes_available_usage() -> None:
@@ -125,6 +164,15 @@ def test_failed_generation_hashes_provider_output_and_normalizes_available_usage
         "metadata": {"attempt": 3, "finish_reason": "stop"},
         "level": "ERROR",
         "output": content_fingerprint(response),
-        "usage_details": {"input": 5, "output": 2, "total": 7},
+        "usage_details": {
+            "input": 5,
+            "cache_read_input_tokens": 0,
+            "cache_miss_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "unattributed_input_tokens": 5,
+            "output": 2,
+            "reasoning_output_tokens": 0,
+            "total": 7,
+        },
     }
     assert response not in repr(handle.update_payload)

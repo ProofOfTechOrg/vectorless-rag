@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from langchain_core.messages import AIMessage
@@ -8,8 +9,14 @@ from pytest import MonkeyPatch, raises
 
 from vectorless_rag.config import Settings
 from vectorless_rag.llm import DeepSeekLLM, LLMError, StructuredOutputError
-from vectorless_rag.models import RunRoute
+from vectorless_rag.models import ModelCallOutcome, ModelCallStage, RunRoute
 from vectorless_rag.schemas import RouteDecision
+from vectorless_rag.usage import (
+    StartedModelCall,
+    TokenUsage,
+    UsageOwner,
+    UsagePersistenceError,
+)
 
 
 class _Runnable:
@@ -19,6 +26,10 @@ class _Runnable:
     async def ainvoke(
         self, messages: list[tuple[str, str]], *, config: object
     ) -> dict[str, object]:
+        events = self.calls.get("ledger_events")
+        if isinstance(events, list):
+            assert events and events[-1][0] == "started"
+        self.calls["provider_invocations"] = int(self.calls.get("provider_invocations", 0)) + 1
         self.calls["messages"] = messages
         self.calls["config"] = config
         parsed = RouteDecision(
@@ -50,6 +61,38 @@ class _Client:
         return _Runnable(self.calls)
 
 
+class _Ledger:
+    def __init__(self, calls: dict[str, Any], *, fail_finalize: bool = False) -> None:
+        self.calls = calls
+        self.fail_finalize = fail_finalize
+
+    async def astart(
+        self, stage: ModelCallStage, model: str, provider_attempt: int
+    ) -> StartedModelCall:
+        call = StartedModelCall(
+            uuid.uuid4(),
+            UsageOwner(trace_id=uuid.uuid4().hex, query_run_id=uuid.uuid4()),
+            stage,
+            model,
+            provider_attempt,
+        )
+        events: list[tuple[object, ...]] = self.calls.setdefault("ledger_events", [])
+        events.append(("started", call))
+        return call
+
+    async def afinish(
+        self,
+        call: StartedModelCall | None,
+        outcome: ModelCallOutcome,
+        finish_reason: str | None,
+        usage: TokenUsage,
+    ) -> None:
+        if self.fail_finalize:
+            raise UsagePersistenceError
+        events: list[tuple[object, ...]] = self.calls.setdefault("ledger_events", [])
+        events.append(("finished", call, outcome, finish_reason, usage))
+
+
 async def test_thinking_structured_output_uses_json_mode(monkeypatch: MonkeyPatch) -> None:
     llm = DeepSeekLLM(Settings(deepseek_api_key=SecretStr("test-key")))
     calls: dict[str, Any] = {}
@@ -61,7 +104,11 @@ async def test_thinking_structured_output_uses_json_mode(monkeypatch: MonkeyPatc
     monkeypatch.setattr(llm, "_client", client)
 
     result = await llm._invoke(  # pyright: ignore[reportPrivateUsage]
-        RouteDecision, "Route this request.", "paper titles", thinking=True
+        RouteDecision,
+        "Route this request.",
+        "paper titles",
+        thinking=True,
+        stage=ModelCallStage.query_route,
     )
 
     assert result.route == RunRoute.sql
@@ -85,11 +132,74 @@ async def test_non_thinking_structured_output_keeps_function_calling(
     monkeypatch.setattr(llm, "_client", client)
 
     await llm._invoke(  # pyright: ignore[reportPrivateUsage]
-        RouteDecision, "Route this request.", "paper titles", thinking=False
+        RouteDecision,
+        "Route this request.",
+        "paper titles",
+        thinking=False,
+        stage=ModelCallStage.query_route,
     )
 
     assert calls["method"] == "function_calling"
     assert calls["messages"][0][1] == "Route this request."
+
+
+async def test_usage_row_starts_before_provider_and_same_row_is_finalized(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    calls: dict[str, Any] = {}
+    llm = DeepSeekLLM(
+        Settings(deepseek_api_key=SecretStr("test-key")),
+        ledger=_Ledger(calls),  # pyright: ignore[reportArgumentType]
+    )
+
+    def client(thinking: bool) -> _Client:
+        del thinking
+        return _Client(calls)
+
+    monkeypatch.setattr(llm, "_client", client)
+
+    await llm.structured(
+        RouteDecision,
+        "system",
+        "private prompt",
+        thinking=False,
+        stage=ModelCallStage.query_route,
+    )
+
+    events = calls["ledger_events"]
+    assert events[0][0] == "started"
+    assert events[1][0] == "finished"
+    assert events[1][1] is events[0][1]
+    assert events[1][2] == ModelCallOutcome.completed
+    assert calls["provider_invocations"] == 1
+
+
+async def test_usage_finalize_failure_never_retries_provider(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    calls: dict[str, Any] = {}
+    llm = DeepSeekLLM(
+        Settings(deepseek_api_key=SecretStr("test-key")),
+        ledger=_Ledger(calls, fail_finalize=True),  # pyright: ignore[reportArgumentType]
+    )
+
+    def client(thinking: bool) -> _Client:
+        del thinking
+        return _Client(calls)
+
+    monkeypatch.setattr(llm, "_client", client)
+
+    with raises(LLMError) as error:
+        await llm.structured(
+            RouteDecision,
+            "system",
+            "private prompt",
+            thinking=False,
+            stage=ModelCallStage.query_route,
+        )
+
+    assert error.value.failure_code == "usage_persistence_failed"
+    assert calls["provider_invocations"] == 1
 
 
 async def test_deterministic_provider_rejection_is_sanitized_without_retry(
@@ -107,7 +217,13 @@ async def test_deterministic_provider_rejection_is_sanitized_without_retry(
     monkeypatch.setattr(llm, "_invoke", reject)
 
     with raises(LLMError) as error:
-        await llm.structured(RouteDecision, "system", "private prompt", thinking=False)
+        await llm.structured(
+            RouteDecision,
+            "system",
+            "private prompt",
+            thinking=False,
+            stage=ModelCallStage.query_route,
+        )
 
     assert error.value.failure_code == "llm_provider_rejected"
     assert error.value.attempts == 1
@@ -133,7 +249,13 @@ async def test_content_filter_is_not_retried(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setattr(llm, "_invoke", filtered)
 
     with raises(LLMError) as error:
-        await llm.structured(RouteDecision, "system", "private prompt", thinking=False)
+        await llm.structured(
+            RouteDecision,
+            "system",
+            "private prompt",
+            thinking=False,
+            stage=ModelCallStage.query_route,
+        )
 
     assert error.value.failure_code == "llm_content_filter"
     assert error.value.finish_reason == "content_filter"

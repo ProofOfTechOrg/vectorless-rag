@@ -98,6 +98,7 @@ spec:
   valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: deepseek-api-key}}
 - {name: DEEPSEEK_MODEL, value: {{ .Values.deepseekModel | quote }}}
 - {name: DEEPSEEK_INPUT_COST_PER_MILLION_USD, value: {{ .Values.deepseekInputCostPerMillionUsd | quote }}}
+- {name: DEEPSEEK_CACHE_HIT_INPUT_COST_PER_MILLION_USD, value: {{ .Values.deepseekCacheHitInputCostPerMillionUsd | quote }}}
 - {name: DEEPSEEK_OUTPUT_COST_PER_MILLION_USD, value: {{ .Values.deepseekOutputCostPerMillionUsd | quote }}}
 - {name: PAGEINDEX_MODEL, value: {{ .Values.pageindexModel | quote }}}
 - {name: PAGEINDEX_LLM_MAX_ATTEMPTS, value: {{ .Values.pageindexLlmMaxAttempts | quote }}}
