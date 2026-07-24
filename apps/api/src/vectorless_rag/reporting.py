@@ -10,6 +10,7 @@ from typing import cast
 
 import fitz
 
+from vectorless_rag.graph import is_static_capability_request
 from vectorless_rag.models import (
     ArtifactAction,
     Document,
@@ -20,7 +21,10 @@ from vectorless_rag.models import (
     ModelCallOutcome,
     ModelCallStage,
     QueryRun,
+    QueryRunStatus,
+    RunFailureCode,
     RunRoute,
+    query_run_status,
 )
 
 TOKEN_FIELDS = (
@@ -84,6 +88,10 @@ def _enum_value(value: object) -> str:
 
 def _call_vector(call: ModelCall) -> dict[str, int]:
     return {field: int(getattr(call, field) or 0) for field in TOKEN_FIELDS}
+
+
+def _call_is_incomplete(call: ModelCall) -> bool:
+    return _enum_value(call.outcome) == ModelCallOutcome.started.value or not call.usage_available
 
 
 def _sum_vectors(vectors: Iterable[dict[str, int]]) -> dict[str, int]:
@@ -166,7 +174,9 @@ def _price_usage(
     if pricing.output_per_million_usd is None:
         missing.append("DEEPSEEK_OUTPUT_COST_PER_MILLION_USD")
     cost: float | None = None
-    if not missing and payload["usage_available_calls"]:
+    if all(payload.get(field) == 0 for field in TOKEN_FIELDS):
+        cost = 0.0
+    elif not missing and payload["usage_available_calls"]:
         assert pricing.cache_miss_input_per_million_usd is not None
         assert pricing.cache_hit_input_per_million_usd is not None
         assert pricing.output_per_million_usd is not None
@@ -409,16 +419,20 @@ def build_pilot_report(
     coverage, missing_bands = _band_coverage(corpus.page_counts, sample_pages)
     page_ratio_projection: dict[str, object]
     if sample_pages and corpus.total_pages > 0:
-        projection_factor = corpus.total_pages / sum(sample_pages)
-        projected_vector = _scale_vector(sample_vector, projection_factor)
-        projected_metadata_vector = _scale_vector(sample_metadata_vector, projection_factor)
-        projected_pageindex_vector = _scale_vector(sample_pageindex_vector, projection_factor)
+        document_factor = len(corpus.page_counts) / len(sample_attempts)
+        page_factor = corpus.total_pages / sum(sample_pages)
+        projected_metadata_vector = _scale_vector(sample_metadata_vector, document_factor)
+        projected_pageindex_vector = _scale_vector(sample_pageindex_vector, page_factor)
+        projected_vector = _sum_vectors([projected_metadata_vector, projected_pageindex_vector])
         projected_payload = {"usage_available_calls": sample_usage_payload["usage_available_calls"]}
         page_ratio_projection = {
             "eligible": True,
+            "sample_documents": len(sample_attempts),
+            "corpus_documents": len(corpus.page_counts),
+            "document_ratio": round(document_factor, 6),
             "sample_pages": sum(sample_pages),
             "corpus_pages": corpus.total_pages,
-            "page_ratio": round(corpus.total_pages / sum(sample_pages), 6),
+            "page_ratio": round(page_factor, 6),
             "projected_usage": projected_vector,
             "projected_cost": _price_usage(projected_payload, projected_vector, pricing),
             "by_stage": {
@@ -428,7 +442,7 @@ def build_pilot_report(
                         {
                             "usage_available_calls": sum(
                                 call.usage_available for call in sample_metadata_calls
-                            )
+                            ),
                         },
                         projected_metadata_vector,
                         pricing,
@@ -440,7 +454,7 @@ def build_pilot_report(
                         {
                             "usage_available_calls": sum(
                                 call.usage_available for call in sample_pageindex_calls
-                            )
+                            ),
                         },
                         projected_pageindex_vector,
                         pricing,
@@ -477,8 +491,31 @@ def build_pilot_report(
     _, all_vector = _usage_summary(cohort_calls)
     retry_calls = [call for call in cohort_calls if call.id not in sample_call_ids]
     retry_payload, retry_vector = _usage_summary(retry_calls)
+    sample_attempt_ids = {attempt.id for attempt in sample_attempts}
+    non_sample_attempts = [
+        attempt for attempt in cohort_attempts if attempt.id not in sample_attempt_ids
+    ]
+    retry_telemetry_incomplete = (
+        bool(legacy_jobs)
+        or any(not attempt.telemetry_complete for attempt in non_sample_attempts)
+        or any(_call_is_incomplete(call) for call in retry_calls)
+    )
     retry_adjusted: dict[str, object]
-    if page_ratio_projection["eligible"] and sample_vector["total_tokens"] > 0:
+    if not page_ratio_projection["eligible"] or sample_vector["total_tokens"] <= 0:
+        retry_adjusted = {
+            "eligible": False,
+            "reason": "successful_projection_or_measured_sample_is_unavailable",
+            "projected_usage": None,
+            "projected_cost": None,
+        }
+    elif retry_telemetry_incomplete:
+        retry_adjusted = {
+            "eligible": False,
+            "reason": "retry_telemetry_incomplete",
+            "projected_usage": None,
+            "projected_cost": None,
+        }
+    else:
         factor = all_vector["total_tokens"] / sample_vector["total_tokens"]
         adjusted_vector = _scale_vector(projected_vector, factor)
         retry_adjusted = {
@@ -488,13 +525,6 @@ def build_pilot_report(
             "projected_cost": _price_usage(
                 {"usage_available_calls": len(sample_calls)}, adjusted_vector, pricing
             ),
-        }
-    else:
-        retry_adjusted = {
-            "eligible": False,
-            "reason": "successful_projection_or_measured_sample_is_unavailable",
-            "projected_usage": None,
-            "projected_cost": None,
         }
 
     final_counts = Counter(_enum_value(document.status) for document in documents)
@@ -594,20 +624,30 @@ def build_query_cost_report(
     grouped: defaultdict[tuple[str, str], list[QueryRun]] = defaultdict(list)
     for run in runs:
         route = _enum_value(run.route) if run.route is not None else "unselected"
-        outcome = _enum_value(run.failure_code) if run.failure_code is not None else "completed"
+        run_status = query_run_status(run)
+        outcome = (
+            _enum_value(run.failure_code)
+            if run.failure_code is not None
+            else (
+                RunFailureCode.request_failed.value
+                if run_status == QueryRunStatus.failed
+                else run_status.value
+            )
+        )
         grouped[(route, outcome)].append(run)
 
     def run_is_incomplete(run: QueryRun) -> bool:
         run_calls = calls_by_run[run.id]
-        if any(
-            _enum_value(call.outcome) == ModelCallOutcome.started.value or not call.usage_available
-            for call in run_calls
+        run_status = query_run_status(run)
+        if run_status == QueryRunStatus.running or any(
+            _call_is_incomplete(call) for call in run_calls
         ):
             return True
-        return not run_calls and (
-            run.failure_code is not None
-            or run.route is None
-            or _enum_value(run.route) != RunRoute.help.value
+        return not run_calls and not (
+            run_status == QueryRunStatus.completed
+            and run.route is not None
+            and _enum_value(run.route) == RunRoute.help.value
+            and is_static_capability_request(run.question)
         )
 
     groups: list[dict[str, object]] = []
@@ -627,8 +667,6 @@ def build_query_cost_report(
                 known = priced["known_cost_usd"]
                 if isinstance(known, float):
                     fully_known_run_costs.append(known)
-                elif not run_calls and not priced["missing_price_configuration"]:
-                    fully_known_run_costs.append(0.0)
         groups.append(
             {
                 "route": route,
@@ -636,8 +674,7 @@ def build_query_cost_report(
                 "runs": len(group_runs),
                 "model_calls": len(group_calls),
                 "incomplete_runs": incomplete_runs,
-                "incomplete_calls": _payload_int(usage_payload, "started_calls")
-                + _payload_int(usage_payload, "usage_unavailable_calls"),
+                "incomplete_calls": sum(_call_is_incomplete(call) for call in group_calls),
                 "usage": usage_payload,
                 "known_cost": _price_usage(usage_payload, usage_vector, pricing),
                 "average_known_cost_per_run_usd": (
@@ -655,11 +692,7 @@ def build_query_cost_report(
             "runs": len(runs),
             "model_calls": len(calls),
             "incomplete_runs": sum(run_is_incomplete(run) for run in runs),
-            "incomplete_calls": sum(
-                _enum_value(call.outcome) == ModelCallOutcome.started.value
-                or not call.usage_available
-                for call in calls
-            ),
+            "incomplete_calls": sum(_call_is_incomplete(call) for call in calls),
         },
         "groups": groups,
         "privacy": {

@@ -143,10 +143,13 @@ def upgrade() -> None:
         SET failure_code = CASE
               WHEN error = 'request deadline exceeded'
                 THEN 'deadline_exceeded'::agent.run_failure_code
+              WHEN error = 'client cancelled request'
+                THEN 'client_cancelled'::agent.run_failure_code
               ELSE 'request_failed'::agent.run_failure_code
             END,
             error = CASE
               WHEN error = 'request deadline exceeded' THEN 'request deadline exceeded'
+              WHEN error = 'client cancelled request' THEN 'client cancelled request'
               ELSE 'request failed'
             END
         WHERE error IS NOT NULL

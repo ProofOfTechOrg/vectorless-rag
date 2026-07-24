@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from vectorless_rag.models import DocumentStatus, JobStatus, RunRoute
+from vectorless_rag.models import DocumentStatus, JobStatus, QueryRunStatus, RunRoute
 
 
 class StrictModel(BaseModel):
@@ -182,7 +182,7 @@ class ThreadRun(StrictModel):
     answer: str | None
     citations: list[dict[str, object]]
     insufficient: bool
-    status: Literal["completed", "failed"]
+    status: QueryRunStatus
     failure_code: Literal["deadline_exceeded", "request_failed"] | None = None
     created_at: datetime
 

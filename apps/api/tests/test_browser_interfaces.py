@@ -16,6 +16,7 @@ from vectorless_rag.api import (
     encode_thread_cursor,
     identity,
     normalize_thread_title,
+    thread_history,
     threads,
 )
 from vectorless_rag.auth import Principal
@@ -40,6 +41,14 @@ class _Result:
         return _Mappings(self._rows)
 
 
+class _ScalarRows:
+    def __init__(self, rows: list[QueryRun]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[QueryRun]:
+        return self._rows
+
+
 class _Session:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self.rows = rows
@@ -48,6 +57,16 @@ class _Session:
     async def execute(self, statement: Any) -> _Result:
         self.statement = statement
         return _Result(self.rows)
+
+
+class _HistorySession:
+    def __init__(self, rows: list[QueryRun]) -> None:
+        self.rows = rows
+        self.statement: Any = None
+
+    async def scalars(self, statement: Any) -> _ScalarRows:
+        self.statement = statement
+        return _ScalarRows(self.rows)
 
 
 class _FailingChatSession:
@@ -135,6 +154,57 @@ async def test_synchronous_chat_commits_failed_run_before_reraising(
     assert session.run.failure_code == RunFailureCode.request_failed
     assert session.run.insufficient is True
     assert session.run.latency_ms is not None
+
+
+async def test_synchronous_chat_preserves_unconfigured_provider_status_and_detail() -> None:
+    runtime = SimpleNamespace(
+        settings=Settings(release="private\nrelease"),
+        llm=None,
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
+    principal = Principal(uuid.uuid4(), "test", frozenset({"chat"}))
+    session = _FailingChatSession()
+
+    with pytest.raises(HTTPException) as raised:
+        await api_module._execute_chat(  # pyright: ignore[reportPrivateUsage]
+            request,  # pyright: ignore[reportArgumentType]
+            ChatRequest(message="how many docs deal with rag"),
+            principal,
+            session,  # pyright: ignore[reportArgumentType]
+        )
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail == "DeepSeek is not configured"
+    assert session.commits == 2
+    assert session.run is not None
+    assert session.run.error == "request failed"
+    assert session.run.failure_code == RunFailureCode.request_failed
+    assert session.run.insufficient is True
+
+
+async def test_thread_history_returns_running_without_a_failure_code() -> None:
+    principal = Principal(uuid.uuid4(), "test", frozenset({"chat"}))
+    run = QueryRun(
+        id=uuid.uuid4(),
+        trace_id=uuid.uuid4().hex,
+        thread_id="thread-running",
+        api_key_id=principal.api_key_id,
+        question="What is still running?",
+        citations=[],
+        insufficient=False,
+        created_at=datetime(2026, 7, 24, tzinfo=UTC),
+    )
+    session = _HistorySession([run])
+
+    response = await thread_history(
+        "thread-running",
+        principal,
+        session,  # pyright: ignore[reportArgumentType]
+    )
+
+    assert response.runs[0].status == "running"
+    assert response.runs[0].failure_code is None
+    assert response.runs[0].answer is None
 
 
 async def test_threads_normalize_titles_order_and_emit_opaque_cursor() -> None:

@@ -10,7 +10,7 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response
@@ -45,9 +45,11 @@ from vectorless_rag.models import (
     IngestionJob,
     ModelCall,
     QueryRun,
+    QueryRunStatus,
     RunFailureCode,
     RunFeedback,
     RunRoute,
+    query_run_status,
 )
 from vectorless_rag.observability import Observability
 from vectorless_rag.operational_logging import emit_event
@@ -283,6 +285,8 @@ async def _execute_chat(
             "query_failed",
             **await _query_event_fields(session, run, runtime, started),
         )
+        if isinstance(exc, HTTPException):
+            raise
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "The API could not complete this run.",
@@ -632,6 +636,19 @@ async def thread_history(
     runs = list((await session.scalars(statement)).all())
     if not runs:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "thread not found")
+
+    def public_failure_code(
+        run: QueryRun,
+    ) -> Literal["deadline_exceeded", "request_failed"] | None:
+        if query_run_status(run) != QueryRunStatus.failed:
+            return None
+        if (
+            run.failure_code == RunFailureCode.deadline_exceeded
+            or run.error == "request deadline exceeded"
+        ):
+            return "deadline_exceeded"
+        return "request_failed"
+
     return ThreadResponse(
         thread_id=thread_id,
         runs=[
@@ -642,17 +659,8 @@ async def thread_history(
                 answer=run.answer,
                 citations=run.citations,
                 insufficient=run.insufficient,
-                status=("completed" if run.error is None and run.answer is not None else "failed"),
-                failure_code=(
-                    None
-                    if run.error is None and run.answer is not None
-                    else (
-                        "deadline_exceeded"
-                        if run.failure_code == RunFailureCode.deadline_exceeded
-                        or run.error == "request deadline exceeded"
-                        else "request_failed"
-                    )
-                ),
+                status=query_run_status(run),
+                failure_code=public_failure_code(run),
                 created_at=run.created_at,
             )
             for run in runs

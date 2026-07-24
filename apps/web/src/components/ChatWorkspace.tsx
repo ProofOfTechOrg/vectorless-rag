@@ -40,6 +40,7 @@ interface Message {
   route?: string | null
   citations?: Citation[]
   streaming?: boolean
+  passivePending?: boolean
   failureCode?: FailureCode
   retryQuestion?: string
 }
@@ -82,12 +83,15 @@ function ChatConversation({
       { sender: 'user' as const, text: run.question },
       {
         sender: 'assistant' as const,
-        text: run.answer ?? failureMessage(run.failure_code),
+        text: run.status === 'running'
+          ? ''
+          : run.answer ?? failureMessage(run.failure_code),
         traceId: run.trace_id,
         threadId,
         route: run.route,
         citations: run.citations,
-        failureCode: run.failure_code ?? undefined,
+        passivePending: run.status === 'running',
+        failureCode: run.status === 'failed' ? run.failure_code ?? undefined : undefined,
         retryQuestion: run.status === 'failed' ? run.question : undefined,
       },
     ]),
@@ -267,7 +271,7 @@ function ChatConversation({
                 message.failureCode
                 || message.route
                 || message.citations?.length
-                || (message.traceId && !message.failureCode)
+                || (message.traceId && !message.failureCode && !message.passivePending)
               )
 
               return (
@@ -312,7 +316,10 @@ function ChatConversation({
                             ))}
                           </HStack>
                         ) : null}
-                        {message.traceId && !message.failureCode && message.threadId === threadId ? (
+                        {message.traceId
+                          && !message.failureCode
+                          && !message.passivePending
+                          && message.threadId === threadId ? (
                           <AnswerFeedback traceId={message.traceId} />
                         ) : null}
                       </VStack>
@@ -322,7 +329,8 @@ function ChatConversation({
                       <Markdown contentWidth="100%" isStreaming={message.streaming} headingLevelStart={3} autolink="gfm">
                         {message.text}
                       </Markdown>
-                    ) : message.sender === 'assistant' && message.streaming ? (
+                    ) : message.sender === 'assistant'
+                      && (message.streaming || message.passivePending) ? (
                       <WaitingForResponse />
                     ) : message.text}
                   </ChatMessageBubble>

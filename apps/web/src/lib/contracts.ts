@@ -47,7 +47,7 @@ const threadRunSchema = z.object({
   answer: z.string().nullable(),
   citations: z.array(citationSchema),
   insufficient: z.boolean(),
-  status: z.enum(['completed', 'failed']),
+  status: z.enum(['running', 'completed', 'failed']),
   failure_code: failureCodeSchema.nullable(),
   created_at: z.string(),
 })

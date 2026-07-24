@@ -611,6 +611,20 @@ test('animates the assistant waiting indicator while a response is pending', asy
   await expect(page.locator('.chat-waiting')).toHaveCount(0)
 })
 
+test('renders historical running queries as passive pending messages', async ({ page }) => {
+  await connectToChat(page)
+  await page.goto('/chat/thread-running')
+  await waitForHydration(page)
+
+  await expect(page.getByLabel('Waiting for response')).toBeVisible()
+  await expect(page.getByText('The API could not complete this run.')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0)
+  await expect(page.getByText('Rate answer', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Stop' })).toHaveCount(0)
+  await expect(page.getByTestId('chat-message-list')).not.toHaveAttribute('aria-busy', 'true')
+  await expect(page.locator('.chat-status')).toHaveText('Ready')
+})
+
 test('distinguishes recent chats and replaces conversation state when switching threads', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   await connectToChat(page)

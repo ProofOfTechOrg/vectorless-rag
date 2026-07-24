@@ -61,7 +61,7 @@ _CAPABILITY_REQUESTS = frozenset(
 _TERMINAL_PUNCTUATION = re.compile(r"[.!?,;:\u2026\uff01\uff0c\uff1a\uff1b\uff1f]+$")
 
 
-def _is_capability_request(question: str) -> bool:
+def is_static_capability_request(question: str) -> bool:
     normalized = " ".join(question.casefold().split())
     normalized = _TERMINAL_PUNCTUATION.sub("", normalized).rstrip()
     return normalized in _CAPABILITY_REQUESTS
@@ -233,7 +233,7 @@ class GraphRunner:
         builder: StateGraph[GraphState] = StateGraph(GraphState)
 
         async def route(state: GraphState) -> GraphUpdate:
-            if _is_capability_request(state["question"]):
+            if is_static_capability_request(state["question"]):
                 run.route = RunRoute.help
                 return {
                     "route": RunRoute.help.value,

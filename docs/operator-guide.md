@@ -18,7 +18,7 @@ The UI makes up to 120 sequential polling attempts, separated by 1.5 seconds. Th
 
 Mounted sync scans only direct PDF children of `ARXIV_PDF_HOST_DIR`. `make sync-corpus` deduplicates by content. Force mode reprocesses known files and requires an explicit UI confirmation or `FORCE=true` on the Make target.
 
-With `ALLOW_FULL_CORPUS_INDEX=false`, only ten unknown documents can be registered. Review `make pilot-report` for extraction quality, failures, duration, tokens, retrieval/citation behavior, and projected cost before enabling the full corpus. Do not casually sync the normal 537-file development directory.
+With `ALLOW_FULL_CORPUS_INDEX=false`, only ten unknown documents can be registered. Read the [token-cost analysis](token-cost-analysis.md) before using `make pilot-report`: the current report does not receive token telemetry and therefore reports zero provider tokens. Do not enable the full corpus or sync the normal 537-file development directory until job-level cost accounting is fixed and a representative pilot is approved.
 
 ## Browser operations
 

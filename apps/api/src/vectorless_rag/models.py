@@ -85,6 +85,12 @@ class RunFailureCode(StrEnum):
     usage_persistence_failed = "usage_persistence_failed"
 
 
+class QueryRunStatus(StrEnum):
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
 class RunRoute(StrEnum):
     sql = "sql"
     documents = "documents"
@@ -263,6 +269,14 @@ class QueryRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+def query_run_status(run: QueryRun) -> QueryRunStatus:
+    if run.failure_code is not None or run.error is not None:
+        return QueryRunStatus.failed
+    if run.answer is not None:
+        return QueryRunStatus.completed
+    return QueryRunStatus.running
 
 
 class ModelCall(TimestampMixin, Base):

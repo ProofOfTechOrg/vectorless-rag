@@ -34,6 +34,7 @@ const failedDocument = {
 const citation = { source_type: 'document', source_id: documentId, title: document.title, page_start: 1, page_end: 2 }
 const completed = { answer: 'The fixture confirms cobalt lantern retrieval [1].', thread_id: 'thread-1', route: 'documents', trace_id: 'trace-1', citations: [citation], sql_audit_id: null, insufficient: false }
 const cobaltRun = { trace_id: completed.trace_id, route: completed.route, question: 'What does the cobalt lantern fixture prove?', answer: completed.answer, citations: completed.citations, insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:02:00Z' }
+const runningRun = { trace_id: 'trace-running', route: 'documents', question: 'What is still running?', answer: null, citations: [], insufficient: false, status: 'running', failure_code: null, created_at: '2026-07-20T00:02:30Z' }
 const amberRuns = [
   { trace_id: 'trace-amber-1', route: 'documents', question: 'Compare amber prism retrieval.', answer: 'The amber prism thread starts with a retrieval comparison.', citations: [], insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:03:00Z' },
   { trace_id: 'trace-amber-2', route: 'hybrid', question: 'What changed in the second pass?', answer: 'The amber prism second pass adds catalog evidence.', citations: [], insufficient: false, status: 'completed', failure_code: null, created_at: '2026-07-20T00:04:00Z' },
@@ -121,6 +122,10 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/v1/threads/thread-2') return json(response, 200, {
     thread_id: 'thread-2',
     runs: amberRuns,
+  })
+  if (url.pathname === '/v1/threads/thread-running') return json(response, 200, {
+    thread_id: 'thread-running',
+    runs: [runningRun],
   })
   if (url.pathname === '/v1/threads/thread-refresh' && isRefresh) return json(response, 200, {
     thread_id: 'thread-refresh',

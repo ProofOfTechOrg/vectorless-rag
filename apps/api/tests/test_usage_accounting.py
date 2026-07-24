@@ -14,7 +14,10 @@ from vectorless_rag.models import (
     ModelCallOutcome,
     ModelCallStage,
     QueryRun,
+    QueryRunStatus,
+    RunFailureCode,
     RunRoute,
+    query_run_status,
 )
 from vectorless_rag.operational_logging import emit_event, event_json
 from vectorless_rag.reporting import Pricing, build_query_cost_report
@@ -24,6 +27,67 @@ from vectorless_rag.usage import (
     normalize_token_usage,
     usage_context,
 )
+
+
+class _FailingHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        del record
+        raise RuntimeError("handler failed")
+
+
+def _query_run(
+    *,
+    answer: str | None = None,
+    error: str | None = None,
+    failure_code: RunFailureCode | None = None,
+    question: str = "What is indexed?",
+    route: RunRoute | None = None,
+) -> QueryRun:
+    return QueryRun(
+        id=uuid.uuid4(),
+        trace_id=uuid.uuid4().hex,
+        thread_id=uuid.uuid4().hex,
+        api_key_id=uuid.uuid4(),
+        route=route,
+        question=question,
+        answer=answer,
+        error=error,
+        failure_code=failure_code,
+    )
+
+
+def _query_call(
+    run: QueryRun,
+    *,
+    outcome: ModelCallOutcome,
+    usage_available: bool,
+) -> ModelCall:
+    usage = (
+        {
+            "input_tokens": 0,
+            "cache_hit_input_tokens": 0,
+            "cache_miss_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "unattributed_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 0,
+        }
+        if usage_available
+        else {}
+    )
+    return ModelCall(
+        id=uuid.uuid4(),
+        query_run_id=run.id,
+        trace_id=run.trace_id,
+        stage=ModelCallStage.query_route,
+        model="provider/model",
+        provider_attempt=1,
+        outcome=outcome,
+        usage_available=usage_available,
+        cache_attribution_complete=usage_available,
+        **usage,
+    )
 
 
 def test_langchain_usage_preserves_cache_and_reasoning_partitions() -> None:
@@ -156,6 +220,56 @@ def test_operational_events_are_one_line_allowlisted_json(
         event_json("query_failed", trace_id="unsafe\nprompt")
 
 
+def test_operational_event_emission_drops_unsafe_fields_without_logging_them(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("unsafe-usage-event-test")
+    rejected_release = "private\nrelease"
+
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        emit_event(
+            logger,
+            "query_failed",
+            status="failed",
+            release=rejected_release,
+        )
+
+    assert caplog.messages == ["operational_event_dropped"]
+    assert rejected_release not in caplog.text
+
+
+def test_operational_event_emission_swallows_log_handler_failures() -> None:
+    logger = logging.getLogger("failing-usage-event-test")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    handler = _FailingHandler()
+    logger.addHandler(handler)
+    try:
+        emit_event(logger, "query_started", status="running", release="test")
+    finally:
+        logger.removeHandler(handler)
+        logger.propagate = True
+
+
+@pytest.mark.parametrize(
+    ("run", "expected"),
+    [
+        (_query_run(), QueryRunStatus.running),
+        (_query_run(answer="answer"), QueryRunStatus.completed),
+        (
+            _query_run(failure_code=RunFailureCode.request_failed),
+            QueryRunStatus.failed,
+        ),
+        (_query_run(error="request failed"), QueryRunStatus.failed),
+    ],
+)
+def test_query_run_status_classifies_durable_and_legacy_states(
+    run: QueryRun,
+    expected: QueryRunStatus,
+) -> None:
+    assert query_run_status(run) == expected
+
+
 def test_query_cost_report_is_aggregate_cache_aware_and_content_free() -> None:
     run_id = uuid.uuid4()
     trace_id = uuid.uuid4().hex
@@ -210,3 +324,75 @@ def test_query_cost_report_is_aggregate_cache_aware_and_content_free() -> None:
         trace_id,
     ):
         assert forbidden not in serialized
+
+
+def test_static_help_without_calls_is_known_zero_but_other_help_is_incomplete() -> None:
+    exact = _query_run(
+        answer="Supported tasks",
+        question="What can you do?",
+        route=RunRoute.help,
+    )
+    routed = _query_run(
+        answer="A model-routed answer",
+        question="Explain how you can help with this paper",
+        route=RunRoute.help,
+    )
+    pricing = Pricing(None, None, None)
+
+    exact_report = cast(
+        dict[str, Any],
+        build_query_cost_report([exact], [], pricing, days=30),
+    )
+    routed_report = cast(
+        dict[str, Any],
+        build_query_cost_report([routed], [], pricing, days=30),
+    )
+
+    exact_group = exact_report["groups"][0]
+    assert exact_group["incomplete_runs"] == 0
+    assert exact_group["known_cost"]["known_cost_usd"] == 0.0
+    assert exact_group["known_cost"]["missing_price_configuration"]
+    assert exact_group["average_known_cost_per_run_usd"] == 0.0
+    assert exact_group["runs_with_known_cost"] == 1
+    routed_group = routed_report["groups"][0]
+    assert routed_group["incomplete_runs"] == 1
+    assert routed_group["known_cost"]["known_cost_usd"] is None
+    assert routed_group["runs_with_known_cost"] == 0
+
+
+def test_started_usage_unavailable_call_counts_as_one_incomplete_call() -> None:
+    run = _query_run(route=RunRoute.documents)
+    call = _query_call(
+        run,
+        outcome=ModelCallOutcome.started,
+        usage_available=False,
+    )
+
+    report = cast(
+        dict[str, Any],
+        build_query_cost_report([run], [call], Pricing(1.0, 1.0, 1.0), days=30),
+    )
+
+    assert report["totals"]["incomplete_calls"] == 1
+    assert report["groups"][0]["incomplete_calls"] == 1
+
+
+def test_active_run_with_completed_partial_calls_stays_running_and_incomplete() -> None:
+    run = _query_run(route=RunRoute.documents)
+    call = _query_call(
+        run,
+        outcome=ModelCallOutcome.completed,
+        usage_available=True,
+    )
+
+    report = cast(
+        dict[str, Any],
+        build_query_cost_report([run], [call], Pricing(1.0, 1.0, 1.0), days=30),
+    )
+
+    group = report["groups"][0]
+    assert group["outcome"] == "running"
+    assert group["incomplete_runs"] == 1
+    assert group["incomplete_calls"] == 0
+    assert report["totals"]["incomplete_runs"] == 1
+    assert report["totals"]["incomplete_calls"] == 0

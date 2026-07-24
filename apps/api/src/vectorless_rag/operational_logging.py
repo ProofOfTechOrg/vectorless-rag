@@ -68,4 +68,10 @@ def event_json(event: str, **fields: object) -> str:
 
 
 def emit_event(logger: logging.Logger, event: str, **fields: object) -> None:
-    logger.info("%s", event_json(event, **fields))
+    try:
+        logger.info("%s", event_json(event, **fields))
+    except Exception:
+        try:
+            logger.warning("%s", "operational_event_dropped")
+        except Exception:
+            return
