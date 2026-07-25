@@ -35,7 +35,7 @@ def test_ingestion_operational_defaults_are_bounded_and_patch_versioned() -> Non
     assert settings.pageindex_timeout_seconds == 3_600
     assert settings.ingestion_max_attempts == 3
     assert settings.ingestion_stale_grace_seconds == 300
-    assert settings.pageindex_version.endswith("+vr3")
+    assert settings.pageindex_version.endswith("+vr4")
 
 
 @pytest.mark.parametrize("price", [-1, float("inf"), float("nan")])

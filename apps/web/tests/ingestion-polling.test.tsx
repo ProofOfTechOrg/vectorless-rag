@@ -17,6 +17,7 @@ function job(id: string, status: Job['status']): Job {
     document_id: DOCUMENT_ID,
     status,
     attempts: status === 'queued' ? 0 : 1,
+    mode: 'ensure_current',
     diagnostic: null,
     metrics: {},
     created_at: '2026-07-20T00:00:00Z',

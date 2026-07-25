@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import secrets
+import time
+import uuid
 from typing import Protocol, TypeVar, cast
 
 import httpx
@@ -11,7 +15,13 @@ from pydantic import BaseModel, SecretStr
 from vectorless_rag.config import Settings
 from vectorless_rag.models import ModelCallOutcome, ModelCallStage
 from vectorless_rag.observability import Observability
+from vectorless_rag.provider import (
+    ProviderGate,
+    classify_provider_failure,
+    provider_configuration_hash,
+)
 from vectorless_rag.usage import (
+    ExperimentBudgetExceeded,
     ModelCallLedger,
     UsagePersistenceError,
     normalize_token_usage,
@@ -29,12 +39,16 @@ class LLMError(RuntimeError):
         *,
         attempts: int,
         finish_reason: str | None = None,
+        retryable: bool = False,
+        http_status: int | None = None,
     ) -> None:
         super().__init__(diagnostic)
         self.failure_code = failure_code
         self.diagnostic = diagnostic
         self.attempts = attempts
         self.finish_reason = finish_reason
+        self.retryable = retryable
+        self.http_status = http_status
 
 
 class StructuredOutputError(LLMError):
@@ -93,13 +107,18 @@ class DeepSeekLLM:
         settings: Settings,
         observability: Observability | None = None,
         ledger: ModelCallLedger | None = None,
+        provider_gate: ProviderGate | None = None,
     ) -> None:
         if settings.deepseek_api_key is None:
             raise RuntimeError("DEEPSEEK_API_KEY is required for LLM operations")
         self.settings = settings
         self.api_key: SecretStr = settings.deepseek_api_key
         self.observability = observability or Observability(settings)
-        self.ledger = ledger or ModelCallLedger(settings.database_url)
+        self.ledger = ledger or ModelCallLedger(
+            settings.database_url,
+            maximum_provider_attempts=3,
+        )
+        self.provider_gate = provider_gate or ProviderGate(settings)
 
     def _client(self, thinking: bool) -> ChatDeepSeek:
         extra_body: dict[str, object] = {
@@ -109,6 +128,7 @@ class DeepSeekLLM:
             model=self.settings.deepseek_model,
             api_key=self.api_key,
             max_retries=0,
+            max_tokens=self.settings.pageindex_max_output_tokens,
             extra_body=extra_body,
             reasoning_effort="high" if thinking else None,
         )
@@ -122,7 +142,10 @@ class DeepSeekLLM:
         *,
         stage: ModelCallStage,
         attempt: int = 1,
+        logical_call_id: uuid.UUID | None = None,
+        retry_delay_ms: int | None = None,
     ) -> StructuredT:
+        logical_call_id = logical_call_id or uuid.uuid4()
         method = "json_mode" if thinking else "function_calling"
         if thinking:
             schema_json = json.dumps(schema.model_json_schema(), separators=(",", ":"))
@@ -133,49 +156,99 @@ class DeepSeekLLM:
             schema, method=method, include_raw=True
         )
         prompt_fingerprint_source = f"{system}\0{user}"
-        call = await self.ledger.astart(stage, self.settings.deepseek_model, attempt)
+        call = await self.ledger.astart(
+            stage,
+            self.settings.deepseek_model,
+            attempt,
+            logical_call_id=logical_call_id,
+            operation=stage.value,
+            prompt=prompt_fingerprint_source,
+            release=self.settings.release,
+            configuration_hash=provider_configuration_hash(self.settings),
+            retry_delay_ms=retry_delay_ms,
+        )
         observation = self.observability.generation(
             "deepseek-structured",
             self.settings.deepseek_model,
             prompt_fingerprint_source,
             attempt=attempt,
         )
+        started = time.monotonic()
         try:
-            response = await runnable.ainvoke([("system", system), ("human", user)], config={})
-        except Exception:
+            async with asyncio.timeout(self.settings.pageindex_call_timeout_seconds):
+                response = await runnable.ainvoke([("system", system), ("human", user)], config={})
+        except asyncio.CancelledError:
+            try:
+                await self.ledger.afinish(
+                    call,
+                    ModelCallOutcome.cancelled,
+                    None,
+                    normalize_token_usage(None),
+                    failure_code="cancelled",
+                    retryable=False,
+                    latency_ms=round((time.monotonic() - started) * 1000),
+                    cancelled=True,
+                )
+            finally:
+                observation.fail()
+            raise
+        except Exception as error:
+            failure = classify_provider_failure(error)
+            self.provider_gate.observe_completion_failure(error)
             try:
                 await self.ledger.afinish(
                     call,
                     ModelCallOutcome.failed,
                     None,
                     normalize_token_usage(None),
+                    failure_code=failure.code,
+                    retryable=failure.retryable,
+                    http_status=failure.http_status,
+                    latency_ms=round((time.monotonic() - started) * 1000),
                 )
             finally:
                 observation.fail()
             raise
+        self.provider_gate.observe_completion_success()
 
         if isinstance(response, schema):
             encoded = response.model_dump_json()
             usage = normalize_token_usage(None)
             try:
-                await self.ledger.afinish(call, ModelCallOutcome.completed, None, usage)
+                await self.ledger.afinish(
+                    call,
+                    ModelCallOutcome.completed,
+                    None,
+                    usage,
+                    latency_ms=round((time.monotonic() - started) * 1000),
+                    output=encoded,
+                )
             finally:
                 observation.finish(encoded, finish_reason=None, usage=usage)
             return response
         if not isinstance(response, dict):
             finish_reason = _finish_reason(response)
             usage = normalize_token_usage(getattr(response, "usage_metadata", None))
+            raw_output = _raw_output(response)
             try:
-                await self.ledger.afinish(call, ModelCallOutcome.failed, finish_reason, usage)
-            finally:
-                observation.fail(
-                    output=_raw_output(response), finish_reason=finish_reason, usage=usage
+                await self.ledger.afinish(
+                    call,
+                    ModelCallOutcome.failed,
+                    finish_reason,
+                    usage,
+                    failure_code="structured_output_invalid",
+                    retryable=True,
+                    latency_ms=round((time.monotonic() - started) * 1000),
+                    output=raw_output,
                 )
+            finally:
+                observation.fail(output=raw_output, finish_reason=finish_reason, usage=usage)
             raise StructuredOutputError(
                 "structured_output_invalid",
                 "The model returned an invalid structured response.",
                 attempts=attempt,
                 finish_reason=finish_reason,
+                retryable=True,
             )
 
         payload = response
@@ -184,32 +257,60 @@ class DeepSeekLLM:
         usage = normalize_token_usage(getattr(raw, "usage_metadata", None))
         parsed = payload.get("parsed")
         parsing_error = payload.get("parsing_error")
-        if parsing_error is not None or parsed is None:
+        raw_output = _raw_output(raw)
+        if finish_reason == "length" or parsing_error is not None or parsed is None:
             try:
-                await self.ledger.afinish(call, ModelCallOutcome.failed, finish_reason, usage)
+                await self.ledger.afinish(
+                    call,
+                    ModelCallOutcome.failed,
+                    finish_reason,
+                    usage,
+                    failure_code="structured_output_invalid",
+                    retryable=True,
+                    latency_ms=round((time.monotonic() - started) * 1000),
+                    output=raw_output,
+                )
             finally:
-                observation.fail(output=_raw_output(raw), finish_reason=finish_reason, usage=usage)
+                observation.fail(output=raw_output, finish_reason=finish_reason, usage=usage)
             raise StructuredOutputError(
                 "structured_output_invalid",
                 "The model returned an invalid structured response.",
                 attempts=attempt,
                 finish_reason=finish_reason,
+                retryable=True,
             )
         try:
             result = parsed if isinstance(parsed, schema) else schema.model_validate(parsed)
         except (TypeError, ValueError) as error:
             try:
-                await self.ledger.afinish(call, ModelCallOutcome.failed, finish_reason, usage)
+                await self.ledger.afinish(
+                    call,
+                    ModelCallOutcome.failed,
+                    finish_reason,
+                    usage,
+                    failure_code="structured_output_invalid",
+                    retryable=True,
+                    latency_ms=round((time.monotonic() - started) * 1000),
+                    output=raw_output,
+                )
             finally:
-                observation.fail(output=_raw_output(raw), finish_reason=finish_reason, usage=usage)
+                observation.fail(output=raw_output, finish_reason=finish_reason, usage=usage)
             raise StructuredOutputError(
                 "structured_output_invalid",
                 "The model returned an invalid structured response.",
                 attempts=attempt,
                 finish_reason=finish_reason,
+                retryable=True,
             ) from error
         try:
-            await self.ledger.afinish(call, ModelCallOutcome.completed, finish_reason, usage)
+            await self.ledger.afinish(
+                call,
+                ModelCallOutcome.completed,
+                finish_reason,
+                usage,
+                latency_ms=round((time.monotonic() - started) * 1000),
+                output=result.model_dump_json(),
+            )
         finally:
             observation.finish(result.model_dump_json(), finish_reason=finish_reason, usage=usage)
         return result
@@ -225,11 +326,29 @@ class DeepSeekLLM:
     ) -> StructuredT:
         corrected = False
         last_error: Exception | None = None
+        logical_call_id = uuid.uuid4()
+        retry_delay_ms: int | None = None
         for attempt in range(1, 4):
+            hard_failure = self.provider_gate.hard_failure
+            if hard_failure is not None:
+                raise LLMError(
+                    "provider_unavailable",
+                    "The model provider is unavailable.",
+                    attempts=attempt - 1,
+                    retryable=False,
+                    http_status=hard_failure.http_status,
+                )
             prompt = user + (FORMAT_CORRECTION if corrected else "")
             try:
                 return await self._invoke(
-                    schema, system, prompt, thinking, stage=stage, attempt=attempt
+                    schema,
+                    system,
+                    prompt,
+                    thinking,
+                    stage=stage,
+                    attempt=attempt,
+                    logical_call_id=logical_call_id,
+                    retry_delay_ms=retry_delay_ms,
                 )
             except UsagePersistenceError as error:
                 raise LLMError(
@@ -237,6 +356,8 @@ class DeepSeekLLM:
                     UsagePersistenceError.diagnostic,
                     attempts=attempt,
                 ) from error
+            except ExperimentBudgetExceeded:
+                raise
             except StructuredOutputError as error:
                 if error.finish_reason == "content_filter":
                     raise LLMError(
@@ -244,25 +365,50 @@ class DeepSeekLLM:
                         "The provider rejected the model output under its content policy.",
                         attempts=attempt,
                         finish_reason=error.finish_reason,
+                        retryable=False,
                     ) from error
                 last_error = error
                 corrected = True
             except Exception as error:
-                if not _is_transient(error):
+                failure = classify_provider_failure(error)
+                if failure.blocks_provider:
                     raise LLMError(
-                        "llm_provider_rejected",
+                        "provider_unavailable",
+                        "The model provider is unavailable.",
+                        attempts=attempt,
+                        retryable=False,
+                        http_status=failure.http_status,
+                    ) from error
+                if not (_is_transient(error) or failure.retryable):
+                    raise LLMError(
+                        failure.code,
                         "The model provider rejected the request.",
                         attempts=attempt,
+                        retryable=False,
+                        http_status=failure.http_status,
                     ) from error
                 last_error = error
             if attempt == 3:
                 break
+            delay = secrets.SystemRandom().uniform(0, min(8.0, 0.5 * (2 ** (attempt - 1))))
+            retry_delay_ms = round(delay * 1000)
+            await asyncio.sleep(delay)
         if isinstance(last_error, StructuredOutputError):
             raise StructuredOutputError(
                 last_error.failure_code,
                 "The model did not return valid structured output after three attempts.",
                 attempts=3,
                 finish_reason=last_error.finish_reason,
+                retryable=False,
+            ) from last_error
+        if last_error is not None:
+            failure = classify_provider_failure(last_error)
+            raise LLMError(
+                failure.code,
+                "The model request failed after three attempts.",
+                attempts=3,
+                retryable=failure.retryable,
+                http_status=failure.http_status,
             ) from last_error
         raise LLMError(
             "llm_retry_exhausted",

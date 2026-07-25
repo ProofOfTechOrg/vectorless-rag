@@ -418,9 +418,16 @@ function AnswerFeedback({ traceId }: { traceId: string }) {
 }
 
 function failureMessage(code: FailureCode | null): string {
-  return code === 'deadline_exceeded'
-    ? 'The request timed out.'
-    : 'The API could not complete this run.'
+  switch (code) {
+    case 'deadline_exceeded':
+      return 'The request timed out.'
+    case 'provider_unavailable':
+      return 'The model provider is unavailable. Document browsing remains available.'
+    case 'upstream_invalid_response':
+      return 'The model provider returned an invalid response.'
+    default:
+      return 'The API could not complete this run.'
+  }
 }
 
 function updateLast(messages: Message[], patch: Partial<Message>): Message[] {

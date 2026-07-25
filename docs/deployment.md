@@ -23,6 +23,8 @@ Use Compose for a local full-stack deployment with persistent named volumes. Use
 
 `compose.yaml` defines API and worker images from `apps/api` and the web image from `apps/web/Dockerfile`. It mounts PostgreSQL initialization from `infra/docker/postgres-init` and preserves the existing `postgres_data`, `clickhouse_data`, `clickhouse_logs`, `redis_data`, `minio_data`, and `pageindex_work` volumes. `make up` starts these services in the background without forcing image rebuilds.
 
+Every Compose service uses Docker's `local` log driver with a 20 MB maximum and five files. Kubernetes log retention remains cluster-managed.
+
 ```bash
 make compose-check ENV_FILE=.env.example
 make up
@@ -46,6 +48,25 @@ make dev-health
 Public local endpoints are web 3001 and Langfuse 3000. Compose publishes FastAPI only on host loopback at `127.0.0.1:8000`, so other hosts cannot connect to it directly.
 
 The BFF reaches FastAPI privately as `http://api:8000` over the Compose network.
+
+### PageIndex v2 settings
+
+Keep these values aligned across `.env`, Compose, and Helm:
+
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| `PAGEINDEX_ASYNC_CONCURRENCY` | 8 | Maximum concurrent PageIndex provider calls |
+| `PAGEINDEX_MAX_OUTPUT_TOKENS` | 8,192 | Explicit output ceiling used by calls and reservations |
+| `PAGEINDEX_CALL_TIMEOUT_SECONDS` | 120 | Per-call timeout |
+| `INGESTION_LEASE_SECONDS` | 120 | Renewable job lease |
+| `INGESTION_HEARTBEAT_SECONDS` | 30 | Lease renewal interval |
+| `CATALOG_BATCH_TOKEN_LIMIT` | 24,000 | Complete-catalog map batch size |
+| `DOCUMENT_LIMIT` | 8 | Maximum selected documents |
+| `EVIDENCE_TOKEN_LIMIT` | 40,000 | Public evidence ceiling |
+| `PILOT_DOCUMENT_LIMIT` | 25 | Registration safety gate |
+| `PILOT_COST_LIMIT_USD` | 10 | Frozen-pilot cost ceiling |
+
+Leave `ALLOW_FULL_CORPUS_INDEX=false` until the manifest-driven pilot is accepted and separately authorized.
 
 ## Images
 

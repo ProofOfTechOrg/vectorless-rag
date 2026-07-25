@@ -92,6 +92,12 @@ const server = createServer(async (request, response) => {
         ? refreshChatIdentity
         : identity
   if (url.pathname === '/v1/auth/me') return json(response, 200, requestIdentity)
+  if (url.pathname === '/v1/provider/status') return json(response, 200, {
+    availability: 'available',
+    reason: null,
+    checked_at: '2026-07-20T00:00:00Z',
+    stale: false,
+  })
   if (url.pathname === '/v1/threads') {
     if (apiKey === 'mock-documents-only') documentsOnlyThreadRequests += 1
     if (apiKey === 'mock-second-chat') return json(response, 200, {
@@ -142,19 +148,27 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/v1/documents') return json(response, 200, { items: [document, failedDocument], next_cursor: null })
   if (url.pathname === `/v1/documents/${documentId}`) return json(response, 200, document)
   if (url.pathname === `/v1/documents/${failedDocumentId}`) return json(response, 200, failedDocument)
-  if (url.pathname === '/v1/admin/ingestion/sync') return json(response, 200, { discovered: 1, queued: 1, deduplicated: 0, pilot_limit_reached: false })
-  if (url.pathname.startsWith('/v1/admin/ingestion/')) return json(response, 200, { id: '22222222-2222-4222-8222-222222222222', document_id: documentId, status: 'completed', attempts: 1, diagnostic: null, metrics: { pages: 2 }, created_at: '2026-07-20T00:00:00Z', updated_at: '2026-07-20T00:01:00Z' })
+  if (url.pathname === '/v1/admin/ingestion/sync') return json(response, 200, {
+    discovered: 1,
+    queued: 1,
+    deduplicated: 0,
+    pilot_limit_reached: false,
+    pilot_limit: 25,
+    registered_count: 1,
+    remaining_capacity: 24,
+  })
+  if (url.pathname.startsWith('/v1/admin/ingestion/')) return json(response, 200, { id: '22222222-2222-4222-8222-222222222222', document_id: documentId, status: 'completed', attempts: 1, mode: 'ensure_current', current_stage: 'completed', provider_wait_reason: null, active_index_version_id: null, diagnostic: null, metrics: { pages: 2 }, created_at: '2026-07-20T00:00:00Z', updated_at: '2026-07-20T00:01:00Z' })
   if (url.pathname === `/v1/admin/documents/${failedDocumentId}/retry`) {
     if (request.method !== 'POST') return json(response, 405, { detail: 'method not allowed' })
     if (!requestIdentity.scopes.includes('admin:ingest')) return json(response, 403, { detail: 'insufficient scope' })
-    return json(response, 200, { id: '33333333-3333-4333-8333-333333333333', document_id: failedDocumentId, status: 'queued', attempts: 0, diagnostic: null, metrics: {}, created_at: '2026-07-20T00:04:00Z', updated_at: '2026-07-20T00:04:00Z' })
+    return json(response, 200, { id: '33333333-3333-4333-8333-333333333333', document_id: failedDocumentId, status: 'queued', attempts: 0, mode: 'rebuild_index', current_stage: 'queued', provider_wait_reason: null, active_index_version_id: null, diagnostic: null, metrics: {}, created_at: '2026-07-20T00:04:00Z', updated_at: '2026-07-20T00:04:00Z' })
   }
   if (url.pathname === '/v1/admin/documents') {
     const chunks = []
     for await (const chunk of request) chunks.push(chunk)
     const body = Buffer.concat(chunks).toString('latin1')
     if (!body.includes('filename="fixture.pdf"') || !body.includes('application/pdf') || !body.includes('%PDF')) return json(response, 422, { detail: 'invalid multipart PDF' })
-    return json(response, 200, { id: '22222222-2222-4222-8222-222222222222', document_id: documentId, status: 'queued', attempts: 0, diagnostic: null, metrics: {}, created_at: '2026-07-20T00:00:00Z', updated_at: '2026-07-20T00:00:00Z' })
+    return json(response, 200, { id: '22222222-2222-4222-8222-222222222222', document_id: documentId, status: 'queued', attempts: 0, mode: 'ensure_current', current_stage: 'queued', provider_wait_reason: null, active_index_version_id: null, diagnostic: null, metrics: {}, created_at: '2026-07-20T00:00:00Z', updated_at: '2026-07-20T00:00:00Z' })
   }
   if (url.pathname.endsWith('/feedback')) {
     const chunks = []

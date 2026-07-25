@@ -26,7 +26,11 @@ FastAPI stores only an API-key prefix and HMAC-SHA256 digest. Keys have `chat`, 
 
 SQL generation is restricted to a single read-only `SELECT`/CTE over curated views and executes with row, statement-timeout, lock-timeout, payload, and explain-cost bounds. Chat has a request deadline and streaming disconnects propagate cancellation.
 
-Uploads accept bounded born-digital PDFs. Mounted sync uses a fixed configured root and direct `.pdf` children, never a caller-provided path. The ten-document pilot gate prevents accidental corpus-wide model use.
+Uploads accept bounded born-digital PDFs. Mounted sync uses a fixed configured root and direct `.pdf` children, never a caller-provided path. The 25-document registration gate, disabled full-corpus flag, frozen manifest, and database-enforced $10 reservation ceiling prevent accidental corpus-wide model use.
+
+Provider state is categorical: `available`, `unavailable`, `unknown`, or `unconfigured`. The application never persists balance amounts, response bodies, headers, endpoint URLs, or credentials. HTTP 402, 401, and 403 open an in-process hard circuit; retryable network, 429, and 5xx failures retain bounded retries. `/health/ready` remains an infrastructure check so provider credit cannot restart healthy non-model services.
+
+PageIndex child processes receive an allowlisted environment. Database admin/reader credentials, object-store credentials, API-key pepper, frontend secrets, and unrelated host variables are excluded. Provider failures store allowlisted codes, status, retryability, and stack fingerprints, never messages, prompts, document text, response bodies, or locals.
 
 ## Deployment checklist
 

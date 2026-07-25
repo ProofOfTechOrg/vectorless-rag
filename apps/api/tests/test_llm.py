@@ -67,7 +67,11 @@ class _Ledger:
         self.fail_finalize = fail_finalize
 
     async def astart(
-        self, stage: ModelCallStage, model: str, provider_attempt: int
+        self,
+        stage: ModelCallStage,
+        model: str,
+        provider_attempt: int,
+        **_: object,
     ) -> StartedModelCall:
         call = StartedModelCall(
             uuid.uuid4(),
@@ -75,6 +79,7 @@ class _Ledger:
             stage,
             model,
             provider_attempt,
+            uuid.uuid4(),
         )
         events: list[tuple[object, ...]] = self.calls.setdefault("ledger_events", [])
         events.append(("started", call))
@@ -86,6 +91,7 @@ class _Ledger:
         outcome: ModelCallOutcome,
         finish_reason: str | None,
         usage: TokenUsage,
+        **_: object,
     ) -> None:
         if self.fail_finalize:
             raise UsagePersistenceError
@@ -225,7 +231,7 @@ async def test_deterministic_provider_rejection_is_sanitized_without_retry(
             stage=ModelCallStage.query_route,
         )
 
-    assert error.value.failure_code == "llm_provider_rejected"
+    assert error.value.failure_code == "provider_rejected"
     assert error.value.attempts == 1
     assert "private" not in error.value.diagnostic
     assert calls == 1

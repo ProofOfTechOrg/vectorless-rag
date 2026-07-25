@@ -34,6 +34,7 @@ from vectorless_rag.graph import GraphRunner
 from vectorless_rag.ingestion import (
     IngestionRetryConflict,
     UnsupportedPDF,
+    enqueue_document_reindex,
     register_pdf,
     retry_failed_ingestion,
     retry_latest_document_ingestion,
@@ -42,7 +43,13 @@ from vectorless_rag.ingestion import (
 from vectorless_rag.llm import DeepSeekLLM, LLMError
 from vectorless_rag.models import (
     Document,
+    DocumentStatus,
+    IndexActivation,
+    IndexActivationReason,
+    IndexLifecycleStatus,
+    IndexVersion,
     IngestionJob,
+    IngestionMode,
     ModelCall,
     QueryRun,
     QueryRunStatus,
@@ -53,6 +60,8 @@ from vectorless_rag.models import (
 )
 from vectorless_rag.observability import Observability
 from vectorless_rag.operational_logging import emit_event
+from vectorless_rag.pageindex_artifact import load_manifest_v2
+from vectorless_rag.provider import ProviderGate
 from vectorless_rag.retrieval import CorpusRouter, PageIndexRetriever, VectorlessRetriever
 from vectorless_rag.schemas import (
     ChatRequest,
@@ -62,7 +71,9 @@ from vectorless_rag.schemas import (
     DocumentSummary,
     FeedbackRequest,
     IdentityResponse,
+    IndexVersionSummary,
     JobResponse,
+    ProviderStatusResponse,
     SyncRequest,
     SyncResponse,
     ThreadPage,
@@ -79,8 +90,10 @@ logger = logging.getLogger(__name__)
 SAFE_QUERY_FAILURE_DIAGNOSTICS = {
     RunFailureCode.deadline_exceeded: "request deadline exceeded",
     RunFailureCode.client_cancelled: "client cancelled request",
-    RunFailureCode.request_failed: "request failed",
+    RunFailureCode.request_failed: "The API could not complete this run.",
     RunFailureCode.usage_persistence_failed: "usage persistence failed",
+    RunFailureCode.provider_unavailable: "model provider unavailable",
+    RunFailureCode.upstream_invalid_response: "model provider returned an invalid response",
 }
 
 
@@ -91,6 +104,7 @@ class Runtime:
     sql_engine: AsyncEngine
     store: S3ObjectStore
     llm: DeepSeekLLM | None
+    provider_gate: ProviderGate
     observability: Observability
     checkpointer: Any
 
@@ -106,7 +120,12 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     sql_engine = make_engine(settings.sql_database_url, pool_size=5)
     store = S3ObjectStore(settings)
     observability = Observability(settings)
-    llm = DeepSeekLLM(settings, observability) if settings.deepseek_api_key else None
+    provider_gate = ProviderGate(settings)
+    llm = (
+        DeepSeekLLM(settings, observability, provider_gate=provider_gate)
+        if settings.deepseek_api_key
+        else None
+    )
     async with AsyncExitStack() as stack:
         checkpointer_context = AsyncPostgresSaver.from_conn_string(
             _checkpoint_url(settings.database_url)
@@ -115,7 +134,14 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
         await checkpointer.setup()
         await store.ensure_bucket()
         application.state.runtime = Runtime(
-            settings, database, sql_engine, store, llm, observability, checkpointer
+            settings,
+            database,
+            sql_engine,
+            store,
+            llm,
+            provider_gate,
+            observability,
+            checkpointer,
         )
         yield
         observability.flush()
@@ -158,6 +184,23 @@ async def ready(request: Request) -> dict[str, str]:
 async def identity(principal: AnyPrincipal) -> IdentityResponse:
     """Return the minimum browser bootstrap identity for any valid API key."""
     return IdentityResponse(name=principal.name, scopes=sorted(principal.scopes))
+
+
+@app.get("/v1/provider/status", response_model=ProviderStatusResponse, tags=["provider"])
+async def provider_status(
+    request: Request,
+    principal: AnyPrincipal,
+    session: Session,
+) -> ProviderStatusResponse:
+    del principal
+    runtime: Runtime = request.app.state.runtime
+    observation = await runtime.provider_gate.status(session, refresh=False)
+    return ProviderStatusResponse(
+        availability=observation.availability,
+        reason=observation.reason,
+        checked_at=observation.checked_at,
+        stale=observation.stale,
+    )
 
 
 def _runner(runtime: Runtime) -> GraphRunner:
@@ -269,12 +312,29 @@ async def _execute_chat(
         )
         raise
     except Exception as exc:
-        failure_code = (
-            RunFailureCode.usage_persistence_failed
-            if isinstance(exc, LLMError)
-            and exc.failure_code == RunFailureCode.usage_persistence_failed.value
-            else RunFailureCode.request_failed
-        )
+        failure_code = RunFailureCode.request_failed
+        response_status = status.HTTP_500_INTERNAL_SERVER_ERROR
+        if isinstance(exc, LLMError):
+            if exc.failure_code == RunFailureCode.usage_persistence_failed.value:
+                failure_code = RunFailureCode.usage_persistence_failed
+            elif exc.failure_code in {
+                "insufficient_credit",
+                "authentication_failed",
+                "permission_denied",
+                "provider_unavailable",
+                "network_error",
+                "rate_limited",
+                "provider_server_error",
+            }:
+                failure_code = RunFailureCode.provider_unavailable
+                response_status = status.HTTP_503_SERVICE_UNAVAILABLE
+            elif exc.failure_code in {
+                "structured_output_invalid",
+                "upstream_invalid_response",
+                "truncated_output",
+            }:
+                failure_code = RunFailureCode.upstream_invalid_response
+                response_status = status.HTTP_502_BAD_GATEWAY
         run.failure_code = failure_code
         run.error = SAFE_QUERY_FAILURE_DIAGNOSTICS[failure_code]
         run.insufficient = True
@@ -288,8 +348,8 @@ async def _execute_chat(
         if isinstance(exc, HTTPException):
             raise
         raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "The API could not complete this run.",
+            response_status,
+            SAFE_QUERY_FAILURE_DIAGNOSTICS[failure_code],
         ) from None
     route = RunRoute(result["route"])
     citations = [Citation.model_validate(item) for item in result.get("citations", [])]
@@ -372,17 +432,18 @@ async def chat_stream(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            failure_code = (
-                "deadline_exceeded"
-                if isinstance(exc, HTTPException)
-                and exc.status_code == status.HTTP_504_GATEWAY_TIMEOUT
-                else "request_failed"
-            )
-            message = (
-                "The request timed out."
-                if failure_code == "deadline_exceeded"
-                else "The API could not complete this run."
-            )
+            failure_code = "request_failed"
+            message = "The API could not complete this run."
+            if isinstance(exc, HTTPException):
+                if exc.status_code == status.HTTP_504_GATEWAY_TIMEOUT:
+                    failure_code = "deadline_exceeded"
+                    message = "The request timed out."
+                elif exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+                    failure_code = "provider_unavailable"
+                    message = "The model provider is unavailable."
+                elif exc.status_code == status.HTTP_502_BAD_GATEWAY:
+                    failure_code = "upstream_invalid_response"
+                    message = "The model provider returned an invalid response."
             yield {
                 "event": "error",
                 "data": json.dumps(
@@ -507,6 +568,114 @@ async def retry_document_ingestion(
     return JobResponse.model_validate(replacement)
 
 
+@app.post("/v1/admin/documents/{document_id}/reindex", response_model=JobResponse, tags=["admin"])
+async def reindex_document(
+    document_id: uuid.UUID,
+    principal: AdminPrincipal,
+    session: Session,
+) -> JobResponse:
+    del principal
+    try:
+        job = await enqueue_document_reindex(
+            session,
+            document_id,
+            mode=IngestionMode.rebuild_index,
+        )
+    except IngestionRetryConflict as error:
+        if str(error) == "document not found":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, str(error)) from error
+        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+    return JobResponse.model_validate(job)
+
+
+@app.get(
+    "/v1/admin/documents/{document_id}/index-versions",
+    response_model=list[IndexVersionSummary],
+    tags=["admin"],
+)
+async def document_index_versions(
+    document_id: uuid.UUID,
+    principal: AdminPrincipal,
+    session: Session,
+) -> list[IndexVersionSummary]:
+    del principal
+    document = await session.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "document not found")
+    versions = list(
+        (
+            await session.scalars(
+                select(IndexVersion)
+                .where(IndexVersion.document_id == document_id)
+                .order_by(desc(IndexVersion.created_at), desc(IndexVersion.id))
+            )
+        ).all()
+    )
+    return [
+        IndexVersionSummary.model_validate(version).model_copy(
+            update={"active": version.id == document.active_index_version_id}
+        )
+        for version in versions
+    ]
+
+
+@app.post(
+    "/v1/admin/documents/{document_id}/index-versions/{version_id}/activate",
+    response_model=IndexVersionSummary,
+    tags=["admin"],
+)
+async def activate_document_index_version(
+    request: Request,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    principal: AdminPrincipal,
+    session: Session,
+) -> IndexVersionSummary:
+    runtime: Runtime = request.app.state.runtime
+    version = await session.get(IndexVersion, version_id)
+    if version is None or version.document_id != document_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "index version not found")
+    if (
+        version.artifact_schema_version != 2
+        or version.manifest_object_key is None
+        or version.manifest_sha256 is None
+        or version.lifecycle_status
+        not in (IndexLifecycleStatus.verified, IndexLifecycleStatus.active)
+        or version.verified_at is None
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, "index version is not verified v2")
+    object_key = version.manifest_object_key
+    digest = version.manifest_sha256
+    await session.rollback()
+    try:
+        await load_manifest_v2(runtime.store, object_key, digest)
+    except ValueError as error:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "index version artifact verification failed",
+        ) from error
+    document = await session.get(Document, document_id, with_for_update=True)
+    version = await session.get(IndexVersion, version_id, with_for_update=True)
+    if document is None or version is None or version.document_id != document_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "index version changed during verification")
+    prior = document.active_index_version_id
+    if prior != version.id:
+        session.add(
+            IndexActivation(
+                document_id=document.id,
+                prior_index_version_id=prior,
+                index_version_id=version.id,
+                reason=IndexActivationReason.rollback,
+                actor=f"api-key:{principal.api_key_id}"[:128],
+            )
+        )
+        document.active_index_version_id = version.id
+    document.status = DocumentStatus.ready
+    document.diagnostic = None
+    await session.flush()
+    return IndexVersionSummary.model_validate(version).model_copy(update={"active": True})
+
+
 @app.post("/v1/admin/ingestion/sync", response_model=SyncResponse, tags=["admin"])
 async def synchronize(
     request: Request,
@@ -516,7 +685,14 @@ async def synchronize(
 ) -> SyncResponse:
     del principal
     runtime: Runtime = request.app.state.runtime
-    return await sync_corpus(session, runtime.store, runtime.settings, force=payload.force)
+    return await sync_corpus(
+        session,
+        runtime.store,
+        runtime.settings,
+        force=bool(payload.force),
+        mode=payload.mode,
+        arxiv_ids=payload.arxiv_ids,
+    )
 
 
 @app.get("/v1/admin/ingestion/{job_id}", response_model=JobResponse, tags=["admin"])
@@ -639,7 +815,15 @@ async def thread_history(
 
     def public_failure_code(
         run: QueryRun,
-    ) -> Literal["deadline_exceeded", "request_failed"] | None:
+    ) -> (
+        Literal[
+            "deadline_exceeded",
+            "request_failed",
+            "provider_unavailable",
+            "upstream_invalid_response",
+        ]
+        | None
+    ):
         if query_run_status(run) != QueryRunStatus.failed:
             return None
         if (
@@ -647,6 +831,10 @@ async def thread_history(
             or run.error == "request deadline exceeded"
         ):
             return "deadline_exceeded"
+        if run.failure_code == RunFailureCode.provider_unavailable:
+            return "provider_unavailable"
+        if run.failure_code == RunFailureCode.upstream_invalid_response:
+            return "upstream_invalid_response"
         return "request_failed"
 
     return ThreadResponse(

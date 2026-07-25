@@ -71,7 +71,8 @@ def test_evidence_enforces_range_page_and_token_caps() -> None:
         "question", [document], {document_id: artifact}, selection, [], set()
     )
     assert len(evidence) == 1
-    assert evidence[0].page_end == 2
+    assert evidence[0].page_end == 1
+    assert evidence[0].content_truncated is True
     assert len(retriever.encoding.encode(evidence[0].content)) <= 30
 
 

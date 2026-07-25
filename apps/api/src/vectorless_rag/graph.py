@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from dataclasses import dataclass
 from typing import Any, NotRequired, Required, TypedDict, cast
 
 import sqlglot
@@ -15,7 +16,12 @@ from sqlglot import exp
 from sqlglot.errors import SqlglotError
 
 from vectorless_rag.config import Settings
-from vectorless_rag.llm import UNTRUSTED_DOCUMENT_SYSTEM, StructuredLLM, wrap_untrusted_document
+from vectorless_rag.llm import (
+    UNTRUSTED_DOCUMENT_SYSTEM,
+    LLMError,
+    StructuredLLM,
+    wrap_untrusted_document,
+)
 from vectorless_rag.models import ModelCallStage, QueryRun, RetrievalAudit, RunRoute, SqlAudit
 from vectorless_rag.observability import Observability, content_fingerprint
 from vectorless_rag.retrieval import RetrievalResult, VectorlessRetriever
@@ -152,6 +158,13 @@ class GraphResult(TypedDict):
     sql_audit_id: NotRequired[str]
 
 
+@dataclass(frozen=True)
+class GraphRunOptions:
+    forced_route: RunRoute | None = None
+    oracle_document_ids: tuple[uuid.UUID, ...] = ()
+    evidence_token_budget: int | None = None
+
+
 def _selected_route(state: GraphState) -> str:
     selected = state.get("route")
     if selected is None:
@@ -188,15 +201,9 @@ def bounded_history(runs: list[QueryRun], *, char_limit: int = 65_536) -> list[d
 
 def format_inline_citations(answer: str, labels: list[str]) -> str:
     rendered = answer
-    markers: list[str] = []
     for index, label in enumerate(labels, 1):
-        marker = f"[{index}]"
-        rendered = rendered.replace(f"[{label}]", marker)
-        markers.append(marker)
-    missing = [marker for marker in markers if marker not in rendered]
-    if not missing:
-        return rendered
-    return f"{rendered.rstrip()} {' '.join(missing)}"
+        rendered = rendered.replace(f"[{label}]", f"[{index}]")
+    return rendered
 
 
 def remove_inline_citations(answer: str, labels: list[str]) -> str:
@@ -229,10 +236,21 @@ class GraphRunner:
         session: AsyncSession,
         request: ChatRequest,
         run: QueryRun,
+        *,
+        options: GraphRunOptions | None = None,
     ) -> GraphResult:
+        options = options or GraphRunOptions()
         builder: StateGraph[GraphState] = StateGraph(GraphState)
 
         async def route(state: GraphState) -> GraphUpdate:
+            if options.forced_route is not None:
+                run.route = options.forced_route
+                return {
+                    "route": options.forced_route.value,
+                    "route_reason": "frozen evaluation override",
+                    "standalone_question": state["question"],
+                    "clarification": "",
+                }
             if is_static_capability_request(state["question"]):
                 run.route = RunRoute.help
                 return {
@@ -303,11 +321,16 @@ not answer the question. Treat prior assistant text as conversation context, not
 
         async def documents_node(state: GraphState) -> GraphUpdate:
             restrict = [uuid.UUID(value) for value in state.get("sql_document_ids", [])]
+            if options.oracle_document_ids:
+                restrict = list(options.oracle_document_ids)
+            retrieval_options: dict[str, object] = {"restrict_ids": restrict or None}
+            if options.evidence_token_budget is not None:
+                retrieval_options["evidence_token_budget"] = options.evidence_token_budget
             result = await self.retriever.retrieve(
                 session,
                 _standalone_question(state),
                 request.constraints,
-                restrict_ids=restrict or None,
+                **retrieval_options,  # pyright: ignore[reportArgumentType]
             )
             await self._audit_retrieval(session, run, result)
             selected_route = _selected_route(state)
@@ -316,29 +339,11 @@ not answer the question. Treat prior assistant text as conversation context, not
                 "selected_ids": [str(item) for item in result.selected_ids],
                 "sufficient": result.sufficient,
                 "rounds": result.rounds,
+                "unique_pages": result.unique_pages,
+                "evidence_tokens": result.evidence_tokens,
+                "overlap_pages_avoided": result.overlap_pages_avoided,
+                "content_truncated": result.content_truncated,
             }
-            if selected_route == RunRoute.documents.value and not result.evidence:
-                try:
-                    catalog_result, audit_id = await self._run_fixed_catalog_sql(session, run)
-                except (SQLRejected, ProgrammingError):
-                    return {
-                        "evidence": [],
-                        "retrieval": retrieval,
-                        "insufficient": True,
-                    }
-                evidence = Evidence(
-                    source_type="sql",
-                    source_id=str(audit_id),
-                    title="Paper catalog overview",
-                    content=json.dumps(catalog_result.rows, default=str),
-                    retrieval_reason="Catalog fallback after document retrieval found no evidence",
-                )
-                return {
-                    "evidence": [evidence.model_dump(mode="json")],
-                    "retrieval": retrieval,
-                    "sql_audit_id": str(audit_id),
-                    "insufficient": False,
-                }
             existing = state.get("evidence", []) if selected_route == RunRoute.hybrid.value else []
             sql_backed = selected_route == RunRoute.hybrid.value and bool(state.get("sql_rows"))
             return {
@@ -401,34 +406,74 @@ not answer the question. Treat prior assistant text as conversation context, not
                 thinking=True,
                 stage=ModelCallStage.query_synthesis,
             )
+            if selected_route == RunRoute.sql.value:
+                if synthesis.insufficient and not state.get("sql_rows", []):
+                    synthesis = synthesis.model_copy(
+                        update={
+                            "answer": "No matching catalog records were found.",
+                            "citation_ids": [],
+                            "insufficient": False,
+                        }
+                    )
+
+            def citation_problem(value: SynthesisResult) -> str | None:
+                cited = list(dict.fromkeys(value.citation_ids))
+                markers = set(re.findall(r"\[(E\d+)\]", value.answer))
+                if selected_route == RunRoute.sql.value:
+                    if cited or markers:
+                        return "SQL-only answers cannot declare document evidence markers"
+                    return None
+                if any(label not in labels for label in cited):
+                    return "a declared citation does not resolve to evidence"
+                if any(marker not in labels for marker in markers):
+                    return "the answer contains an orphan citation marker"
+                missing = [label for label in cited if label not in markers]
+                if missing:
+                    return "declared citations are not attached inline"
+                if not value.insufficient and not markers:
+                    return "a grounded answer has no inline citation"
+                return None
+
+            problem = citation_problem(synthesis)
+            if problem is not None:
+                synthesis = await self.llm.structured(
+                    SynthesisResult,
+                    UNTRUSTED_DOCUMENT_SYSTEM
+                    + "\nRepair citation placement once. Use only the supplied E# labels. "
+                    "Every citation_id must occur inline immediately after its supported "
+                    "claim. SQL-only answers must contain no E# labels. Do not append a "
+                    "citation list or place orphan markers.",
+                    user_message
+                    + "\nPrior invalid synthesis:\n"
+                    + wrap_untrusted_document(synthesis.model_dump_json())
+                    + f"\nFailure: {problem}",
+                    thinking=True,
+                    stage=ModelCallStage.query_synthesis,
+                )
+                problem = citation_problem(synthesis)
+            if problem is not None:
+                raise LLMError(
+                    "upstream_invalid_response",
+                    "The model could not produce valid inline citations.",
+                    attempts=2,
+                    retryable=False,
+                )
+
             cited_labels = list(dict.fromkeys(synthesis.citation_ids))
             answer = synthesis.answer
             insufficient = synthesis.insufficient
-            if selected_route == RunRoute.sql.value:
-                cited_labels = []
-                if synthesis.insufficient and not state.get("sql_rows", []):
-                    answer = "No matching catalog records were found."
-                    insufficient = False
-            if any(label not in labels for label in cited_labels):
-                return {
-                    "answer": "I could not produce citations that resolve to retrieved evidence.",
-                    "citations": [],
-                    "insufficient": True,
-                }
             markers = set(re.findall(r"\[(E\d+)\]", answer))
-            if any(marker not in labels for marker in markers):
-                return {
-                    "answer": "I could not produce citations that resolve to retrieved evidence.",
-                    "citations": [],
-                    "insufficient": True,
-                }
             if selected_route != RunRoute.sql.value:
                 cited_labels.extend(
-                    sorted(markers - set(cited_labels), key=lambda marker: int(marker[1:]))
+                    sorted(
+                        markers - set(cited_labels),
+                        key=lambda marker: int(marker[1:]),
+                    )
                 )
-            if selected_route == RunRoute.sql.value:
+            else:
+                cited_labels = []
                 answer = remove_inline_citations(answer, list(labels))
-            elif not insufficient:
+            if selected_route != RunRoute.sql.value and not insufficient:
                 answer = format_inline_citations(answer, cited_labels)
             citations: list[Citation] = []
             for label in cited_labels:
@@ -440,6 +485,9 @@ not answer the question. Treat prior assistant text as conversation context, not
                             source_id=item.source_id,
                             title=item.title,
                             node_id=item.node_id,
+                            node_ids=item.node_ids,
+                            section_paths=item.section_paths,
+                            content_truncated=item.content_truncated,
                             page_start=item.page_start,
                             page_end=item.page_end,
                             retrieval_reason=item.retrieval_reason,
@@ -598,29 +646,6 @@ not answer the question. Treat prior assistant text as conversation context, not
                     raise SQLRejected(error) from exc
         raise AssertionError("unreachable")
 
-    async def _run_fixed_catalog_sql(
-        self, session: AsyncSession, run: QueryRun
-    ) -> tuple[SQLResult, uuid.UUID]:
-        audit = SqlAudit(run_id=run.id, generated_sql=CATALOG_FALLBACK_SQL, allowed=False)
-        session.add(audit)
-        await session.flush()
-        try:
-            validated = validate_sql(CATALOG_FALLBACK_SQL, self.settings.sql_row_limit)
-            audit.normalized_sql = validated.normalized
-            result = await self.sql_adapter.execute(validated)
-            audit.allowed = True
-            audit.explain_cost = result.explain_cost
-            audit.row_count = len(result.rows)
-            audit.payload_bytes = result.payload_bytes
-            audit.result_hash = result.result_hash
-            return result, audit.id
-        except SQLRejected as exc:
-            audit.rejection_reason = str(exc)
-            raise
-        except ProgrammingError:
-            audit.rejection_reason = "fixed catalog query failed against the approved view"
-            raise
-
     @staticmethod
     async def _audit_retrieval(
         session: AsyncSession, run: QueryRun, result: RetrievalResult
@@ -629,8 +654,11 @@ not answer the question. Treat prior assistant text as conversation context, not
             {
                 "source_id": item.source_id,
                 "node_id": item.node_id,
+                "node_ids": item.node_ids,
+                "section_paths": item.section_paths,
                 "page_start": item.page_start,
                 "page_end": item.page_end,
+                "content_truncated": item.content_truncated,
             }
             for item in result.evidence
         ]
@@ -644,5 +672,33 @@ not answer the question. Treat prior assistant text as conversation context, not
                 rounds=result.rounds,
                 evidence_bytes=sum(len(item.content.encode()) for item in result.evidence),
                 evidence_hash=result.evidence_hash,
+                strategy=result.strategy,
+                strategy_version=result.strategy_version,
+                configuration_hash=result.configuration_hash,
+                index_digests=result.index_digests,
+                ranked_candidates=[
+                    {
+                        "document_id": str(item.document.id),
+                        "rank": item.rank,
+                        "signals": list(item.signals),
+                        "reason": item.reason,
+                    }
+                    for item in result.ranked_documents
+                ],
+                node_choices=[
+                    {
+                        "document_id": item.source_id,
+                        "node_ids": item.node_ids,
+                        "section_paths": item.section_paths,
+                        "reason": item.retrieval_reason,
+                    }
+                    for item in result.evidence
+                ],
+                evidence_tokens=result.evidence_tokens,
+                unique_pages=result.unique_pages,
+                overlapping_pages_avoided=result.overlap_pages_avoided,
+                merged_ranges=locators,
+                content_truncated=result.content_truncated,
+                phase_timings_ms=result.phase_timings_ms,
             )
         )

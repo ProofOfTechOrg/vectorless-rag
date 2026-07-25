@@ -10,4 +10,16 @@ Back up PostgreSQL with `pg_dump`, MinIO with an S3-compatible replication/copy 
 
 Restore database and object-store data as a consistent set, restore the same application credentials and `API_KEY_PEPPER`, apply `make migrate`, then start API/worker before web. Restoring `SESSION_SECRET` preserves unexpired browser sessions; rotating it intentionally logs every browser out. Validate with `make health`, a document detail lookup, and a cited test question.
 
+Before applying historical telemetry classifications, stop benchmark activity, create and checksum a `rag` database backup, save the exact classification manifest and dry-run output, then run:
+
+```bash
+docker compose exec -T api vectorless-rag telemetry-classify \
+  --manifest telemetry/classifications-v1.json
+docker compose exec -T api vectorless-rag telemetry-classify \
+  --manifest telemetry/classifications-v1.json --apply --confirm-count 7
+docker compose exec -T api vectorless-rag telemetry-classifications
+```
+
+The apply command uses `DATABASE_ADMIN_URL`, a serializable transaction, and an advisory lock. It appends classification events; it does not delete attempts, calls, query runs, retrieval audits, SQL audits, Langfuse traces, ClickHouse data, or MinIO data. Preserve the pre-apply backup even after reconciliation succeeds.
+
 Kubernetes PVC and external-service backups follow provider-native procedures. The chart path is `infra/helm/vectorless-rag`; render the exact release values and Secret key inventory alongside backups without storing secret values in Git.

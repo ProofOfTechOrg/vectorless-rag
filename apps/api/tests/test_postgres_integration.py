@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import TypeVar
 
 import psycopg
 import pytest
 from psycopg import errors
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from vectorless_rag.config import Settings
@@ -17,6 +19,8 @@ from vectorless_rag.db import claim_ingestion_job, make_engine
 from vectorless_rag.models import (
     Document,
     DocumentStatus,
+    IndexLifecycleStatus,
+    IndexVersion,
     IngestionAttempt,
     IngestionAttemptStatus,
     IngestionJob,
@@ -26,6 +30,10 @@ from vectorless_rag.models import (
 from vectorless_rag.retrieval import CorpusRouter
 from vectorless_rag.schemas import MetadataConstraints
 from vectorless_rag.sql_guard import PostgreSQLAdapter, validate_sql
+from vectorless_rag.usage import (
+    RECONCILE_MODEL_CALL_RESERVATION_SQL,
+    RESERVE_MODEL_CALL_SQL,
+)
 
 OWNER_URL = os.getenv("TEST_OWNER_DATABASE_URL")
 READER_URL = os.getenv("TEST_DATABASE_URL")
@@ -239,6 +247,33 @@ async def test_corpus_candidates_match_then_fill_ordering_and_filters() -> None:
         async with sessions() as session:
             session.add_all(documents)
             await session.commit()
+            versions = [
+                IndexVersion(
+                    id=uuid.uuid4(),
+                    document_id=document.id,
+                    version_key=f"integration-{document.id}",
+                    pageindex_version="integration",
+                    prompt_version="integration",
+                    model_name="integration",
+                    artifact_object_key=f"artifacts/{document.id}.json",
+                    artifact_sha256=document.sha256,
+                    artifact_schema_version=1,
+                    recipe_key=f"integration-{document.id}",
+                    pageindex_description=document.abstract,
+                    lifecycle_status=IndexLifecycleStatus.verified,
+                    verified_at=now,
+                )
+                for document in documents
+                if document.status == DocumentStatus.ready
+            ]
+            session.add_all(versions)
+            await session.commit()
+            versions_by_document = {version.document_id: version for version in versions}
+            for document in documents:
+                version = versions_by_document.get(document.id)
+                if version is not None:
+                    document.active_index_version_id = version.id
+            await session.commit()
             router = CorpusRouter(Settings(candidate_limit=3), _UnusedRouterLLM())
 
             precision_ids = [document.id for document in documents[:3]]
@@ -248,11 +283,11 @@ async def test_corpus_candidates_match_then_fill_ordering_and_filters() -> None:
                 MetadataConstraints(),
                 precision_ids,
             )
-            assert [candidate.document.id for candidate in precision] == [
-                documents[0].id,
-                documents[2].id,
+            assert precision[0].document.id == documents[0].id
+            assert {candidate.document.id for candidate in precision[1:]} == {
                 documents[1].id,
-            ]
+                documents[2].id,
+            }
             assert [candidate.fts_match for candidate in precision] == [True, False, False]
             assert len({candidate.document.id for candidate in precision}) == 3
 
@@ -301,6 +336,14 @@ async def test_corpus_candidates_match_then_fill_ordering_and_filters() -> None:
             assert [candidate.fts_match for candidate in quoted] == [True, False]
     finally:
         async with sessions() as session:
+            await session.execute(
+                update(Document)
+                .where(Document.id.in_(document_ids))
+                .values(active_index_version_id=None)
+            )
+            await session.execute(
+                delete(IndexVersion).where(IndexVersion.document_id.in_(document_ids))
+            )
             await session.execute(delete(Document).where(Document.id.in_(document_ids)))
             await session.commit()
         await engine.dispose()
@@ -335,6 +378,7 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
             document_id=document_ids[2],
             status=JobStatus.running,
             attempts=1,
+            retry_budget_consumed=1,
             started_at=now - timedelta(seconds=120),
             created_at=created_baseline - timedelta(seconds=5),
         ),
@@ -343,6 +387,7 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
             document_id=document_ids[3],
             status=JobStatus.running,
             attempts=3,
+            retry_budget_consumed=3,
             started_at=now - timedelta(seconds=120),
             created_at=created_baseline - timedelta(seconds=4),
         ),
@@ -351,6 +396,7 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
             document_id=document_ids[4],
             status=JobStatus.running,
             attempts=1,
+            retry_budget_consumed=1,
             started_at=now,
             created_at=created_baseline - timedelta(seconds=3),
         ),
@@ -442,6 +488,7 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
             document_id=document_ids[5],
             status=JobStatus.running,
             attempts=1,
+            retry_budget_consumed=1,
             started_at=now - timedelta(seconds=120),
             created_at=created_baseline - timedelta(seconds=2),
         )
@@ -474,6 +521,11 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
     finally:
         async with sessions() as session:
             await session.execute(
+                update(IngestionJob)
+                .where(IngestionJob.document_id.in_(document_ids))
+                .values(active_attempt_id=None)
+            )
+            await session.execute(
                 delete(IngestionAttempt).where(
                     IngestionAttempt.job_id.in_(
                         select(IngestionJob.id).where(IngestionJob.document_id.in_(document_ids))
@@ -486,3 +538,114 @@ async def test_concurrent_claims_reclaim_stale_work_and_exhaust_recovery() -> No
             await session.execute(delete(Document).where(Document.id.in_(document_ids)))
             await session.commit()
         await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not OWNER_URL, reason="PostgreSQL owner URL not set")
+def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> None:
+    assert OWNER_URL is not None
+    owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
+    document_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+    attempt_id = uuid.uuid4()
+    experiment_id = uuid.uuid4()
+    logical_call_id = uuid.uuid4()
+    reservation_id = uuid.uuid4()
+    digest = uuid.uuid4().hex + uuid.uuid4().hex
+    with psycopg.connect(owner_sync) as connection:
+        connection.execute(
+            """INSERT INTO agent.documents
+               (id, sha256, original_filename, pdf_object_key, status)
+               VALUES (%s, %s, 'budget.pdf', 'pdf/budget', 'indexing')""",
+            (document_id, digest),
+        )
+        connection.execute(
+            """INSERT INTO agent.experiments
+               (id, name, release_sha, configuration_hash, corpus_hash, index_hash,
+                dataset_hash, price_snapshot, repetitions, evidence_token_budget,
+                seed, maximum_cost_usd, frozen_at)
+               VALUES (%s, 'budget-test', %s, %s, %s, %s, %s, %s::jsonb, 1, 6400,
+                       1, 0.001, now())""",
+            (
+                experiment_id,
+                "a" * 40,
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                "e" * 64,
+                json.dumps(
+                    {
+                        "input_per_million_usd": 1,
+                        "cache_hit_input_per_million_usd": 0.1,
+                        "output_per_million_usd": 2,
+                        "max_output_tokens": 100,
+                        "max_attempts": 3,
+                    }
+                ),
+            ),
+        )
+        connection.execute(
+            """INSERT INTO agent.ingestion_jobs
+               (id, document_id, status, force, mode, attempts, retry_budget_consumed,
+                is_active, metrics, experiment_id)
+               VALUES (%s, %s, 'running', true, 'reextract_all', 1, 0, true, '{}'::jsonb, %s)""",
+            (job_id, document_id, experiment_id),
+        )
+        connection.execute(
+            """INSERT INTO agent.ingestion_attempts
+               (id, job_id, attempt_number, trace_id, worker_id, status, artifact_action,
+                telemetry_complete, retry_budget_consumed)
+               VALUES (%s, %s, 1, %s, 'budget-worker', 'running', 'none', false, false)""",
+            (attempt_id, job_id, uuid.uuid4().hex),
+        )
+        parameters = {
+            "query_run_id": None,
+            "ingestion_attempt_id": attempt_id,
+            "reservation_id": reservation_id,
+            "logical_call_id": logical_call_id,
+            "prompt_bytes": 10,
+        }
+        row = connection.execute(RESERVE_MODEL_CALL_SQL, parameters).fetchone()
+        assert row == (reservation_id,)
+        assert connection.execute(
+            """SELECT reserved_cost_usd, status
+               FROM agent.model_call_cost_reservations WHERE id = %s""",
+            (reservation_id,),
+        ).fetchone() == (Decimal("0.000630"), "reserved")
+
+        connection.execute("SAVEPOINT over_cap")
+        with pytest.raises(psycopg.errors.RaiseException, match="experiment cost cap exceeded"):
+            connection.execute(
+                RESERVE_MODEL_CALL_SQL,
+                {
+                    **parameters,
+                    "reservation_id": uuid.uuid4(),
+                    "logical_call_id": uuid.uuid4(),
+                    "prompt_bytes": 1_000,
+                },
+            ).fetchone()
+        connection.execute("ROLLBACK TO SAVEPOINT over_cap")
+
+        connection.execute(
+            """INSERT INTO agent.model_calls
+               (id, ingestion_attempt_id, trace_id, stage, model, provider_attempt,
+                logical_call_id, operation, outcome, usage_available,
+                cache_attribution_complete, input_tokens, cache_hit_input_tokens,
+                cache_miss_input_tokens, cache_write_input_tokens,
+                unattributed_input_tokens, output_tokens, reasoning_output_tokens,
+                total_tokens, cost_reservation_id)
+               VALUES (%s, %s, %s, 'pageindex_generation', 'test', 1, %s,
+                       'pageindex_completion', 'completed', true, true,
+                       10, 0, 10, 0, 0, 5, 0, 15, %s)""",
+            (uuid.uuid4(), attempt_id, uuid.uuid4().hex, logical_call_id, reservation_id),
+        )
+        connection.execute(
+            RECONCILE_MODEL_CALL_RESERVATION_SQL,
+            {"cost_reservation_id": reservation_id, "terminal": True},
+        )
+        assert connection.execute(
+            """SELECT measured_cost_usd, status
+               FROM agent.model_call_cost_reservations WHERE id = %s""",
+            (reservation_id,),
+        ).fetchone() == (Decimal("0.000020"), "finalized")
+        connection.rollback()

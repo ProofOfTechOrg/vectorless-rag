@@ -16,5 +16,7 @@ apps/api/.venv/
 apps/web/dist/
 apps/web/test-results/
 apps/web/playwright-report/
+apps/api/evaluation/run/
+apps/api/pilots/run/
 
 arxiv-pdfs/

@@ -3,6 +3,8 @@
 
 # Compare vector RAG with the PageIndex system
 
+> **Provisional:** This comparison predates hierarchical PageIndex v2, complete-catalog retrieval, frozen full-corpus indexes, and a sealed post-freeze evaluation dataset. Keep the vr3 measurements as historical evidence, but do not use them as a final architecture verdict.
+
 This analysis compares conventional embedding and vector-search retrieval-augmented generation (RAG) with this repository’s PageIndex-based vectorless RAG implementation. It covers the implemented retrieval path, indexing lifecycle, retrieval quality, citations, latency, provider cost, scaling, failure modes, and the evidence required for a final product decision.
 
 ## Analysis baseline
@@ -26,13 +28,13 @@ The code and measurements use a fixed repository and corpus baseline so later ch
 
 The live measurements came from `make pilot-report`, `make query-cost-report DAYS=30`, and aggregate SQL queries over ingestion and query latency. These commands did not read prompts, answers, document names, API keys, or identities.
 
-## Decision
+## Provisional decision
 
-Use conventional hybrid vector RAG as the default content-retrieval path. Keep PageIndex as an evaluated, lazily built fallback for question classes where an A/B evaluation proves a material quality gain.
+Do not make a final architecture selection from this report. The historical evidence favored conventional hybrid vector RAG, but it measured the flattened `vr3` arm rather than hierarchical v2. Treat that recommendation as the hypothesis the frozen comparison must test.
 
 The strongest case for PageIndex is long-document retrieval. A structure-aware index can find evidence across distant sections when the question and answer use different vocabulary. It can also select coherent page ranges instead of isolated fixed-size chunks.
 
-This implementation does not preserve the full PageIndex advantage. PostgreSQL lexical search defines the corpus-level candidate set, PageIndex operates only after document selection, and artifact normalization flattens the node hierarchy. The system pays the PageIndex indexing and query costs without evidence that it beats a strong hybrid vector baseline.
+The measured `vr3` implementation did not preserve the full PageIndex advantage. PostgreSQL lexical search defined the corpus-level candidate set, PageIndex operated only after document selection, and artifact normalization flattened the node hierarchy. Those defects are fixed in v2, but no paid v2 pilot or frozen vector comparison has been run yet.
 
 Do not approve PageIndex indexing for all 537 PDFs yet. The current cost report also blocks approval because the pilot contains no documents above the corpus’s 75th page-count percentile.
 
@@ -61,9 +63,9 @@ The vector index does not need a separate database at this scale. PostgreSQL wit
 
 A strong comparison must use hybrid retrieval rather than dense similarity alone. Hybrid retrieval retains exact-term and identifier matching while adding semantic recall. Section-aware chunks, neighbor expansion, and page metadata address the main weaknesses of naive fixed-chunk vector RAG.
 
-## How the current PageIndex system works
+## How the historical vr3 PageIndex system worked
 
-The current system combines metadata routing, lexical corpus search, PageIndex page selection, guarded SQL, and grounded synthesis.
+The measured vr3 system combined metadata routing, lexical corpus search, PageIndex page selection, guarded SQL, and grounded synthesis.
 
 ### Indexing path
 
@@ -117,9 +119,9 @@ A clearer comparison of the indexing paths is:
 | Current PageIndex implementation | One artifact per document version, built with an average of 84.5 measured model calls per successful pilot PDF |
 | Conventional vector RAG | One batched embedding pass over the chunks for each document and embedding configuration |
 
-## Corpus-level retrieval quality
+## Historical vr3 corpus-level retrieval quality
 
-The largest quality risk in the current system occurs before PageIndex sees a document. PostgreSQL full-text search selects at most 50 ready documents from title, abstract, description, topics, and ArXiv ID.
+The largest vr3 quality risk occurred before PageIndex saw a document. PostgreSQL full-text search selected at most 50 ready documents from title, abstract, description, topics, and ArXiv ID.
 
 The candidate query first uses an English `websearch_to_tsquery`. When fewer than 50 documents match, it ranks remaining documents using an OR query over up to 24 question tokens. It fills any remaining slots by rank and creation time.
 
@@ -135,11 +137,11 @@ This design has predictable consequences:
 
 Dense retrieval addresses the vocabulary mismatch at corpus level. A hybrid full-text and dense index would preserve the current exact matching while adding semantic candidate recall.
 
-## In-document retrieval quality
+## Historical vr3 in-document retrieval quality
 
 PageIndex can outperform fixed-size chunk retrieval when a question requires document navigation. Its node titles, summaries, and page ranges expose sections that a dense top-k search can miss.
 
-The current adapter weakens that structural signal in three ways:
+The vr3 adapter weakened that structural signal in three ways:
 
 1. `_walk_nodes` recursively flattens the PageIndex hierarchy into one list
 2. Retrieval omits the artifact’s generated document description
@@ -174,7 +176,7 @@ These controls prove that a citation resolves to retrieved evidence. They do not
 
 A vector implementation can retain the same controls by storing page spans on every chunk and preserving the existing synthesis and citation-validation code. The A/B evaluation must measure claim-level citation precision and recall, not citation presence alone.
 
-## Implemented retrieval limits
+## Historical vr3 retrieval limits
 
 The current limits bound response size and model context, but they can also suppress relevant evidence.
 
@@ -188,6 +190,8 @@ The current limits bound response size and model context, but they can also supp
 | Retrieval rounds | 2 |
 | Structured-output attempts per call | 3 |
 | Request deadline | 120s |
+
+PageIndex v2 removes the 50-document exclusion and reasons over every eligible catalog entry in deterministic 24,000-token batches. It retains at most eight selected documents, expands the nested tree for up to three rounds, and keeps the public 40,000-token evidence ceiling. Evaluation overrides are 6,400, 12,800, and 25,600 tokens.
 
 The 40,000-token evidence limit is not a billing limit. The system can send the evidence to sufficiency evaluation twice and then send it again for synthesis. A structured-output retry can repeat any failed request.
 
@@ -293,18 +297,27 @@ Historical traces predate durable query-call accounting. The prior trace analysi
 
 The measured pilot PageIndex answer costs 1.7 times the vector baseline. The full-candidate projection costs 3.2 times the vector baseline.
 
-The current `make query-cost-report DAYS=30` output cannot validate those values. It finds 57 historical runs and zero durable model-call rows because the migration did not backfill query usage. It correctly marks 55 runs incomplete and assigns zero cost only to two static help responses.
+The pre-v2 57-run cohort cannot validate those values because its query calls
+predate durable model-call accounting; the migration deliberately does not
+invent or backfill usage. New runs write durable call rows. Reports must keep
+the historical cohort marked legacy/incomplete and may assign zero model cost
+only to static help responses that made no model call.
 
 ## Scaling and operations
 
 Vector retrieval has the stronger scaling model for this application. Approximate nearest-neighbor search can rank the complete corpus without sending 50 metadata records to a generation model.
 
-The current PageIndex path has two separate scaling limits:
+The historical vr3 PageIndex path had two separate scaling limits:
 
 - Corpus search cannot retrieve a document ranked below the 50-document lexical boundary
 - Query cost grows when the selection model receives more candidate metadata
 
-PageIndex’s hosted file-system product may use a cross-document hierarchy, but this repository does not implement that product. It uses local PageIndex trees only after PostgreSQL and DeepSeek choose documents.
+The v2 implementation removes the lexical exclusion and uses complete-catalog,
+token-bounded map/reduce selection before nested tree search. Query cost still
+grows with catalog size, but in explicit catalog batches rather than a
+fixed-recall gate. This document remains provisional until the frozen
+25-document v2 pilot is accepted and both comparison arms are frozen against a
+new sealed evaluation dataset.
 
 Vector indexing also has a smaller retry surface. An embedding pipeline can batch chunks, retry failed batches independently, and persist successful batches. PageIndex can spend dozens of model calls before a late validation or provider error invalidates an attempt.
 

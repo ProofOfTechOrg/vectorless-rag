@@ -12,7 +12,6 @@ from sqlalchemy.exc import ProgrammingError
 from vectorless_rag.config import Settings
 from vectorless_rag.graph import (
     CAPABILITY_HELP_ANSWER,
-    CATALOG_FALLBACK_SQL,
     GraphRunner,
     _normalize_regex_boundary_escapes,  # pyright: ignore[reportPrivateUsage]
     _strip_sql_comments,  # pyright: ignore[reportPrivateUsage]
@@ -20,6 +19,7 @@ from vectorless_rag.graph import (
     format_inline_citations,
     remove_inline_citations,
 )
+from vectorless_rag.llm import LLMError
 from vectorless_rag.models import ModelCallStage, QueryRun, RunRoute, SqlAudit
 from vectorless_rag.retrieval import RetrievalResult
 from vectorless_rag.schemas import ChatRequest, Evidence, RouteDecision, SQLPlan, SynthesisResult
@@ -59,9 +59,7 @@ def test_bounded_history_truncates_one_oversized_recent_answer() -> None:
 
 
 def test_internal_evidence_labels_become_user_facing_citation_numbers() -> None:
-    assert format_inline_citations("Grounded claim [E1]", ["E1", "E2"]) == (
-        "Grounded claim [1] [2]"
-    )
+    assert format_inline_citations("Grounded claim [E1]", ["E1", "E2"]) == "Grounded claim [1]"
     assert format_inline_citations("Grounded claim [1]", ["E1"]) == "Grounded claim [1]"
 
 
@@ -288,6 +286,8 @@ class _SQLLLM:
         route: RunRoute = RunRoute.sql,
         synthesis_answer: str = "The catalog contains One-page verification fixture.",
         citation_ids: list[str] | None = None,
+        repair_answer: str | None = None,
+        repair_citation_ids: list[str] | None = None,
         sql: str = "SELECT document_id, title FROM agent.paper_catalog_v1",
         synthesis_insufficient: bool = False,
     ) -> None:
@@ -299,6 +299,9 @@ class _SQLLLM:
         self.user_prompts: list[str] = []
         self.schemas: list[object] = []
         self.synthesis_insufficient = synthesis_insufficient
+        self.repair_answer = repair_answer
+        self.repair_citation_ids = repair_citation_ids
+        self.synthesis_calls = 0
 
     async def structured(
         self,
@@ -325,6 +328,13 @@ class _SQLLLM:
                 explanation="List titles",
             )
         if schema is SynthesisResult:
+            self.synthesis_calls += 1
+            if self.synthesis_calls > 1 and self.repair_answer is not None:
+                return SynthesisResult(
+                    answer=self.repair_answer,
+                    citation_ids=self.repair_citation_ids or [],
+                    insufficient=self.synthesis_insufficient,
+                )
             return SynthesisResult(
                 answer=self.synthesis_answer,
                 citation_ids=self.citation_ids,
@@ -854,7 +864,7 @@ async def test_hybrid_empty_sql_rows_preserve_document_insufficiency_fallback() 
     assert SynthesisResult not in llm.schemas
 
 
-async def test_documents_empty_retrieval_uses_guarded_catalog_fallback() -> None:
+async def test_documents_empty_retrieval_remains_insufficient() -> None:
     current = _current("What indexed material is available?", "thread-doc-catalog")
     llm = _SQLLLM(
         route=RunRoute.documents,
@@ -877,60 +887,16 @@ async def test_documents_empty_retrieval_uses_guarded_catalog_fallback() -> None
         current,
     )
 
-    assert result["answer"] == "The catalog includes the fixture [1]."
-    assert result["answer"] != FALLBACK_ANSWER
-    assert result["insufficient"] is False
-    assert result["citations"][0]["source_type"] == "sql"
-    audits = [item for item in session.added if isinstance(item, SqlAudit)]
-    assert len(audits) == 1
-    assert audits[0].generated_sql == CATALOG_FALLBACK_SQL
-    assert audits[0].allowed is True
-    assert audits[0].normalized_sql is not None
-    assert "LIMIT 200" in audits[0].normalized_sql
-    assert SQLPlan not in llm.schemas
-    assert any("One-page verification fixture" in value for value in llm.user_prompts)
-    assert len(adapter.queries) == 1
-    assert "LIMIT 200" in adapter.queries[0].normalized
-
-
-@pytest.mark.parametrize(
-    "failure",
-    [
-        SQLRejected("configuration drift"),
-        ProgrammingError("stmt", None, Exception("boom")),
-    ],
-    ids=["sql-rejected", "programming-error"],
-)
-async def test_documents_catalog_fallback_rejection_preserves_refusal(
-    failure: Exception,
-) -> None:
-    current = _current("What indexed material is available?", "thread-doc-rejected")
-    llm = _SQLLLM(route=RunRoute.documents)
-    session = _Session([])
-    runner = GraphRunner(
-        Settings(),
-        llm,  # pyright: ignore[reportArgumentType]
-        _Retriever(RetrievalResult([], [], [], False, 0)),  # pyright: ignore[reportArgumentType]
-        _SQLAdapter(failure=failure),  # pyright: ignore[reportArgumentType]
-        _Observability(),  # pyright: ignore[reportArgumentType]
-    )
-
-    result = await runner.run(
-        session,  # pyright: ignore[reportArgumentType]
-        ChatRequest(message=current.question, thread_id=current.thread_id),
-        current,
-    )
-
     assert result["answer"] == FALLBACK_ANSWER
     assert result["insufficient"] is True
+    assert result["citations"] == []
     audits = [item for item in session.added if isinstance(item, SqlAudit)]
-    assert len(audits) == 1
-    assert audits[0].allowed is False
-    assert audits[0].rejection_reason
-    assert SynthesisResult not in llm.schemas
+    assert audits == []
+    assert SQLPlan not in llm.schemas
+    assert adapter.calls == 0
 
 
-async def test_documents_synthesis_promotes_known_marker_not_declared_in_citation_ids() -> None:
+async def test_documents_synthesis_repairs_declared_marker_mismatch_once() -> None:
     current = _current("Compare the papers", "thread-doc-marker-mismatch")
     evidence = [
         Evidence(
@@ -951,6 +917,8 @@ async def test_documents_synthesis_promotes_known_marker_not_declared_in_citatio
             route=RunRoute.documents,
             synthesis_answer="The second paper supports this claim [E2].",
             citation_ids=["E1"],
+            repair_answer="The second paper supports this claim [E2].",
+            repair_citation_ids=["E2"],
         ),  # pyright: ignore[reportArgumentType]
         _Retriever(
             RetrievalResult(
@@ -971,10 +939,8 @@ async def test_documents_synthesis_promotes_known_marker_not_declared_in_citatio
         current,
     )
 
-    assert result["answer"] == "The second paper supports this claim [2]. [1]"
-    assert [citation["source_id"] for citation in result["citations"]] == [
-        item.source_id for item in evidence
-    ]
+    assert result["answer"] == "The second paper supports this claim [1]."
+    assert [citation["source_id"] for citation in result["citations"]] == [evidence[1].source_id]
     assert result["insufficient"] is False
 
 
@@ -1013,15 +979,13 @@ async def test_documents_synthesis_rejects_unknown_inline_citation_marker() -> N
         _Observability(),  # pyright: ignore[reportArgumentType]
     )
 
-    result = await runner.run(
-        _Session([]),  # pyright: ignore[reportArgumentType]
-        ChatRequest(message=current.question, thread_id=current.thread_id),
-        current,
-    )
-
-    assert result["answer"] == "I could not produce citations that resolve to retrieved evidence."
-    assert result["citations"] == []
-    assert result["insufficient"] is True
+    with pytest.raises(LLMError) as error:
+        await runner.run(
+            _Session([]),  # pyright: ignore[reportArgumentType]
+            ChatRequest(message=current.question, thread_id=current.thread_id),
+            current,
+        )
+    assert error.value.failure_code == "upstream_invalid_response"
 
 
 async def test_sql_synthesis_rejects_unknown_inline_citation_marker() -> None:
@@ -1034,15 +998,13 @@ async def test_sql_synthesis_rejects_unknown_inline_citation_marker() -> None:
         _Observability(),  # pyright: ignore[reportArgumentType]
     )
 
-    result = await runner.run(
-        _Session([]),  # pyright: ignore[reportArgumentType]
-        ChatRequest(message=current.question, thread_id=current.thread_id),
-        current,
-    )
-
-    assert result["answer"] == "I could not produce citations that resolve to retrieved evidence."
-    assert result["citations"] == []
-    assert result["insufficient"] is True
+    with pytest.raises(LLMError) as error:
+        await runner.run(
+            _Session([]),  # pyright: ignore[reportArgumentType]
+            ChatRequest(message=current.question, thread_id=current.thread_id),
+            current,
+        )
+    assert error.value.failure_code == "upstream_invalid_response"
 
 
 async def test_documents_non_empty_insufficient_evidence_preserves_refusal() -> None:

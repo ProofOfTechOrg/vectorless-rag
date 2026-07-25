@@ -6,6 +6,9 @@ const TERMINAL_JOB_STATUSES = new Set<Job['status']>([
   'completed',
   'failed',
   'unsupported',
+  'deduplicated',
+  'cancelled',
+  'abandoned',
 ])
 
 export type JobLoader = (options: { data: { jobId: string } }) => Promise<Job>

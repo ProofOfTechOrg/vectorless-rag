@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "name": "pageindex-v2-25",
+  "corpus_snapshot_sha256": "316207ff5a90da62cb787feea66f3f940bdf1f6a08933996a39386c7357292fe",
+  "documents": [
+    {"arxiv_id":"1503.02531","pdf_sha256":"74e6689115c539db499f9d6153edecb364059926fd45402454f8210442444c5a","page_count":9,"pdf_outline":true},
+    {"arxiv_id":"2004.04906","pdf_sha256":"3e67fc1a9977715acf722d85f0b7d124b03715e975f6310a4d6c12094190912f","page_count":13,"pdf_outline":false},
+    {"arxiv_id":"1910.01108","pdf_sha256":"a70c78e2b4db85bfee7696e19829571a3b05f69c616db5c039f6f4eb33b1a0b6","page_count":5,"pdf_outline":true},
+    {"arxiv_id":"1610.05820","pdf_sha256":"1891b19eb63ab3caad78d23d610b78a6698927959421e316996c0d1d48fddaaf","page_count":16,"pdf_outline":true},
+    {"arxiv_id":"1708.06733","pdf_sha256":"96f572d948ff62baaae5fbb9fcf6bdf28dfb6a67b7a4ea013a3d17ece927795e","page_count":13,"pdf_outline":true},
+    {"arxiv_id":"1904.05234","pdf_sha256":"4e8fd09b4655205d37f98eefc3cca038fdc8a12b34648ac2a26a2dd1ef63bdcd","page_count":23,"pdf_outline":true},
+    {"arxiv_id":"1607.00133","pdf_sha256":"c88a9b68a2cdf2eff61e1e9e1f8c493c72a13a673293a3b3bbce9ffe326b48f0","page_count":14,"pdf_outline":true},
+    {"arxiv_id":"1606.07947","pdf_sha256":"6167bfeb30f4da8046efe5372cfbb28fca123f9656f6461378fbe52f082f9b6f","page_count":11,"pdf_outline":true},
+    {"arxiv_id":"1810.03993","pdf_sha256":"a4049cdc78c3d635bdfb5165e495b0672d85690d66ccd6f149079d6e11e64aa1","page_count":10,"pdf_outline":true},
+    {"arxiv_id":"2003.06713","pdf_sha256":"49cfcb0bcf6c5ea6b9efdb30a070c4f4268839d52e74ad5c3e27872cace61a3e","page_count":8,"pdf_outline":true},
+    {"arxiv_id":"2306.00978","pdf_sha256":"6e35c8fe7af1f18a5c48dd2524629d859a2013a91d4b3666b554705287a17764","page_count":15,"pdf_outline":false},
+    {"arxiv_id":"2012.07805","pdf_sha256":"a3d1496575fd199e5b8535a78e69b528731c9895c1c0a3304848ef005593b473","page_count":19,"pdf_outline":true},
+    {"arxiv_id":"2307.03172","pdf_sha256":"653b29619eae2ae4b361d7bdcdc06db4bedcb1b0eabe31814036beca8c1af0b1","page_count":18,"pdf_outline":false},
+    {"arxiv_id":"2304.09542","pdf_sha256":"3a2ca388b4a2fb17e58551f1a77b2c7decbbf6767255382cfa2d9e435c7a7e70","page_count":20,"pdf_outline":false},
+    {"arxiv_id":"2103.14749","pdf_sha256":"605c6a72f3a970dbbdd02622079c32d687862455a1152da9f2075e35fad2bf1d","page_count":24,"pdf_outline":true},
+    {"arxiv_id":"2505.24119","pdf_sha256":"40891b2888c858db6427d23445fbab39b98e281da4a08b636f258a34cd6c075a","page_count":26,"pdf_outline":false},
+    {"arxiv_id":"2302.07225","pdf_sha256":"2ea74d38149f2e0d08222fe65fb95a7ed4e496ce97b5f855b1403a8dc7ab172c","page_count":27,"pdf_outline":true},
+    {"arxiv_id":"2310.07152","pdf_sha256":"1b4cd01c7f91b82e02419d56399551ab49a9c77c47c2270854d43a340562b147","page_count":29,"pdf_outline":false},
+    {"arxiv_id":"2410.07137","pdf_sha256":"fd4983b5db30868392c40a37450ac6a54a6088c1c2a9d7581f0dc7b08eefe26a","page_count":34,"pdf_outline":true},
+    {"arxiv_id":"2502.01116","pdf_sha256":"a319f06b8e57bd0d568c4505b1d041e60a73979b40fdbccfd0eda0cb663a791f","page_count":37,"pdf_outline":false},
+    {"arxiv_id":"2601.12937","pdf_sha256":"cc0c3fa0eebf3f0b9555d8e5bea8793e8a0b1265bc443066276d4498a4331550","page_count":38,"pdf_outline":false},
+    {"arxiv_id":"2505.16831","pdf_sha256":"4f4c4db24a7a849843fb7fb7390ebd5a30b0dc92b305076cc07b38c9cae2723c","page_count":48,"pdf_outline":true},
+    {"arxiv_id":"2504.20879","pdf_sha256":"6376a9eb9eb29bc067b1e9e5e14d4a5a128eda60c4d70f4f126ac37746870551","page_count":72,"pdf_outline":false},
+    {"arxiv_id":"2503.18813","pdf_sha256":"c3719f6ce73eecf45e3764debef8a3d8ff8c9233b37d128c558b694ec3790cc7","page_count":125,"pdf_outline":true},
+    {"arxiv_id":"2605.13841","pdf_sha256":"bde63827170556b1d37edfe306c5c74da27f38ab224dc7a1904fbb3bc6b00b3b","page_count":157,"pdf_outline":true}
+  ]
+}

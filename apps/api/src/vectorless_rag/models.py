@@ -14,12 +14,14 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -36,6 +38,8 @@ class DocumentStatus(StrEnum):
     ready = "ready"
     unsupported = "unsupported"
     failed = "failed"
+    waiting_provider = "waiting_provider"
+    deferred = "deferred"
 
 
 class JobStatus(StrEnum):
@@ -44,6 +48,11 @@ class JobStatus(StrEnum):
     completed = "completed"
     failed = "failed"
     unsupported = "unsupported"
+    waiting_provider = "waiting_provider"
+    deferred = "deferred"
+    deduplicated = "deduplicated"
+    cancelled = "cancelled"
+    abandoned = "abandoned"
 
 
 class IngestionAttemptStatus(StrEnum):
@@ -52,6 +61,38 @@ class IngestionAttemptStatus(StrEnum):
     failed = "failed"
     unsupported = "unsupported"
     abandoned = "abandoned"
+    deferred = "deferred"
+    cancelled = "cancelled"
+
+
+class IngestionMode(StrEnum):
+    ensure_current = "ensure_current"
+    rebuild_index = "rebuild_index"
+    reextract_all = "reextract_all"
+
+
+class IndexLifecycleStatus(StrEnum):
+    building = "building"
+    verified = "verified"
+    active = "active"
+    failed = "failed"
+    abandoned = "abandoned"
+    deduplicated = "deduplicated"
+
+
+class IndexActivationReason(StrEnum):
+    ingestion = "ingestion"
+    reuse = "reuse"
+    rollback = "rollback"
+    repair = "repair"
+    migration = "migration"
+
+
+class ProviderAvailability(StrEnum):
+    available = "available"
+    unavailable = "unavailable"
+    unknown = "unknown"
+    unconfigured = "unconfigured"
 
 
 class ArtifactAction(StrEnum):
@@ -65,6 +106,8 @@ class ModelCallOutcome(StrEnum):
     started = "started"
     completed = "completed"
     failed = "failed"
+    cancelled = "cancelled"
+    abandoned = "abandoned"
 
 
 class ModelCallStage(StrEnum):
@@ -83,6 +126,8 @@ class RunFailureCode(StrEnum):
     client_cancelled = "client_cancelled"
     request_failed = "request_failed"
     usage_persistence_failed = "usage_persistence_failed"
+    provider_unavailable = "provider_unavailable"
+    upstream_invalid_response = "upstream_invalid_response"
 
 
 class QueryRunStatus(StrEnum):
@@ -110,7 +155,16 @@ class TimestampMixin:
 
 class Document(TimestampMixin, Base):
     __tablename__ = "documents"
-    __table_args__ = (Index("ix_documents_arxiv_id", "arxiv_id"), {"schema": "agent"})
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["active_index_version_id", "id"],
+            ["agent.index_versions.id", "agent.index_versions.document_id"],
+            name="fk_documents_active_index_same_document",
+            use_alter=True,
+        ),
+        Index("ix_documents_arxiv_id", "arxiv_id"),
+        {"schema": "agent"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     sha256: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
@@ -131,9 +185,7 @@ class Document(TimestampMixin, Base):
     )
     diagnostic: Mapped[str | None] = mapped_column(Text)
     page_count: Mapped[int | None] = mapped_column(Integer)
-    active_index_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("agent.index_versions.id", use_alter=True)
-    )
+    active_index_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     index_versions: Mapped[list[IndexVersion]] = relationship(
         back_populates="document", foreign_keys="IndexVersion.document_id"
     )
@@ -142,7 +194,15 @@ class Document(TimestampMixin, Base):
 class IndexVersion(TimestampMixin, Base):
     __tablename__ = "index_versions"
     __table_args__ = (
-        UniqueConstraint("document_id", "version_key", name="uq_index_document_version"),
+        UniqueConstraint("id", "document_id", name="uq_index_id_document"),
+        Index(
+            "uq_index_document_recipe_manifest",
+            "document_id",
+            "recipe_key",
+            "manifest_sha256",
+            unique=True,
+            postgresql_where=text("manifest_sha256 IS NOT NULL"),
+        ),
         {"schema": "agent"},
     )
 
@@ -160,6 +220,32 @@ class IndexVersion(TimestampMixin, Base):
     elapsed_seconds: Mapped[float | None] = mapped_column(Float)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
+    artifact_schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    recipe_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_hash: Mapped[str | None] = mapped_column(String(64))
+    pipeline_version: Mapped[str | None] = mapped_column(String(128))
+    metadata_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.document_metadata_versions.id")
+    )
+    manifest_object_key: Mapped[str | None] = mapped_column(String(1024))
+    manifest_sha256: Mapped[str | None] = mapped_column(String(64))
+    pageindex_description: Mapped[str | None] = mapped_column(Text)
+    top_level_outline: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, nullable=False
+    )
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    node_count: Mapped[int | None] = mapped_column(Integer)
+    max_depth: Mapped[int | None] = mapped_column(Integer)
+    quality: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    build_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.ingestion_attempts.id")
+    )
+    lifecycle_status: Mapped[IndexLifecycleStatus] = mapped_column(
+        Enum(IndexLifecycleStatus, name="index_lifecycle_status", schema="agent"),
+        default=IndexLifecycleStatus.verified,
+        nullable=False,
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     document: Mapped[Document] = relationship(
         back_populates="index_versions", foreign_keys=[document_id]
     )
@@ -167,7 +253,16 @@ class IndexVersion(TimestampMixin, Base):
 
 class IngestionJob(TimestampMixin, Base):
     __tablename__ = "ingestion_jobs"
-    __table_args__ = (Index("ix_jobs_claim", "status", "created_at"), {"schema": "agent"})
+    __table_args__ = (
+        Index("ix_jobs_claim", "status", "created_at"),
+        Index(
+            "uq_ingestion_active_document",
+            "document_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+        {"schema": "agent"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(
@@ -179,10 +274,31 @@ class IngestionJob(TimestampMixin, Base):
         nullable=False,
     )
     force: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mode: Mapped[IngestionMode] = mapped_column(
+        Enum(IngestionMode, name="ingestion_mode", schema="agent"),
+        default=IngestionMode.ensure_current,
+        nullable=False,
+    )
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     worker_id: Mapped[str | None] = mapped_column(String(128))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    current_stage: Mapped[str | None] = mapped_column(String(80))
+    active_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.ingestion_attempts.id", use_alter=True)
+    )
+    active_index_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.index_versions.id")
+    )
+    experiment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.experiments.id")
+    )
+    retry_budget_consumed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    provider_wait_reason: Mapped[str | None] = mapped_column(String(80))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     diagnostic: Mapped[str | None] = mapped_column(Text)
     metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     document: Mapped[Document] = relationship()
@@ -199,6 +315,12 @@ class IngestionAttempt(TimestampMixin, Base):
         ),
         CheckConstraint(
             "elapsed_seconds IS NULL OR elapsed_seconds >= 0", name="ck_attempt_elapsed"
+        ),
+        Index(
+            "uq_ingestion_running_attempt",
+            "job_id",
+            unique=True,
+            postgresql_where=text("status = 'running'::agent.ingestion_attempt_status"),
         ),
         {"schema": "agent"},
     )
@@ -230,7 +352,12 @@ class IngestionAttempt(TimestampMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     elapsed_seconds: Mapped[float | None] = mapped_column(Float)
     telemetry_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    job: Mapped[IngestionJob] = relationship()
+    index_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.index_versions.id", use_alter=True)
+    )
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    retry_budget_consumed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    job: Mapped[IngestionJob] = relationship(foreign_keys=[job_id])
 
 
 class ApiKey(TimestampMixin, Base):
@@ -244,6 +371,60 @@ class ApiKey(TimestampMixin, Base):
     scopes: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False)
     disabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DocumentMetadataVersion(Base):
+    __tablename__ = "document_metadata_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id",
+            "recipe_key",
+            "content_sha256",
+            name="uq_metadata_document_recipe_content",
+        ),
+        {"schema": "agent"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.documents.id"), nullable=False
+    )
+    recipe_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    metadata_payload: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    extraction_quality: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class IndexActivation(Base):
+    __tablename__ = "index_activations"
+    __table_args__ = ({"schema": "agent"},)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.documents.id"), nullable=False
+    )
+    prior_index_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.index_versions.id")
+    )
+    index_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.index_versions.id"), nullable=False
+    )
+    reason: Mapped[IndexActivationReason] = mapped_column(
+        Enum(IndexActivationReason, name="index_activation_reason", schema="agent"),
+        nullable=False,
+    )
+    ingestion_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.ingestion_attempts.id")
+    )
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class QueryRun(Base):
@@ -350,6 +531,28 @@ class ModelCall(TimestampMixin, Base):
     )
     model: Mapped[str] = mapped_column(String(128), nullable=False)
     provider_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    logical_call_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), default=uuid.uuid4, nullable=False
+    )
+    operation: Mapped[str] = mapped_column(String(80), nullable=False)
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    failure_code: Mapped[str | None] = mapped_column(String(80))
+    retryable: Mapped[bool | None] = mapped_column(Boolean)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    retry_delay_ms: Mapped[int | None] = mapped_column(Integer)
+    prompt_sha256: Mapped[str | None] = mapped_column(String(64))
+    prompt_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    output_sha256: Mapped[str | None] = mapped_column(String(64))
+    output_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    cancelled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    release: Mapped[str | None] = mapped_column(String(128))
+    configuration_hash: Mapped[str | None] = mapped_column(String(64))
+    experiment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.experiments.id")
+    )
+    cost_reservation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.model_call_cost_reservations.id")
+    )
     finish_reason: Mapped[str | None] = mapped_column(String(80))
     outcome: Mapped[ModelCallOutcome] = mapped_column(
         Enum(ModelCallOutcome, name="model_call_outcome", schema="agent"),
@@ -408,6 +611,21 @@ class RetrievalAudit(Base):
     rounds: Mapped[int] = mapped_column(Integer, nullable=False)
     evidence_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy: Mapped[str] = mapped_column(String(80), default="pageindex", nullable=False)
+    strategy_version: Mapped[str | None] = mapped_column(String(128))
+    configuration_hash: Mapped[str | None] = mapped_column(String(64))
+    index_digests: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict, nullable=False)
+    ranked_candidates: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, nullable=False
+    )
+    node_choices: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+    evidence_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unique_pages: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    overlapping_pages_avoided: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    merged_ranges: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+    content_truncated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    progress: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+    phase_timings_ms: Mapped[dict[str, int]] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -424,6 +642,158 @@ class RunFeedback(Base):
     )
     value: Mapped[int] = mapped_column(Integer, nullable=False)
     comment: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ProviderState(TimestampMixin, Base):
+    __tablename__ = "provider_states"
+    __table_args__ = ({"schema": "agent"},)
+
+    provider: Mapped[str] = mapped_column(String(64), primary_key=True)
+    availability: Mapped[ProviderAvailability] = mapped_column(
+        Enum(ProviderAvailability, name="provider_availability", schema="agent"),
+        nullable=False,
+    )
+    reason: Mapped[str | None] = mapped_column(String(80))
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_available_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class Experiment(TimestampMixin, Base):
+    __tablename__ = "experiments"
+    __table_args__ = ({"schema": "agent"},)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    release_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    corpus_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    index_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    dataset_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    price_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    repetitions: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence_token_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    maximum_cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    valid: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    invalid_reason: Mapped[str | None] = mapped_column(String(80))
+    frozen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ExperimentMembership(Base):
+    __tablename__ = "experiment_memberships"
+    __table_args__ = (
+        Index(
+            "uq_experiment_attempt_membership",
+            "experiment_id",
+            "attempt_id",
+            unique=True,
+            postgresql_where=text("attempt_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_experiment_query_trial_membership",
+            "experiment_id",
+            "query_run_id",
+            "trial_key",
+            unique=True,
+            postgresql_where=text("query_run_id IS NOT NULL"),
+        ),
+        CheckConstraint(
+            "(attempt_id IS NULL) <> (query_run_id IS NULL)",
+            name="ck_experiment_membership_one_owner",
+        ),
+        {"schema": "agent"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.experiments.id"), nullable=False
+    )
+    attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.ingestion_attempts.id")
+    )
+    query_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.query_runs.id")
+    )
+    dataset_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    trial_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    repetition: Mapped[int] = mapped_column(Integer, nullable=False)
+    sequence_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    included: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ExperimentIndexVersion(Base):
+    __tablename__ = "experiment_index_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "experiment_id",
+            "index_version_id",
+            name="uq_experiment_index_version",
+        ),
+        {"schema": "agent"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.experiments.id"), nullable=False
+    )
+    index_version_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.index_versions.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ModelCallCostReservation(TimestampMixin, Base):
+    __tablename__ = "model_call_cost_reservations"
+    __table_args__ = ({"schema": "agent"},)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    experiment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.experiments.id"), nullable=False
+    )
+    logical_call_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    reserved_cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    measured_cost_usd: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MeasurementClassificationEvent(Base):
+    __tablename__ = "measurement_classification_events"
+    __table_args__ = (
+        CheckConstraint(
+            "(ingestion_attempt_id IS NULL) <> (query_run_id IS NULL)",
+            name="ck_classification_one_owner",
+        ),
+        {"schema": "agent"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ingestion_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.ingestion_attempts.id")
+    )
+    query_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.query_runs.id")
+    )
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str] = mapped_column(String(80), nullable=False)
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    replacement_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.ingestion_attempts.id")
+    )
+    prior_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent.measurement_classification_events.id")
+    )
+    justification: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -4,7 +4,7 @@
 
 A self-hosted research application for asking grounded questions across a local PDF corpus without embeddings or a vector database. The browser-first Vectorless RAG Operator Console uses ASTRYX and TanStack Start. Its server-side BFF stores the API key in an encrypted HttpOnly cookie and calls FastAPI.
 
-PostgreSQL narrows the corpus, DeepSeek selects papers, and PageIndex retrieves structure-aware page evidence. Responses include resolvable citations.
+PostgreSQL applies explicit metadata constraints and exact-match signals, DeepSeek reasons over the complete eligible catalog in bounded batches, and PageIndex retrieves from validated hierarchical trees. Responses include inline, resolvable page citations.
 
 ## Quick start
 
@@ -42,7 +42,7 @@ make download-corpus ARXIV_PDF_HOST_DIR=/srv/vectorless/arxiv-pdfs
 
 The command validates each response before installing it as `arxiv_id.pdf`. Reruns skip valid existing PDFs without network requests, while invalid existing paths remain untouched and cause a nonzero exit status.
 
-Downloading only creates local files. It does not start the stack or queue ingestion. After the stack is running, `make sync-corpus` queues the mounted files under the existing ten-document pilot gate. See the [command reference](docs/commands.md#download-the-test-corpus) for failure handling and request-rate details.
+Downloading only creates local files. It does not start the stack or queue ingestion. After the stack is running, `make sync-corpus` queues mounted files up to the configured 25-document safety gate. The frozen pilot uses `make pilot-run`, which selects only its tracked manifest; do not use ordinary full-directory sync for that run. See the [command reference](docs/commands.md#download-the-test-corpus) for failure handling and request-rate details.
 
 ## Architecture
 
@@ -68,8 +68,8 @@ Browser requests never call FastAPI directly. TanStack server functions and rout
 - `/connect`: API-key validation, safe errors, and bootstrap help.
 - `/chat` and `/chat/$threadId`: recent threads, route/progress states, Markdown, citations, cancel, retry, and feedback.
 - `/documents` and `/documents/$documentId`: cursor pagination, responsive table/list views, metadata, topics, status, diagnostics, and citation landing pages.
-- `/ingestion`: PDF upload, durable job polling, mounted-corpus sync, force confirmation, and pilot warnings.
-- `/settings`: key identity/scopes, readiness, system/light/dark appearance, setup details, and logout.
+- `/ingestion`: PDF upload, durable lease-backed job polling, mounted-corpus sync modes, provider state, and dynamic pilot capacity.
+- `/settings`: key identity/scopes, infrastructure readiness, sanitized provider state, system/light/dark appearance, setup details, and logout.
 
 The UI hides or disables actions outside the key's scopes, while FastAPI remains the authorization boundary.
 
@@ -113,7 +113,7 @@ Changes to `.env`, `compose.yaml`, or `compose.dev.yaml` require stopping `make 
 
 ## Ingestion safety
 
-The default ten-document pilot gate remains enabled. Upload born-digital PDFs through the UI or use `make sync-corpus`; OCR and recursive/arbitrary server paths are out of scope. Do not sync a large mounted corpus until you intend to queue the pilot. See the [operator guide](docs/operator-guide.md).
+The default 25-document gate and $10 frozen-pilot ceiling remain enabled; full-corpus indexing remains disabled. Upload born-digital PDFs through the UI or use bounded sync. OCR and recursive/arbitrary server paths are out of scope. Use `make pilot-check` and the manifest-driven `make pilot-run` for the paid v2 pilot. See the [operator guide](docs/operator-guide.md).
 
 ## Advanced API client path
 

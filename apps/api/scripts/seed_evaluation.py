@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and upload a release evaluation JSONL file to self-hosted Langfuse."""
+"""Validate and upload an evaluation JSONL file to self-hosted Langfuse."""
 
 from __future__ import annotations
 
@@ -9,6 +9,14 @@ from collections import Counter
 from pathlib import Path
 
 from langfuse import Langfuse
+
+from vectorless_rag.evaluation_suite import (
+    load_cases as load_pageindex_cases,
+)
+from vectorless_rag.evaluation_suite import (
+    load_corpus_manifest,
+    validate_suite,
+)
 
 MINIMUMS = {
     "single-document": 20,
@@ -20,7 +28,7 @@ MINIMUMS = {
 }
 
 
-def load_cases(path: Path) -> list[dict[str, object]]:
+def load_release_cases(path: Path) -> list[dict[str, object]]:
     cases = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
     counts = Counter(str(case.get("category")) for case in cases)
     missing = {
@@ -34,13 +42,38 @@ def load_cases(path: Path) -> list[dict[str, object]]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("path", type=Path)
-    parser.add_argument("--name", default="vectorless-rag-release-v1")
+    parser.add_argument("--name", default="vectorless-rag-pageindex-v2-regression")
+    parser.add_argument("--corpus", type=Path)
     args = parser.parse_args()
-    cases = load_cases(args.path)
+    if args.path.name == "pageindex-v2-regression.jsonl":
+        corpus_path = args.corpus or args.path.with_name("pageindex-v2-corpus.json")
+        parsed = load_pageindex_cases(args.path)
+        validate_suite(parsed, load_corpus_manifest(corpus_path), require_reviewed=True)
+        cases = [
+            {
+                "item_id": str(case.item_id),
+                "input": {
+                    "message": case.prompt,
+                    "constraints": case.constraints,
+                },
+                "expected_output": {
+                    "reference_answer": case.reference_answer,
+                    "answerable": case.answerable,
+                    "atomic_claims": [claim.claim for claim in case.atomic_claims],
+                    "support_sets": [value.model_dump(mode="json") for value in case.support_sets],
+                },
+                "split": case.split,
+                "stratum": case.stratum,
+            }
+            for case in parsed
+        ]
+    else:
+        cases = load_release_cases(args.path)
     client = Langfuse()
     dataset = client.create_dataset(name=args.name)
     for case in cases:
         client.create_dataset_item(
+            id=str(case["item_id"]) if case.get("item_id") is not None else None,
             dataset_name=dataset.name,
             input=case["input"],
             expected_output=case.get("expected_output"),

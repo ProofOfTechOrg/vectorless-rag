@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -10,12 +13,19 @@ from alembic.config import Config
 from sqlalchemy import select
 
 from alembic import command
+from vectorless_rag.artifact_ops import (
+    activate_index_version,
+    apply_gc_plan,
+    build_gc_plan,
+    verify_index_version,
+)
 from vectorless_rag.auth import generate_api_key, hash_api_key, validate_scopes
 from vectorless_rag.config import get_settings
 from vectorless_rag.db import Database
 from vectorless_rag.models import (
     ApiKey,
     Document,
+    IndexVersion,
     IngestionAttempt,
     IngestionJob,
     ModelCall,
@@ -26,6 +36,11 @@ from vectorless_rag.reporting import (
     build_pilot_report,
     build_query_cost_report,
     scan_corpus,
+)
+from vectorless_rag.storage import S3ObjectStore
+from vectorless_rag.telemetry_classification import (
+    classification_report,
+    read_classification_manifest,
 )
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
@@ -179,6 +194,134 @@ def query_cost_report(
             await database.close()
 
     typer.echo(json.dumps(asyncio.run(report()), indent=2))
+
+
+@app.command("artifact-verify")
+def artifact_verify(
+    version_id: Annotated[uuid.UUID | None, typer.Option()] = None,
+) -> None:
+    """Verify one or every active PageIndex-v2 manifest and referenced object."""
+
+    async def verify() -> list[dict[str, object]]:
+        settings = get_settings()
+        database = Database(settings)
+        store = S3ObjectStore(settings)
+        try:
+            async with database.session() as session:
+                identifiers = (
+                    [version_id]
+                    if version_id is not None
+                    else list(
+                        (
+                            await session.scalars(
+                                select(IndexVersion.id)
+                                .join(
+                                    Document,
+                                    Document.active_index_version_id == IndexVersion.id,
+                                )
+                                .where(IndexVersion.artifact_schema_version == 2)
+                                .order_by(IndexVersion.document_id)
+                            )
+                        ).all()
+                    )
+                )
+                return [
+                    dataclasses.asdict(await verify_index_version(session, store, identifier))
+                    for identifier in identifiers
+                ]
+        finally:
+            await database.close()
+
+    typer.echo(json.dumps(asyncio.run(verify()), indent=2, default=str))
+
+
+@app.command("artifact-rollback")
+def artifact_rollback(
+    document_id: Annotated[uuid.UUID, typer.Option()],
+    version_id: Annotated[uuid.UUID, typer.Option()],
+    actor: Annotated[str, typer.Option()] = "operator",
+) -> None:
+    """Atomically activate a verified prior index version."""
+
+    async def rollback() -> None:
+        settings = get_settings()
+        database = Database(settings)
+        try:
+            async with database.session() as session:
+                await activate_index_version(
+                    session,
+                    document_id=document_id,
+                    version_id=version_id,
+                    actor=actor,
+                )
+        finally:
+            await database.close()
+
+    asyncio.run(rollback())
+    typer.echo(json.dumps({"document_id": str(document_id), "version_id": str(version_id)}))
+
+
+@app.command("artifact-gc")
+def artifact_gc(
+    apply: Annotated[bool, typer.Option()] = False,
+    confirm_count: Annotated[int | None, typer.Option(min=0)] = None,
+) -> None:
+    """Plan v2 object cleanup; deletion requires --apply and an exact count."""
+
+    async def collect() -> dict[str, object]:
+        settings = get_settings()
+        database = Database(settings)
+        store = S3ObjectStore(settings)
+        try:
+            async with database.session() as session:
+                plan = await build_gc_plan(session, store)
+            if apply:
+                if confirm_count != len(plan.delete_keys):
+                    raise ValueError(
+                        f"--confirm-count must equal the dry-run count ({len(plan.delete_keys)})"
+                    )
+                await apply_gc_plan(store, plan)
+            result = dataclasses.asdict(plan)
+            result["applied"] = apply
+            return result
+        finally:
+            await database.close()
+
+    try:
+        result = asyncio.run(collect())
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(json.dumps(result, indent=2, default=str))
+
+
+@app.command("telemetry-classify")
+def telemetry_classify(
+    manifest: Annotated[Path, typer.Option(exists=True, dir_okay=False, readable=True)],
+    apply: Annotated[bool, typer.Option()] = False,
+    confirm_count: Annotated[int | None, typer.Option(min=1)] = None,
+) -> None:
+    """Validate or append an exact measurement-classification manifest."""
+    parsed = read_classification_manifest(manifest)
+    if apply and confirm_count != len(parsed.entries):
+        raise typer.BadParameter(
+            f"--confirm-count must equal the manifest count ({len(parsed.entries)})"
+        )
+    settings = get_settings()
+    result = asyncio.run(
+        classification_report(
+            settings,
+            manifest=parsed,
+            apply=apply,
+        )
+    )
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
+
+
+@app.command("telemetry-classifications")
+def telemetry_classifications() -> None:
+    """Report raw totals and effective append-only classifications."""
+    result = asyncio.run(classification_report(get_settings()))
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

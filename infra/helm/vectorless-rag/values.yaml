@@ -19,10 +19,19 @@ deepseekCacheHitInputCostPerMillionUsd: ""
 deepseekOutputCostPerMillionUsd: ""
 pageindexModel: deepseek/deepseek-v4-pro
 pageindexLlmMaxAttempts: 3
+pageindexAsyncConcurrency: 8
+pageindexMaxOutputTokens: 8192
+pageindexCallTimeoutSeconds: 120
 pageindexTimeoutSeconds: 3600
 ingestionMaxAttempts: 3
+ingestionLeaseSeconds: 120
+ingestionHeartbeatSeconds: 30
 ingestionStaleGraceSeconds: 300
-pilotDocumentLimit: 10
+catalogBatchTokenLimit: 24000
+documentLimit: 8
+evidenceTokenLimit: 40000
+pilotDocumentLimit: 25
+pilotCostLimitUsd: 10
 allowFullCorpusIndex: false
 
 service:

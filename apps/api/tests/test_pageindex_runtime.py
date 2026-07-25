@@ -176,7 +176,7 @@ def test_retry_exhaustion_is_typed_and_prompt_free() -> None:
 
     with pytest.raises(PageIndexLLMError) as error:
         _runtime(empty_completion, attempts=3).complete("provider/model", "secret document prompt")
-    assert error.value.failure_code == "pageindex_llm_retry_exhausted"
+    assert error.value.failure_code == "pageindex_empty_response"
     assert error.value.attempts == 3
     assert "secret document prompt" not in error.value.diagnostic
 
@@ -189,18 +189,25 @@ def test_reasoning_content_is_never_used_as_the_final_answer() -> None:
     with pytest.raises(PageIndexLLMError) as error:
         _runtime(reasoning_only, attempts=1).complete("provider/model", "prompt")
 
-    assert error.value.failure_code == "pageindex_llm_retry_exhausted"
+    assert error.value.failure_code == "pageindex_empty_response"
 
 
 @pytest.mark.parametrize(
-    "provider_error",
+    ("provider_error", "expected_code"),
     [
-        AuthenticationError("unauthorized", "provider", "model"),
-        BadRequestError("invalid request", "model", "provider"),
+        (
+            AuthenticationError("unauthorized", "provider", "model"),
+            "pageindex_provider_unavailable",
+        ),
+        (
+            BadRequestError("invalid request", "model", "provider"),
+            "pageindex_provider_rejected",
+        ),
     ],
 )
 def test_authentication_and_bad_request_errors_are_not_retried(
     provider_error: Exception,
+    expected_code: str,
 ) -> None:
     calls = 0
 
@@ -213,7 +220,7 @@ def test_authentication_and_bad_request_errors_are_not_retried(
     with pytest.raises(PageIndexLLMError) as error:
         _runtime(rejected).complete("provider/model", "private prompt")
 
-    assert error.value.failure_code == "pageindex_provider_rejected"
+    assert error.value.failure_code == expected_code
     assert "private prompt" not in error.value.diagnostic
     assert calls == 1
 
@@ -237,7 +244,7 @@ async def test_async_invalid_then_valid() -> None:
     assert all(call["extra_body"] == {"thinking": {"type": "disabled"}} for call in calls)
 
 
-async def test_async_invalid_json_fallback_is_explicit_and_applied_after_retries() -> None:
+async def test_async_invalid_json_fallback_cannot_convert_failure_to_a_fact() -> None:
     calls = 0
 
     async def invalid(**kwargs: object) -> object:
@@ -251,15 +258,14 @@ async def test_async_invalid_json_fallback_is_explicit_and_applied_after_retries
         return _response("unused")
 
     runtime = _runtime(unused_sync, acompletion=invalid)
-    assert (
+    with pytest.raises(PageIndexLLMError) as error:
         await runtime.acomplete(
             "provider/model",
             "prompt",
             expect_json=True,
             invalid_json_fallback={"answer": "no"},
         )
-        == '{"answer":"no"}'
-    )
+    assert error.value.failure_code == "pageindex_invalid_json"
     assert calls == 3
 
 

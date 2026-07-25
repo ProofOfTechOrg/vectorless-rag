@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.metadata
 import json
 import os
 import shutil
+import signal
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -15,6 +17,10 @@ from uuid import UUID
 import fitz
 
 from vectorless_rag.config import Settings
+from vectorless_rag.pageindex_artifact import (
+    PageIndexBuildV2,
+    build_manifest_v2,
+)
 
 PAGEINDEX_FAILURE_DIAGNOSTICS = {
     "pageindex_child_failed": "PageIndex failed inside its isolated runtime.",
@@ -31,6 +37,13 @@ PAGEINDEX_FAILURE_DIAGNOSTICS = {
         "The PageIndex provider request failed after all retry attempts."
     ),
     "pageindex_provider_rejected": "The PageIndex provider rejected the request.",
+    "pageindex_provider_unavailable": "The PageIndex provider is unavailable.",
+    "pageindex_authentication_failed": "PageIndex provider authentication failed.",
+    "pageindex_permission_denied": "PageIndex provider permission was denied.",
+    "pageindex_rate_limited": "The PageIndex provider rate-limited the request.",
+    "pageindex_provider_server_error": "The PageIndex provider returned a server error.",
+    "pageindex_network_error": "The PageIndex provider network request failed.",
+    "pageindex_truncated_response": "The provider truncated an atomic PageIndex completion.",
     "pageindex_transient_provider_error": ("The PageIndex provider request failed transiently."),
     "pageindex_unexpected_tool_call": "PageIndex received an unexpected tool call.",
     "usage_persistence_failed": "Model usage accounting could not be persisted.",
@@ -118,6 +131,209 @@ class PageIndexAdapter:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
+    def _child_environment(self) -> dict[str, str]:
+        environment = {
+            "DATABASE_URL": self.settings.database_url,
+            "DEEPSEEK_MODEL": self.settings.deepseek_model,
+            "PAGEINDEX_MODEL": self.settings.pageindex_model,
+            "PAGEINDEX_LLM_MAX_ATTEMPTS": str(self.settings.pageindex_llm_max_attempts),
+            "PAGEINDEX_ASYNC_CONCURRENCY": str(self.settings.pageindex_async_concurrency),
+            "PAGEINDEX_MAX_OUTPUT_TOKENS": str(self.settings.pageindex_max_output_tokens),
+            "PAGEINDEX_CALL_TIMEOUT_SECONDS": str(self.settings.pageindex_call_timeout_seconds),
+            "RELEASE": self.settings.release,
+            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+        }
+        if self.settings.deepseek_api_key is not None:
+            environment["DEEPSEEK_API_KEY"] = self.settings.deepseek_api_key.get_secret_value()
+        for name in (
+            "LANG",
+            "LC_ALL",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+        ):
+            value = os.environ.get(name)
+            if value:
+                environment[name] = value
+        return environment
+
+    async def build_v2(
+        self,
+        pdf_path: Path,
+        document_id: str,
+        document_sha256: str,
+        metadata: dict[str, Any],
+        *,
+        ingestion_attempt_id: UUID,
+        trace_id: str,
+    ) -> PageIndexBuildV2:
+        workspace_root = self.settings.pageindex_work_dir
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f"{document_id}-", dir=workspace_root) as temp:
+            workspace = Path(temp)
+            local_pdf = workspace / "document.pdf"
+            await asyncio.to_thread(shutil.copyfile, pdf_path, local_pdf)
+            preliminary_pages = await asyncio.to_thread(extract_pdf_pages, local_pdf)
+            if len(preliminary_pages) == 1:
+                title = str(metadata.get("title") or "Document").strip() or "Document"
+                summary = str(
+                    metadata.get("description") or metadata.get("abstract") or title
+                ).strip()
+                raw_tree: object = {
+                    "doc_description": summary,
+                    "structure": [
+                        {
+                            "node_id": "node-0000",
+                            "title": title,
+                            "summary": summary,
+                            "start_index": 1,
+                            "end_index": 1,
+                        }
+                    ],
+                }
+                pages = preliminary_pages
+            else:
+                raw_tree, pages = await self._run_v2_child(
+                    workspace,
+                    local_pdf,
+                    ingestion_attempt_id=ingestion_attempt_id,
+                    trace_id=trace_id,
+                )
+            patch_path = Path(__file__).parents[2] / "patches" / "pageindex-runtime.patch"
+            patch_sha256 = hashlib.sha256(patch_path.read_bytes()).hexdigest()
+            return build_manifest_v2(
+                raw_tree,
+                pages,
+                document_id=document_id,
+                document_sha256=document_sha256,
+                metadata=metadata,
+                generator_commit=self.settings.pageindex_version.split("+", 1)[0],
+                patch_sha256=patch_sha256,
+                model=self.settings.pageindex_model,
+                prompt_profile="pageindex-v2-untrusted-document-v1",
+                options_profile={
+                    "add_node_id": True,
+                    "add_node_summary": True,
+                    "add_doc_description": True,
+                    "add_node_text": False,
+                },
+                parser="PyPDF2",
+                parser_version=importlib.metadata.version("PyPDF2"),
+            )
+
+    async def _run_v2_child(
+        self,
+        workspace: Path,
+        local_pdf: Path,
+        *,
+        ingestion_attempt_id: UUID,
+        trace_id: str,
+    ) -> tuple[object, list[str]]:
+        pages_output = workspace / "document_pages.json"
+        command = self._command(
+            workspace,
+            local_pdf,
+            ingestion_attempt_id=ingestion_attempt_id,
+            trace_id=trace_id,
+            pages_output=pages_output,
+        )
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            cwd=workspace,
+            env=self._child_environment(),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        await self._wait_for_child(process, workspace)
+        result_path = workspace / "results" / "document_structure.json"
+        if not result_path.is_file():
+            raise PageIndexError(
+                "pageindex_missing_artifact",
+                "PageIndex completed without producing an artifact.",
+            )
+        if not pages_output.is_file():
+            raise PageIndexError(
+                "pageindex_missing_pages",
+                "PageIndex completed without producing its exact page text.",
+            )
+        try:
+            raw_tree: object = json.loads(result_path.read_text(encoding="utf-8"))
+            raw_pages: object = json.loads(pages_output.read_text(encoding="utf-8"))
+            if not isinstance(raw_pages, list):
+                raise ValueError("invalid page output")
+            page_values = cast(list[object], raw_pages)
+            if any(not isinstance(page, str) for page in page_values):
+                raise ValueError("invalid page output")
+            pages = cast(list[str], page_values)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+            raise PageIndexError(
+                "pageindex_invalid_artifact",
+                "PageIndex produced an invalid artifact.",
+            ) from error
+        return raw_tree, pages
+
+    def _command(
+        self,
+        workspace: Path,
+        local_pdf: Path,
+        *,
+        ingestion_attempt_id: UUID,
+        trace_id: str,
+        pages_output: Path | None = None,
+    ) -> list[str]:
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name("run_pageindex.py")),
+            "--pageindex-script",
+            str(self.settings.pageindex_source_dir / "run_pageindex.py"),
+            "--failure-report",
+            str(workspace / "failure.json"),
+            "--ingestion-attempt-id",
+            str(ingestion_attempt_id),
+            "--trace-id",
+            trace_id,
+        ]
+        if pages_output is not None:
+            command.extend(["--pages-output", str(pages_output)])
+        command.extend(
+            [
+                "--pdf_path",
+                str(local_pdf),
+                "--model",
+                self.settings.pageindex_model,
+                "--if-add-node-id",
+                "yes",
+                "--if-add-node-summary",
+                "yes",
+                "--if-add-doc-description",
+                "yes",
+                "--if-add-node-text",
+                "no",
+            ]
+        )
+        return command
+
+    async def _wait_for_child(self, process: asyncio.subprocess.Process, workspace: Path) -> None:
+        waiter = asyncio.create_task(process.wait())
+        try:
+            async with asyncio.timeout(self.settings.pageindex_timeout_seconds):
+                await asyncio.shield(waiter)
+        except TimeoutError as error:
+            await asyncio.shield(self._stop_process(process, waiter))
+            raise PageIndexError(
+                "pageindex_timeout",
+                "PageIndex exceeded its configured processing deadline.",
+            ) from error
+        except asyncio.CancelledError:
+            await asyncio.shield(self._stop_process(process, waiter))
+            raise
+        if process.returncode:
+            raise self._reported_failure(workspace / "failure.json")
+
     async def index(
         self,
         pdf_path: Path,
@@ -148,53 +364,21 @@ class PageIndexAdapter:
                 ]
                 artifact = normalize_artifact(raw_tree, pages, metadata=metadata)
                 return json.dumps(artifact, ensure_ascii=False, separators=(",", ":")).encode()
-            command = [
-                sys.executable,
-                str(Path(__file__).with_name("run_pageindex.py")),
-                "--pageindex-script",
-                str(self.settings.pageindex_source_dir / "run_pageindex.py"),
-                "--failure-report",
-                str(workspace / "failure.json"),
-                "--ingestion-attempt-id",
-                str(ingestion_attempt_id),
-                "--trace-id",
-                trace_id,
-                "--pdf_path",
-                str(local_pdf),
-                "--model",
-                self.settings.pageindex_model,
-                "--if-add-node-id",
-                "yes",
-                "--if-add-node-summary",
-                "yes",
-                "--if-add-doc-description",
-                "yes",
-                "--if-add-node-text",
-                "no",
-            ]
-            environment = os.environ.copy()
+            command = self._command(
+                workspace,
+                local_pdf,
+                ingestion_attempt_id=ingestion_attempt_id,
+                trace_id=trace_id,
+            )
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=workspace,
-                env=environment,
+                env=self._child_environment(),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
             )
-            waiter = asyncio.create_task(process.wait())
-            try:
-                async with asyncio.timeout(self.settings.pageindex_timeout_seconds):
-                    await asyncio.shield(waiter)
-            except TimeoutError as error:
-                await asyncio.shield(self._stop_process(process, waiter))
-                raise PageIndexError(
-                    "pageindex_timeout",
-                    "PageIndex exceeded its configured processing deadline.",
-                ) from error
-            except asyncio.CancelledError:
-                await asyncio.shield(self._stop_process(process, waiter))
-                raise
-            if process.returncode:
-                raise self._reported_failure(workspace / "failure.json")
+            await self._wait_for_child(process, workspace)
             result_path = workspace / "results" / "document_structure.json"
             if not result_path.is_file():
                 raise PageIndexError(
@@ -215,8 +399,12 @@ class PageIndexAdapter:
     ) -> None:
         if process.returncode is None:
             try:
-                process.terminate()
-            except ProcessLookupError:
+                process_id = getattr(process, "pid", None)
+                if isinstance(process_id, int):
+                    os.killpg(process_id, signal.SIGTERM)
+                else:
+                    process.terminate()
+            except (ProcessLookupError, PermissionError):
                 pass
         try:
             async with asyncio.timeout(5):
@@ -224,8 +412,12 @@ class PageIndexAdapter:
         except TimeoutError:
             if process.returncode is None:
                 try:
-                    process.kill()
-                except ProcessLookupError:
+                    process_id = getattr(process, "pid", None)
+                    if isinstance(process_id, int):
+                        os.killpg(process_id, signal.SIGKILL)
+                    else:
+                        process.kill()
+                except (ProcessLookupError, PermissionError):
                     pass
             await waiter
 

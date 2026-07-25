@@ -6,16 +6,23 @@ import { Selector } from '@astryxdesign/core/Selector'
 import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useAppearance, type Appearance } from '../components/AppearanceProvider'
-import { getReadiness, logout } from '../server/functions'
+import { getProviderStatus, getReadiness, logout } from '../server/functions'
 
 export const Route = createFileRoute('/_app/settings')({
-  loader: ({ abortController }) => getReadiness({ signal: abortController.signal }),
+  loader: async ({ abortController }) => {
+    const signal = abortController.signal
+    const [readiness, provider] = await Promise.all([
+      getReadiness({ signal }),
+      getProviderStatus({ signal }),
+    ])
+    return { readiness, provider }
+  },
   component: SettingsPage,
 })
 
 function SettingsPage() {
   const { session } = Route.useRouteContext()
-  const readiness = Route.useLoaderData()
+  const { readiness, provider } = Route.useLoaderData()
   const navigate = useNavigate()
   const router = useRouter()
   const { appearance, setAppearance } = useAppearance()
@@ -28,6 +35,29 @@ function SettingsPage() {
           <div className="stack">
             <h2>Connection</h2>
             <Banner status={readiness.ready ? 'success' : 'error'} title={readiness.ready ? 'FastAPI is ready' : 'FastAPI is unavailable'} />
+            <Banner
+              status={
+                provider.availability === 'available'
+                  ? 'success'
+                  : provider.availability === 'unknown'
+                    ? 'warning'
+                    : 'error'
+              }
+              title={
+                provider.availability === 'available'
+                  ? provider.stale
+                    ? 'Provider available (stale positive)'
+                    : 'Model provider available'
+                  : provider.availability === 'unknown'
+                    ? 'Provider status unknown'
+                    : 'Model provider unavailable'
+              }
+              description={
+                provider.availability === 'available'
+                  ? `Checked ${new Date(provider.checked_at).toLocaleString()}.`
+                  : `Reason: ${provider.reason ?? provider.availability}. Non-model surfaces remain available.`
+              }
+            />
             <dl className="metadata">
               <dt>Key name</dt><dd>{session.name}</dd>
               <dt>Session lifetime</dt><dd>Eight hours</dd>

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+from collections import Counter
 from contextlib import AbstractContextManager, nullcontext
 from typing import Any, Protocol, cast
 
@@ -9,6 +11,9 @@ from langfuse import Langfuse
 
 from vectorless_rag.config import Settings
 from vectorless_rag.usage import TokenUsage, current_usage_owner, normalize_token_usage
+
+logger = logging.getLogger(__name__)
+LANGFUSE_EXPORT_FAILURES: Counter[str] = Counter()
 
 SENSITIVE_KEYS = frozenset(
     {
@@ -39,8 +44,18 @@ def mask_payload(value: Any, *, maximum_string: int = 500) -> Any:
         return [mask_payload(item) for item in cast(list[object], value)]
     if isinstance(value, str) and len(value) > maximum_string:
         digest = hashlib.sha256(value.encode()).hexdigest()
-        return {"sha256": digest, "bytes": len(value.encode()), "preview": value[:120]}
+        return {"sha256": digest, "bytes": len(value.encode())}
     return value
+
+
+def _record_export_failure(operation: str, error: BaseException) -> None:
+    LANGFUSE_EXPORT_FAILURES[operation] += 1
+    logger.warning(
+        "langfuse_export_failed operation=%s error_class=%s count=%d",
+        operation,
+        type(error).__name__,
+        LANGFUSE_EXPORT_FAILURES[operation],
+    )
 
 
 def langfuse_mask(*, data: Any, **kwargs: dict[str, Any]) -> Any:
@@ -88,7 +103,8 @@ class GenerationObservation:
                 usage_details=normalized_token_usage(usage),
             )
             self.handle.end()
-        except Exception:
+        except Exception as error:
+            _record_export_failure("generation_finish", error)
             return
 
     def fail(
@@ -112,7 +128,8 @@ class GenerationObservation:
         try:
             self.handle.update(**payload)
             self.handle.end()
-        except Exception:
+        except Exception as error:
+            _record_export_failure("generation_fail", error)
             return
 
 
@@ -143,7 +160,8 @@ class Observability:
                 input=mask_payload(input),
                 metadata=mask_payload(metadata or {}),
             )
-        except Exception:
+        except Exception as error:
+            _record_export_failure("span_start", error)
             return nullcontext()
         return cast(AbstractContextManager[Any], context)
 
@@ -162,7 +180,22 @@ class Observability:
                 value=value,
                 comment=safe_comment,
             )
-        except Exception:
+        except Exception as error:
+            _record_export_failure("score", error)
+            return
+
+    def categorical_score(self, trace_id: str, name: str, value: str) -> None:
+        if self.client is None:
+            return
+        try:
+            self.client.create_score(
+                trace_id=trace_id,
+                name=name,
+                value=value,
+                data_type="CATEGORICAL",
+            )
+        except Exception as error:
+            _record_export_failure("categorical_score", error)
             return
 
     def generation(
@@ -189,7 +222,8 @@ class Observability:
                     metadata={"attempt": attempt},
                     trace_context={"trace_id": owner.trace_id},
                 )
-        except Exception:
+        except Exception as error:
+            _record_export_failure("generation_start", error)
             return GenerationObservation(None, attempt)
         return GenerationObservation(cast(_GenerationHandle, handle), attempt)
 
@@ -197,7 +231,8 @@ class Observability:
         if self.client is not None:
             try:
                 self.client.flush()
-            except Exception:
+            except Exception as error:
+                _record_export_failure("flush", error)
                 return
 
 

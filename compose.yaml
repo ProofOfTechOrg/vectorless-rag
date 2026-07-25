@@ -1,5 +1,11 @@
 name: vectorless-rag
 
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: 20m
+    max-file: "5"
+
 x-app-env: &app-env
   ENVIRONMENT: ${ENVIRONMENT}
   RELEASE: ${RELEASE}
@@ -13,9 +19,17 @@ x-app-env: &app-env
   DEEPSEEK_OUTPUT_COST_PER_MILLION_USD: ${DEEPSEEK_OUTPUT_COST_PER_MILLION_USD}
   PAGEINDEX_MODEL: ${PAGEINDEX_MODEL}
   PAGEINDEX_LLM_MAX_ATTEMPTS: ${PAGEINDEX_LLM_MAX_ATTEMPTS:-3}
+  PAGEINDEX_ASYNC_CONCURRENCY: ${PAGEINDEX_ASYNC_CONCURRENCY:-8}
+  PAGEINDEX_MAX_OUTPUT_TOKENS: ${PAGEINDEX_MAX_OUTPUT_TOKENS:-8192}
+  PAGEINDEX_CALL_TIMEOUT_SECONDS: ${PAGEINDEX_CALL_TIMEOUT_SECONDS:-120}
   PAGEINDEX_TIMEOUT_SECONDS: ${PAGEINDEX_TIMEOUT_SECONDS:-3600}
   INGESTION_MAX_ATTEMPTS: ${INGESTION_MAX_ATTEMPTS:-3}
+  INGESTION_LEASE_SECONDS: ${INGESTION_LEASE_SECONDS:-120}
+  INGESTION_HEARTBEAT_SECONDS: ${INGESTION_HEARTBEAT_SECONDS:-30}
   INGESTION_STALE_GRACE_SECONDS: ${INGESTION_STALE_GRACE_SECONDS:-300}
+  CATALOG_BATCH_TOKEN_LIMIT: ${CATALOG_BATCH_TOKEN_LIMIT:-24000}
+  DOCUMENT_LIMIT: ${DOCUMENT_LIMIT:-8}
+  EVIDENCE_TOKEN_LIMIT: ${EVIDENCE_TOKEN_LIMIT:-40000}
   ARXIV_PDF_DIR: /corpus
   PAGEINDEX_WORK_DIR: /workspaces
   OBJECT_STORE_ENDPOINT: http://minio:9000
@@ -27,6 +41,7 @@ x-app-env: &app-env
   LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
   API_KEY_PEPPER: ${API_KEY_PEPPER}
   PILOT_DOCUMENT_LIMIT: ${PILOT_DOCUMENT_LIMIT}
+  PILOT_COST_LIMIT_USD: ${PILOT_COST_LIMIT_USD:-10}
   ALLOW_FULL_CORPUS_INDEX: ${ALLOW_FULL_CORPUS_INDEX}
 
 x-langfuse-env: &langfuse-env
@@ -59,6 +74,7 @@ x-langfuse-env: &langfuse-env
 
 services:
   api:
+    logging: *default-logging
     build: ./apps/api
     restart: unless-stopped
     command: ["sh", "-c", "vectorless-rag migrate && uvicorn vectorless_rag.api:app --host 0.0.0.0 --port 8000"]
@@ -81,6 +97,7 @@ services:
       start_period: 30s
 
   worker:
+    logging: *default-logging
     build: ./apps/api
     restart: unless-stopped
     command: ["python", "-m", "vectorless_rag.worker"]
@@ -93,6 +110,7 @@ services:
         condition: service_healthy
 
   postgres:
+    logging: *default-logging
     image: postgres:17.9-alpine
     restart: unless-stopped
     environment:
@@ -115,6 +133,7 @@ services:
       retries: 20
 
   langfuse-web:
+    logging: *default-logging
     image: langfuse/langfuse:3.221.1
     restart: unless-stopped
     environment:
@@ -142,12 +161,14 @@ services:
         condition: service_healthy
 
   langfuse-worker:
+    logging: *default-logging
     image: langfuse/langfuse-worker:3.221.1
     restart: unless-stopped
     environment: *langfuse-env
     depends_on: *langfuse-depends
 
   clickhouse:
+    logging: *default-logging
     image: clickhouse/clickhouse-server:25.8.28.1
     restart: unless-stopped
     user: "101:101"
@@ -168,6 +189,7 @@ services:
       retries: 20
 
   redis:
+    logging: *default-logging
     image: redis:7.4.9-alpine
     restart: unless-stopped
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--maxmemory-policy", "noeviction"]
@@ -180,6 +202,7 @@ services:
       retries: 20
 
   minio:
+    logging: *default-logging
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     entrypoint: ["sh", "-c"]
@@ -198,6 +221,7 @@ services:
       retries: 20
 
   web:
+    logging: *default-logging
     build:
       context: .
       dockerfile: apps/web/Dockerfile

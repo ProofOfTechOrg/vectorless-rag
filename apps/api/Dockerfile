@@ -11,8 +11,12 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY scripts ./scripts
 COPY patches ./patches
+COPY evaluation ./evaluation
+COPY pilots ./pilots
+COPY telemetry ./telemetry
 RUN uv sync --frozen --no-dev && sh /app/scripts/install-pageindex.sh /opt/pageindex
 ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/opt/pageindex:/app/src"
+RUN python scripts/test_pageindex_patch.py /opt/pageindex
 RUN useradd --create-home --uid 10001 app && mkdir -p /workspaces && chown -R app:app /app /workspaces
 USER app
 EXPOSE 8000

@@ -150,7 +150,7 @@ async def test_synchronous_chat_commits_failed_run_before_reraising(
     assert session.commits == 2
     assert session.run is not None
     assert session.run.route == RunRoute.sql
-    assert session.run.error == "request failed"
+    assert session.run.error == "The API could not complete this run."
     assert session.run.failure_code == RunFailureCode.request_failed
     assert session.run.insufficient is True
     assert session.run.latency_ms is not None
@@ -177,7 +177,7 @@ async def test_synchronous_chat_preserves_unconfigured_provider_status_and_detai
     assert raised.value.detail == "DeepSeek is not configured"
     assert session.commits == 2
     assert session.run is not None
-    assert session.run.error == "request failed"
+    assert session.run.error == "The API could not complete this run."
     assert session.run.failure_code == RunFailureCode.request_failed
     assert session.run.insufficient is True
 

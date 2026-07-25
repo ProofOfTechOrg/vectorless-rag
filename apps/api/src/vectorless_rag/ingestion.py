@@ -5,6 +5,7 @@ import hashlib
 import re
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol, cast
@@ -24,17 +25,28 @@ from vectorless_rag.llm import (
 from vectorless_rag.models import (
     ArtifactAction,
     Document,
+    DocumentMetadataVersion,
     DocumentStatus,
+    IndexActivation,
+    IndexActivationReason,
+    IndexLifecycleStatus,
     IndexVersion,
     IngestionAttempt,
     IngestionAttemptStatus,
     IngestionJob,
+    IngestionMode,
     JobStatus,
     ModelCall,
     ModelCallOutcome,
     ModelCallStage,
 )
 from vectorless_rag.pageindex_adapter import PageIndexAdapter, PageIndexError, artifact_version_key
+from vectorless_rag.pageindex_artifact import (
+    PageIndexBuildV2,
+    configuration_digest,
+    load_manifest_v2,
+    store_build_v2,
+)
 from vectorless_rag.reporting import build_pilot_report as build_pilot_report
 from vectorless_rag.schemas import DocumentMetadata, SyncResponse
 from vectorless_rag.storage import ObjectStore
@@ -77,6 +89,37 @@ class UnsupportedPDF(ValueError):
 
 class IngestionRetryConflict(ValueError):
     pass
+
+
+class IngestionLeaseLost(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class PreparedIngestion:
+    job_id: UUID
+    attempt_id: UUID
+    worker_id: str
+    lease_token: UUID
+    document_id: UUID
+    document_sha256: str
+    pdf_object_key: str
+    original_filename: str
+    mode: IngestionMode
+    version_key: str
+    prior_index_version_id: UUID | None
+    reusable_index_version_id: UUID | None
+    trace_id: str
+    started: float
+
+
+@dataclass(frozen=True)
+class CompletedBuild:
+    metadata: DocumentMetadata
+    page_count: int
+    extraction_quality: float
+    artifact: PageIndexBuildV2
+    artifact_bytes: int
 
 
 class _TextPage(Protocol):
@@ -161,7 +204,11 @@ async def register_pdf(
     settings: Settings,
     *,
     force: bool = False,
+    mode: IngestionMode = IngestionMode.ensure_current,
+    experiment_id: UUID | None = None,
 ) -> tuple[Document, IngestionJob | None, bool]:
+    if force and mode == IngestionMode.ensure_current:
+        mode = IngestionMode.rebuild_index
     validate_pdf(data, filename, settings.upload_max_bytes)
     digest = sha256_bytes(data)
     existing = await session.scalar(select(Document).where(Document.sha256 == digest))
@@ -171,12 +218,18 @@ async def register_pdf(
         pending = await session.scalar(
             select(IngestionJob).where(
                 IngestionJob.document_id == existing.id,
-                IngestionJob.status.in_([JobStatus.queued, JobStatus.running]),
+                IngestionJob.is_active.is_(True),
             )
         )
         if pending is not None:
             return existing, pending, True
-        job = IngestionJob(document_id=existing.id, force=True)
+        job = IngestionJob(
+            document_id=existing.id,
+            force=True,
+            mode=mode,
+            experiment_id=experiment_id,
+            is_active=True,
+        )
         session.add(job)
         existing.status = DocumentStatus.queued
         await session.flush()
@@ -193,14 +246,27 @@ async def register_pdf(
     )
     session.add(document)
     await session.flush()
-    job = IngestionJob(document_id=document.id, force=force)
+    job = IngestionJob(
+        document_id=document.id,
+        force=force,
+        mode=mode,
+        experiment_id=experiment_id,
+        is_active=True,
+    )
     session.add(job)
     await session.flush()
     return document, job, False
 
 
 async def sync_corpus(
-    session: AsyncSession, store: ObjectStore, settings: Settings, *, force: bool
+    session: AsyncSession,
+    store: ObjectStore,
+    settings: Settings,
+    *,
+    force: bool,
+    mode: IngestionMode = IngestionMode.ensure_current,
+    arxiv_ids: list[str] | None = None,
+    experiment_id: UUID | None = None,
 ) -> SyncResponse:
     corpus = settings.arxiv_pdf_dir
     if not corpus.is_dir():
@@ -208,6 +274,9 @@ async def sync_corpus(
     pdfs = sorted(
         path for path in corpus.iterdir() if path.is_file() and path.suffix.lower() == ".pdf"
     )
+    if arxiv_ids is not None:
+        requested = set(arxiv_ids)
+        pdfs = [path for path in pdfs if arxiv_id_from_filename(path.name) in requested]
     pilot_limited = not settings.allow_full_corpus_index
     capacity = len(pdfs)
     if pilot_limited:
@@ -222,7 +291,14 @@ async def sync_corpus(
         if pilot_limited and known is None and newly_registered >= capacity:
             continue
         _, job, duplicate = await register_pdf(
-            session, store, data, path.name, settings, force=force
+            session,
+            store,
+            data,
+            path.name,
+            settings,
+            force=force,
+            mode=mode,
+            experiment_id=experiment_id,
         )
         deduplicated += int(duplicate)
         queued += int(job is not None)
@@ -232,6 +308,17 @@ async def sync_corpus(
         queued=queued,
         deduplicated=deduplicated,
         pilot_limit_reached=pilot_limited and discovered > newly_registered + deduplicated,
+        pilot_limit=settings.pilot_document_limit if pilot_limited else None,
+        registered_count=(await session.scalar(select(func.count()).select_from(Document)) or 0),
+        remaining_capacity=(
+            max(
+                0,
+                settings.pilot_document_limit
+                - (await session.scalar(select(func.count()).select_from(Document)) or 0),
+            )
+            if pilot_limited
+            else None
+        ),
     )
 
 
@@ -242,7 +329,7 @@ async def retry_failed_ingestion(session: AsyncSession, failed_job: IngestionJob
         select(IngestionJob)
         .where(
             IngestionJob.document_id == failed_job.document_id,
-            IngestionJob.status.in_([JobStatus.queued, JobStatus.running]),
+            IngestionJob.is_active.is_(True),
         )
         .with_for_update()
     )
@@ -251,7 +338,13 @@ async def retry_failed_ingestion(session: AsyncSession, failed_job: IngestionJob
     document = await session.get(Document, failed_job.document_id, with_for_update=True)
     if document is None:
         raise IngestionRetryConflict("the ingestion document no longer exists")
-    replacement = IngestionJob(document_id=document.id, status=JobStatus.queued, force=True)
+    replacement = IngestionJob(
+        document_id=document.id,
+        status=JobStatus.queued,
+        force=True,
+        mode=IngestionMode.rebuild_index,
+        is_active=True,
+    )
     session.add(replacement)
     document.status = DocumentStatus.queued
     document.diagnostic = None
@@ -272,6 +365,41 @@ async def retry_latest_document_ingestion(session: AsyncSession, document_id: UU
     return await retry_failed_ingestion(session, latest_job)
 
 
+async def enqueue_document_reindex(
+    session: AsyncSession,
+    document_id: UUID,
+    *,
+    mode: IngestionMode = IngestionMode.rebuild_index,
+) -> IngestionJob:
+    document = await session.get(Document, document_id, with_for_update=True)
+    if document is None:
+        raise IngestionRetryConflict("document not found")
+    active = await session.scalar(
+        select(IngestionJob)
+        .where(
+            IngestionJob.document_id == document_id,
+            IngestionJob.is_active.is_(True),
+        )
+        .with_for_update()
+        .limit(1)
+    )
+    if active is not None:
+        return active
+    job = IngestionJob(
+        document_id=document_id,
+        status=JobStatus.queued,
+        force=True,
+        mode=mode,
+        is_active=True,
+    )
+    session.add(job)
+    if document.active_index_version_id is None:
+        document.status = DocumentStatus.queued
+    document.diagnostic = None
+    await session.flush()
+    return job
+
+
 class IngestionProcessor:
     def __init__(
         self,
@@ -284,6 +412,383 @@ class IngestionProcessor:
         self.store = store
         self.llm = llm
         self.pageindex = pageindex
+
+    async def prepare_claim(
+        self,
+        session: AsyncSession,
+        *,
+        job_id: UUID,
+        attempt_id: UUID,
+        worker_id: str,
+        lease_token: UUID,
+    ) -> PreparedIngestion:
+        job = await session.get(IngestionJob, job_id, with_for_update=True)
+        attempt = await session.get(IngestionAttempt, attempt_id, with_for_update=True)
+        now = datetime.now(UTC)
+        if (
+            job is None
+            or attempt is None
+            or job.status != JobStatus.running
+            or attempt.status != IngestionAttemptStatus.running
+            or job.worker_id != worker_id
+            or job.lease_token != lease_token
+            or attempt.lease_token != lease_token
+            or job.active_attempt_id != attempt_id
+            or job.lease_expires_at is None
+            or job.lease_expires_at <= now
+        ):
+            raise IngestionLeaseLost("ingestion lease is no longer valid")
+        document = await session.get(Document, job.document_id, with_for_update=True)
+        if document is None:
+            raise RuntimeError("ingestion document no longer exists")
+        mode = job.mode or (
+            IngestionMode.rebuild_index if job.force else IngestionMode.ensure_current
+        )
+        version_key = artifact_version_key(
+            document.sha256,
+            self.settings.pageindex_version,
+            self.settings.metadata_prompt_version,
+            self.settings.pageindex_model,
+        )
+        reusable_id: UUID | None = None
+        if mode == IngestionMode.ensure_current:
+            reusable_id = await session.scalar(
+                select(IndexVersion.id)
+                .where(
+                    IndexVersion.document_id == document.id,
+                    IndexVersion.version_key == version_key,
+                    IndexVersion.artifact_schema_version == 2,
+                    IndexVersion.lifecycle_status.in_(
+                        [IndexLifecycleStatus.verified, IndexLifecycleStatus.active]
+                    ),
+                    IndexVersion.verified_at.is_not(None),
+                )
+                .order_by(IndexVersion.verified_at.desc(), IndexVersion.created_at.desc())
+                .limit(1)
+            )
+        if document.active_index_version_id is None:
+            document.status = DocumentStatus.indexing
+        job.current_stage = "reuse_check" if reusable_id is not None else "building"
+        return PreparedIngestion(
+            job_id=job.id,
+            attempt_id=attempt.id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            document_id=document.id,
+            document_sha256=document.sha256,
+            pdf_object_key=document.pdf_object_key,
+            original_filename=document.original_filename,
+            mode=mode,
+            version_key=version_key,
+            prior_index_version_id=document.active_index_version_id,
+            reusable_index_version_id=reusable_id,
+            trace_id=attempt.trace_id,
+            started=time.monotonic(),
+        )
+
+    async def build_claim(self, prepared: PreparedIngestion) -> CompletedBuild | None:
+        if prepared.reusable_index_version_id is not None:
+            return None
+        pdf_data = await self.store.get_bytes(prepared.pdf_object_key)
+        metadata, page_count, quality = await extract_metadata(
+            pdf_data,
+            prepared.original_filename,
+            self.llm,
+            self.settings,
+        )
+        metadata_payload = metadata.model_dump(mode="json")
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
+            await asyncio.to_thread(handle.write, pdf_data)
+            await asyncio.to_thread(handle.flush)
+            artifact = await self.pageindex.build_v2(
+                Path(handle.name),
+                str(prepared.document_id),
+                prepared.document_sha256,
+                metadata_payload,
+                ingestion_attempt_id=prepared.attempt_id,
+                trace_id=prepared.trace_id,
+            )
+        await store_build_v2(self.store, artifact)
+        await load_manifest_v2(
+            self.store,
+            artifact.manifest_object_key,
+            artifact.manifest_sha256,
+        )
+        artifact_bytes = (
+            len(artifact.raw_bytes)
+            + len(artifact.manifest_bytes)
+            + sum(len(value) for _, value in artifact.page_objects)
+        )
+        return CompletedBuild(
+            metadata=metadata,
+            page_count=page_count,
+            extraction_quality=quality,
+            artifact=artifact,
+            artifact_bytes=artifact_bytes,
+        )
+
+    async def verify_reusable(self, session: AsyncSession, prepared: PreparedIngestion) -> None:
+        if prepared.reusable_index_version_id is None:
+            return
+        version = await session.get(IndexVersion, prepared.reusable_index_version_id)
+        if (
+            version is None
+            or version.document_id != prepared.document_id
+            or version.manifest_object_key is None
+            or version.manifest_sha256 is None
+            or version.artifact_schema_version != 2
+        ):
+            raise RuntimeError("reusable PageIndex version is invalid")
+        object_key = version.manifest_object_key
+        digest = version.manifest_sha256
+        await session.rollback()
+        await load_manifest_v2(self.store, object_key, digest)
+
+    async def activate_claim(
+        self,
+        session: AsyncSession,
+        prepared: PreparedIngestion,
+        build: CompletedBuild | None,
+    ) -> UUID:
+        job = await session.get(IngestionJob, prepared.job_id, with_for_update=True)
+        attempt = await session.get(IngestionAttempt, prepared.attempt_id, with_for_update=True)
+        document = await session.get(Document, prepared.document_id, with_for_update=True)
+        now = datetime.now(UTC)
+        if (
+            job is None
+            or attempt is None
+            or document is None
+            or job.status != JobStatus.running
+            or attempt.status != IngestionAttemptStatus.running
+            or job.worker_id != prepared.worker_id
+            or job.lease_token != prepared.lease_token
+            or attempt.lease_token != prepared.lease_token
+            or job.active_attempt_id != prepared.attempt_id
+            or job.lease_expires_at is None
+            or job.lease_expires_at <= now
+        ):
+            raise IngestionLeaseLost("stale ingestion worker cannot activate an index")
+
+        if build is None:
+            version = await session.get(IndexVersion, prepared.reusable_index_version_id)
+            if (
+                version is None
+                or version.document_id != document.id
+                or version.artifact_schema_version != 2
+                or version.lifecycle_status
+                not in (IndexLifecycleStatus.verified, IndexLifecycleStatus.active)
+                or version.verified_at is None
+            ):
+                raise RuntimeError("reusable PageIndex version is no longer valid")
+            attempt.artifact_action = ArtifactAction.reused
+            reason = IndexActivationReason.reuse
+        else:
+            metadata_payload = build.metadata.model_dump(mode="json")
+            metadata_sha256 = configuration_digest(metadata_payload)
+            metadata_recipe = configuration_digest(
+                {
+                    "prompt_version": self.settings.metadata_prompt_version,
+                    "model": self.settings.deepseek_model,
+                }
+            )
+            metadata_version = await session.scalar(
+                select(DocumentMetadataVersion).where(
+                    DocumentMetadataVersion.document_id == document.id,
+                    DocumentMetadataVersion.recipe_key == metadata_recipe,
+                    DocumentMetadataVersion.content_sha256 == metadata_sha256,
+                )
+            )
+            if metadata_version is None:
+                metadata_version = DocumentMetadataVersion(
+                    document_id=document.id,
+                    recipe_key=metadata_recipe,
+                    configuration_hash=metadata_recipe,
+                    content_sha256=metadata_sha256,
+                    metadata_payload=metadata_payload,
+                    page_count=build.page_count,
+                    extraction_quality=build.extraction_quality,
+                )
+                session.add(metadata_version)
+                await session.flush()
+            manifest = build.artifact.manifest
+            version = await session.scalar(
+                select(IndexVersion).where(
+                    IndexVersion.document_id == document.id,
+                    IndexVersion.recipe_key == manifest.recipe_hash,
+                    IndexVersion.manifest_sha256 == build.artifact.manifest_sha256,
+                )
+            )
+            if version is None:
+                version = IndexVersion(
+                    document_id=document.id,
+                    version_key=prepared.version_key,
+                    pageindex_version=self.settings.pageindex_version,
+                    prompt_version=self.settings.metadata_prompt_version,
+                    model_name=self.settings.pageindex_model,
+                    artifact_object_key=build.artifact.manifest_object_key,
+                    artifact_sha256=build.artifact.manifest_sha256,
+                    artifact_schema_version=2,
+                    recipe_key=manifest.recipe_hash,
+                    configuration_hash=manifest.configuration_hash,
+                    pipeline_version=self.settings.pageindex_version,
+                    metadata_version_id=metadata_version.id,
+                    manifest_object_key=build.artifact.manifest_object_key,
+                    manifest_sha256=build.artifact.manifest_sha256,
+                    pageindex_description=manifest.description,
+                    top_level_outline=[item.model_dump(mode="json") for item in manifest.outline],
+                    page_count=manifest.quality.page_count,
+                    node_count=manifest.quality.node_count,
+                    max_depth=manifest.quality.max_depth,
+                    quality=manifest.quality.model_dump(mode="json"),
+                    build_attempt_id=attempt.id,
+                    lifecycle_status=IndexLifecycleStatus.verified,
+                    verified_at=now,
+                    extraction_quality=build.extraction_quality,
+                    elapsed_seconds=time.monotonic() - prepared.started,
+                )
+                session.add(version)
+                await session.flush()
+                attempt.artifact_action = (
+                    ArtifactAction.rebuilt
+                    if prepared.prior_index_version_id is not None
+                    else ArtifactAction.created
+                )
+            else:
+                attempt.artifact_action = ArtifactAction.reused
+            attempt.page_count = build.page_count
+            attempt.extraction_quality = build.extraction_quality
+            attempt.artifact_bytes = build.artifact_bytes
+            document.title = build.metadata.title
+            document.authors = build.metadata.authors
+            document.abstract = build.metadata.abstract
+            document.description = build.metadata.description
+            document.topics = build.metadata.topics
+            document.submitted_date = build.metadata.submitted_date
+            document.page_count = build.page_count
+            reason = (
+                IndexActivationReason.reuse
+                if attempt.artifact_action == ArtifactAction.reused
+                else IndexActivationReason.ingestion
+            )
+
+        prior = document.active_index_version_id
+        if prior != version.id:
+            session.add(
+                IndexActivation(
+                    document_id=document.id,
+                    prior_index_version_id=prior,
+                    index_version_id=version.id,
+                    reason=reason,
+                    ingestion_attempt_id=attempt.id,
+                    actor=f"worker:{prepared.worker_id}"[:128],
+                )
+            )
+        document.active_index_version_id = version.id
+        document.status = DocumentStatus.ready
+        document.diagnostic = None
+        attempt.index_version_id = version.id
+        job.active_index_version_id = version.id
+        await self._finish(
+            session,
+            job,
+            attempt,
+            JobStatus.completed,
+            IngestionAttemptStatus.completed,
+            None,
+            prepared.started,
+        )
+        return version.id
+
+    async def fail_claim(
+        self,
+        session: AsyncSession,
+        prepared: PreparedIngestion,
+        error: BaseException,
+    ) -> None:
+        job = await session.get(IngestionJob, prepared.job_id, with_for_update=True)
+        attempt = await session.get(IngestionAttempt, prepared.attempt_id, with_for_update=True)
+        document = await session.get(Document, prepared.document_id, with_for_update=True)
+        if job is None or attempt is None or document is None:
+            return
+        if (
+            job.worker_id != prepared.worker_id
+            or job.lease_token != prepared.lease_token
+            or job.active_attempt_id != prepared.attempt_id
+        ):
+            return
+        if isinstance(error, asyncio.CancelledError):
+            attempt_status = IngestionAttemptStatus.abandoned
+            failure_code = "worker_cancelled"
+            diagnostic = "Ingestion was interrupted and will be retried."
+            job_status = JobStatus.queued
+            attempt.retry_budget_consumed = False
+        elif isinstance(error, UnsupportedPDF):
+            attempt_status = IngestionAttemptStatus.unsupported
+            failure_code = error.failure_code
+            diagnostic = error.diagnostic
+            job_status = JobStatus.unsupported
+        elif getattr(error, "failure_code", None) == "experiment_cost_cap":
+            attempt_status = IngestionAttemptStatus.deferred
+            failure_code = "experiment_cost_cap"
+            diagnostic = "The frozen experiment cost cap was reached before the next call."
+            job_status = JobStatus.deferred
+            attempt.retry_budget_consumed = False
+        else:
+            failure_code = "ingestion_failed"
+            diagnostic = "Ingestion failed unexpectedly."
+            retryable = False
+            if isinstance(error, (PageIndexError, LLMError)):
+                failure_code = error.failure_code
+                diagnostic = error.diagnostic
+                retryable = getattr(error, "retryable", False)
+            provider_interruption = failure_code in {
+                "insufficient_credit",
+                "provider_unavailable",
+                "network_error",
+                "rate_limited",
+                "provider_server_error",
+            }
+            if provider_interruption:
+                attempt_status = IngestionAttemptStatus.deferred
+                job_status = JobStatus.waiting_provider
+                attempt.retry_budget_consumed = False
+                job.provider_wait_reason = failure_code
+            else:
+                attempt_status = IngestionAttemptStatus.failed
+                job_status = JobStatus.failed
+                attempt.retry_budget_consumed = not retryable
+        if attempt.retry_budget_consumed:
+            job.retry_budget_consumed += 1
+        document.status = (
+            DocumentStatus.ready
+            if document.active_index_version_id is not None
+            else (
+                DocumentStatus.unsupported
+                if job_status == JobStatus.unsupported
+                else (
+                    DocumentStatus.waiting_provider
+                    if job_status == JobStatus.waiting_provider
+                    else (
+                        DocumentStatus.deferred
+                        if job_status == JobStatus.deferred
+                        else DocumentStatus.failed
+                    )
+                )
+            )
+        )
+        document.diagnostic = None if document.status == DocumentStatus.ready else diagnostic
+        await self._finish(
+            session,
+            job,
+            attempt,
+            job_status,
+            attempt_status,
+            failure_code,
+            prepared.started,
+            diagnostic=diagnostic,
+        )
+        if job_status in (JobStatus.queued, JobStatus.waiting_provider):
+            job.is_active = True
 
     async def process(
         self,
@@ -357,6 +862,7 @@ class IngestionProcessor:
                 index = existing or IndexVersion(
                     document_id=document.id,
                     version_key=version_key,
+                    recipe_key=version_key,
                     pageindex_version=self.settings.pageindex_version,
                     prompt_version=self.settings.metadata_prompt_version,
                     model_name=self.settings.pageindex_model,
@@ -470,6 +976,13 @@ class IngestionProcessor:
         job.status = job_status
         job.diagnostic = diagnostic
         job.completed_at = datetime.now(UTC)
+        job.is_active = job_status in (JobStatus.queued, JobStatus.waiting_provider)
+        job.worker_id = None
+        job.lease_token = None
+        job.lease_expires_at = None
+        job.heartbeat_at = None
+        job.active_attempt_id = None
+        job.current_stage = job_status.value
         attempt.status = attempt_status
         attempt.failure_code = failure_code
         attempt.completed_at = job.completed_at

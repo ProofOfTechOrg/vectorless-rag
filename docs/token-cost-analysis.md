@@ -7,7 +7,7 @@ This quantitative appendix calculates provider cost for PageIndex-based and embe
 
 ## Measurement baselines
 
-The appendix separates current `vr3` measurements from historical `vr2` traces so it does not mix incompatible telemetry.
+The appendix preserves `vr3` measurements and historical `vr2` traces without mixing incompatible telemetry. PageIndex v2 (`+vr4`) has no paid measurements yet; its 25-document run is separately frozen under a $10 measured-or-reserved ceiling.
 
 | Item | Current live baseline | Historical trace baseline |
 | --- | --- | --- |
@@ -271,11 +271,12 @@ SQL routes answer catalog and ingestion-status questions from PostgreSQL metadat
 
 The successful document-answer sample is small. Treat its average as a measured pilot point, not a production percentile.
 
-### Full-corpus candidate-selection effect
+### Historical v1 candidate-selection effect
 
-The candidate query fills the result set to `candidate_limit` when fewer than 50 full-text matches exist. Once at least 50 documents are ready, unrestricted document questions send 50 candidate metadata records to DeepSeek. Metadata constraints or a hybrid-route restriction can reduce that count. See [`CorpusRouter.candidates`](../apps/api/src/vectorless_rag/retrieval.py#L69-L122).
-
-The ten-document pilot’s candidate-selection calls consumed about 3,026 input tokens. Linear payload scaling to 50 documents adds about 12,100 input tokens:
+The v1 implementation filled a result set to `candidate_limit` and
+hard-excluded documents below that lexical boundary. The ten-document vr3
+pilot’s candidate-selection calls consumed about 3,026 input tokens. Its
+former linear projection to 50 documents was:
 
 ```text
 pilot successful answer input     ≈ 10,738 tokens
@@ -285,7 +286,16 @@ observed output                   ≈  1,678 tokens
 projected cache-miss answer cost  ≈ $0.0114
 ```
 
-Confidence: moderate-low. The 50-candidate payload size follows directly from the code and historical ten-candidate traces. The projection assumes that later stages select the same number of documents and pages. Selecting more documents, taking a second retrieval round, or approaching the 40,000-token evidence limit increases cost.
+Confidence: moderate-low. This is retained only as a vr3 historical baseline;
+it no longer describes production retrieval.
+
+The v2 retriever reasons over every eligible document in deterministic,
+token-bounded catalog batches and then reduces the batch selections. Lexical
+rank is a signal, not a recall cutoff. That design removes the 50-document
+blind spot but can issue multiple map calls as the catalog grows. No v2
+full-corpus cost is reported yet: the 25-document pilot must freeze one recipe,
+verify every artifact, and record measured and reserved spend before a
+projection is eligible.
 
 The 40,000-token evidence limit is not a request-level billing cap. The system can submit that evidence to sufficiency evaluation more than once and then submit it again for synthesis. Structured-output retries can repeat any failed call up to three times.
 
@@ -417,6 +427,10 @@ make query-cost-report DAYS=30
 ```
 
 At this baseline, the pilot report returns schema version 2, 10 ready documents, $0.767451 of known measured spend, and a blocked full-corpus gate. The query report returns 57 runs, zero durable model calls, and 55 incomplete runs.
+
+These are historical vr3 figures, not the v2 pilot result. V2 retains them as raw operational spend, excludes only append-only classified measurements from frozen reliability cohorts, and records each new call with logical request identity, outcome, safe failure type, latency, retry data, hashes/byte counts, and measured usage. A budgeted v2 run reserves three-attempt worst-case cost before the first provider request and reconciles terminal logical calls to measured cost; unavailable usage remains reserved for review.
+
+The tracked v2 pilot contains 25 documents across page bands `8/4/4/4/5` for `≤14`, `15–19`, `20–26`, `27–37`, and `>37` pages, including PDFs with and without outlines. No v2 projection or quality result should be inserted here until `make pilot-run`, object verification, and acceptance checks complete.
 
 ## Use the canonical architecture decision
 

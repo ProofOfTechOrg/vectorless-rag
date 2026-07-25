@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,12 +27,17 @@ class Settings(BaseSettings):
     pageindex_model: str = "deepseek/deepseek-v4-pro"
     pageindex_source_dir: Path = Path("/opt/pageindex")
     pageindex_work_dir: Path = Path("/workspaces")
-    pageindex_version: Literal["190f8b378be58199ca993566a9214dba72089c54+vr3"] = (
-        "190f8b378be58199ca993566a9214dba72089c54+vr3"
+    pageindex_version: Literal["190f8b378be58199ca993566a9214dba72089c54+vr4"] = (
+        "190f8b378be58199ca993566a9214dba72089c54+vr4"
     )
     pageindex_llm_max_attempts: int = 3
+    pageindex_async_concurrency: int = 8
+    pageindex_max_output_tokens: int = 8_192
+    pageindex_call_timeout_seconds: int = 120
     pageindex_timeout_seconds: int = 3_600
     ingestion_max_attempts: int = 3
+    ingestion_lease_seconds: int = 120
+    ingestion_heartbeat_seconds: int = 30
     ingestion_stale_grace_seconds: int = 300
     metadata_prompt_version: str = "metadata-v1"
     arxiv_pdf_dir: Path = Path("arxiv-pdfs")
@@ -48,6 +53,7 @@ class Settings(BaseSettings):
     request_deadline_seconds: int = 120
     upload_max_bytes: int = 200 * 1024 * 1024
     candidate_limit: int = 50
+    catalog_batch_token_limit: int = 24_000
     document_limit: int = 8
     page_ranges_per_document: int = 4
     fetched_page_limit: int = 24
@@ -57,7 +63,8 @@ class Settings(BaseSettings):
     sql_lock_timeout_ms: int = 1_000
     sql_payload_limit_bytes: int = 100_000
     sql_explain_cost_ceiling: float = 100_000
-    pilot_document_limit: int = 10
+    pilot_document_limit: int = 25
+    pilot_cost_limit_usd: float = 10.0
     allow_full_corpus_index: bool = False
     worker_poll_seconds: float = 2.0
     extraction_min_characters: int = 500
@@ -72,9 +79,15 @@ class Settings(BaseSettings):
         "document_limit",
         "fetched_page_limit",
         "pageindex_llm_max_attempts",
+        "pageindex_async_concurrency",
+        "pageindex_max_output_tokens",
+        "pageindex_call_timeout_seconds",
         "pageindex_timeout_seconds",
         "ingestion_max_attempts",
+        "ingestion_lease_seconds",
+        "ingestion_heartbeat_seconds",
         "ingestion_stale_grace_seconds",
+        "catalog_batch_token_limit",
     )
     @classmethod
     def positive_limits(cls, value: int) -> int:
@@ -92,6 +105,14 @@ class Settings(BaseSettings):
         if value is not None and (not math.isfinite(value) or value < 0):
             raise ValueError("prices must be finite and non-negative")
         return value
+
+    @model_validator(mode="after")
+    def valid_runtime_intervals(self) -> Settings:
+        if self.ingestion_heartbeat_seconds >= self.ingestion_lease_seconds:
+            raise ValueError("ingestion heartbeat must be shorter than the lease")
+        if not math.isfinite(self.pilot_cost_limit_usd) or self.pilot_cost_limit_usd <= 0:
+            raise ValueError("pilot cost limit must be finite and positive")
+        return self
 
 
 @lru_cache

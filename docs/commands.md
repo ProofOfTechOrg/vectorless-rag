@@ -20,8 +20,8 @@ This page lists every public Make target and the variables that alter operator c
 | Validation suites | `make api-check`, `make web-check`, `make deploy-check`, `make check ENV_FILE=.env.example`, `make ci` |
 | Lifecycle | `make up`, `make rebuild`, `make dev`, `make dev-build`, `make dev-health`, `make down`, `make stop`, `make restart`, `make restart-app`, `make restart-web`, `make restart-langfuse`, `make restart-observability`, `make ps`, `make logs SERVICE=worker`, `make health`, `make web-dev` |
 | Corpus | `make download-corpus`, `make download-corpus ARXIV_PDF_HOST_DIR=/srv/vectorless/arxiv-pdfs` |
-| Operator | `make migrate`, `make bootstrap-key NAME=operator`, `make sync-corpus`, `make upload-document PDF=/path/file.pdf`, `make pilot-report` |
-| Evaluation | `make evaluation-build`, `make evaluation-seed DATASET=apps/api/evaluation/release-v1.jsonl` |
+| Operator | `make migrate`, `make bootstrap-key NAME=operator`, `make sync-corpus`, `make upload-document PDF=/path/file.pdf`, `make pilot-check`, `make pilot-run`, `make pilot-report`, `make artifact-verify`, `make artifact-gc` |
+| Evaluation | `make evaluation-build`, `make evaluation-check`, `make evaluation-review-pack`, `make evaluation-seed`, `make evaluation-run INDEX_HASH=…`, `make evaluation-report` |
 | Secret generation | `make secret-api-pepper`, `make secret-session`, `make secrets-langfuse` |
 
 `make playwright-live` exits with status 2 unless both `PLAYWRIGHT_BASE_URL` and the process-only `PLAYWRIGHT_API_KEY` are set. Use the [disposable live-stack procedure](operator-guide.md#verify-a-disposable-live-stack) to create both values without saving the key.
@@ -90,7 +90,7 @@ This procedure queues downloaded PDFs after you deliberately start the stack and
 
 Downloading the corpus does not start services or queue ingestion. Start the stack, create an administrative key, and then run `make sync-corpus` when you intend to ingest the mounted PDFs.
 
-The default ten-document pilot gate still applies. Do not enable full-corpus indexing until you have reviewed pilot quality and projected provider cost.
+The default 25-document gate still applies. The tracked pilot is manifest-driven and has a database-enforced $10 ceiling. Do not enable full-corpus indexing until the v2 pilot is accepted and separately authorized.
 
 Operator curl targets require `VECTORLESS_RAG_ADMIN_KEY` in the process environment. They never read the browser session. `make down` preserves named volumes; do not use `docker compose down -v` unless a full local data reset is intended.
 

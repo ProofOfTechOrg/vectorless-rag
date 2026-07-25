@@ -12,6 +12,9 @@ export const citationSchema = z.object({
   source_id: z.string(),
   title: z.string(),
   node_id: z.string().nullable().optional(),
+  node_ids: z.array(z.string()).default([]),
+  section_paths: z.array(z.array(z.string())).default([]),
+  content_truncated: z.boolean().default(false),
   page_start: z.number().nullable().optional(),
   page_end: z.number().nullable().optional(),
   retrieval_reason: z.string().nullable().optional(),
@@ -30,7 +33,12 @@ export const chatResponseSchema = z.object({
 })
 export type ChatResponse = z.infer<typeof chatResponseSchema>
 
-export const failureCodeSchema = z.enum(['deadline_exceeded', 'request_failed'])
+export const failureCodeSchema = z.enum([
+  'deadline_exceeded',
+  'request_failed',
+  'provider_unavailable',
+  'upstream_invalid_response',
+])
 export type FailureCode = z.infer<typeof failureCodeSchema>
 export const runStartedSchema = z.object({ thread_id: z.string(), trace_id: z.string() })
 export const chatErrorSchema = z.object({
@@ -73,7 +81,16 @@ export const documentSchema = z.object({
   abstract: z.string().nullable(),
   topics: z.array(z.string()),
   submitted_date: z.string().nullable(),
-  status: z.enum(['discovered', 'queued', 'indexing', 'ready', 'unsupported', 'failed']),
+  status: z.enum([
+    'discovered',
+    'queued',
+    'indexing',
+    'ready',
+    'unsupported',
+    'failed',
+    'waiting_provider',
+    'deferred',
+  ]),
   page_count: z.number().int().nullable(),
   diagnostic: z.string().nullable().optional(),
   created_at: z.string(),
@@ -88,8 +105,23 @@ export const documentPageSchema = z.object({
 export const jobSchema = z.object({
   id: z.string(),
   document_id: z.string(),
-  status: z.enum(['queued', 'running', 'completed', 'failed', 'unsupported']),
+  status: z.enum([
+    'queued',
+    'running',
+    'completed',
+    'failed',
+    'unsupported',
+    'waiting_provider',
+    'deferred',
+    'deduplicated',
+    'cancelled',
+    'abandoned',
+  ]),
   attempts: z.number().int(),
+  mode: z.enum(['ensure_current', 'rebuild_index', 'reextract_all']),
+  current_stage: z.string().nullable().optional(),
+  provider_wait_reason: z.string().nullable().optional(),
+  active_index_version_id: z.string().nullable().optional(),
   diagnostic: z.string().nullable(),
   metrics: z.record(z.string(), z.json()),
   created_at: z.string(),
@@ -101,6 +133,17 @@ export const syncResponseSchema = z.object({
   queued: z.number().int(),
   deduplicated: z.number().int(),
   pilot_limit_reached: z.boolean(),
+  pilot_limit: z.number().int().nullable(),
+  registered_count: z.number().int(),
+  remaining_capacity: z.number().int().nullable(),
 })
+
+export const providerStatusSchema = z.object({
+  availability: z.enum(['available', 'unavailable', 'unknown', 'unconfigured']),
+  reason: z.string().nullable(),
+  checked_at: z.string(),
+  stale: z.boolean(),
+})
+export type ProviderStatus = z.infer<typeof providerStatusSchema>
 
 export const apiErrorSchema = z.looseObject({ detail: z.unknown().optional() })

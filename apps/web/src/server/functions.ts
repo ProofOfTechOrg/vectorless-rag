@@ -5,6 +5,7 @@ import {
   documentPageSchema,
   documentSchema,
   jobSchema,
+  providerStatusSchema,
   syncResponseSchema,
   threadPageSchema,
   threadSchema,
@@ -48,6 +49,10 @@ export const getReadiness = createServerFn({ method: 'GET' }).handler(async () =
   return { ready: response.ok, identity: session.identity }
 })
 
+export const getProviderStatus = createServerFn({ method: 'GET' }).handler(() =>
+  apiJson('/v1/provider/status', providerStatusSchema),
+)
+
 export const getThreads = createServerFn({ method: 'GET' })
   .validator(cursorInput)
   .handler(({ data }) => {
@@ -80,13 +85,18 @@ export const retryDocument = createServerFn({ method: 'POST' })
   })
 
 export const syncCorpus = createServerFn({ method: 'POST' })
-  .validator(z.object({ force: z.boolean() }))
+  .validator(
+    z.object({
+      mode: z.enum(['ensure_current', 'rebuild_index', 'reextract_all']),
+      arxivIds: z.array(z.string()).max(100).optional(),
+    }),
+  )
   .handler(({ data }) => {
     assertCurrentRequestOrigin()
     return apiJson('/v1/admin/ingestion/sync', syncResponseSchema, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify({ mode: data.mode, arxiv_ids: data.arxivIds }),
     })
   })
 

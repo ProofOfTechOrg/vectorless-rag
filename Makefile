@@ -21,8 +21,10 @@ DAYS ?= 30
 PDF ?=
 SERVICE ?=
 TAIL ?= 200
-DATASET ?= apps/api/evaluation/release-v1.jsonl
-DATASET_NAME ?= vectorless-rag-release-v1
+DATASET ?= apps/api/evaluation/pageindex-v2-regression.jsonl
+DATASET_NAME ?= vectorless-rag-pageindex-v2-regression
+INDEX_HASH ?=
+PAGEINDEX_SOURCE ?= /opt/pageindex
 
 export UV_CACHE_DIR
 
@@ -32,7 +34,7 @@ export UV_CACHE_DIR
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up rebuild dev dev-build dev-health down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
-	download-corpus sync-corpus upload-document pilot-report query-cost-report evaluation-build evaluation-seed \
+	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-seed evaluation-run evaluation-report \
 	secret-api-pepper secret-session secrets-langfuse
 
 help: ## Show all supported project commands.
@@ -184,15 +186,34 @@ upload-document: ## Upload PDF through FastAPI with VECTORLESS_RAG_ADMIN_KEY.
 	@test -n "$${VECTORLESS_RAG_ADMIN_KEY:-}" || { echo "VECTORLESS_RAG_ADMIN_KEY is required" >&2; exit 2; }
 	@curl --fail --silent --show-error -X POST http://127.0.0.1:8000/v1/admin/documents -H "X-API-Key: $${VECTORLESS_RAG_ADMIN_KEY}" -F "file=@$(PDF)"
 	@printf '\n'
-pilot-report: ## Print the ten-document pilot report from the API container.
+pilot-check: ## Validate the frozen 25-document pilot manifest offline.
+	cd $(API_DIR) && $(UV) run python scripts/check_pageindex_pilot.py
+pilot-run: ## Run the frozen pilot with an explicit ten-dollar confirmation.
+	cd $(API_DIR) && $(UV) run python scripts/run_pageindex_pilot.py --apply --confirm-cost-cap 10
+pilot-report: ## Print the configured stratified-pilot report from the API container.
 	@$(COMPOSE) exec -T api vectorless-rag pilot-report
 query-cost-report: ## Print aggregate query cost data for DAYS (default 30).
 	@$(COMPOSE) exec -T api vectorless-rag query-cost-report --days "$(DAYS)"
+artifact-verify: ## Verify all active PageIndex-v2 manifests and referenced objects.
+	@$(COMPOSE) exec -T api vectorless-rag artifact-verify
+artifact-gc: ## Dry-run PageIndex-v2 garbage collection.
+	@$(COMPOSE) exec -T api vectorless-rag artifact-gc
+pageindex-patch-test: ## Run provider-free checks against a patched PageIndex checkout.
+	cd $(API_DIR) && $(UV) run python scripts/test_pageindex_patch.py "$(PAGEINDEX_SOURCE)"
 evaluation-build: ## Build the deterministic evaluation dataset.
 	$(UV) run --project $(API_DIR) python $(API_DIR)/scripts/build_evaluation_dataset.py
-evaluation-seed: ## Seed DATASET into the running API container.
+evaluation-check: ## Validate the tracked 120-case PageIndex suite without PDFs or services.
+	cd $(API_DIR) && $(UV) run python scripts/check_evaluation_suite.py
+evaluation-review-pack: ## Rebuild the local PageIndex evaluation review pack.
+	cd $(API_DIR) && $(UV) run python scripts/build_evaluation_review_pack.py
+evaluation-seed: ## Seed the reviewed PageIndex evaluation suite into Langfuse.
 	@test -f "$(DATASET)" || { echo "DATASET does not exist: $(DATASET)" >&2; exit 2; }
 	$(COMPOSE) exec -T api python scripts/seed_evaluation.py /dev/stdin --name "$(DATASET_NAME)" < "$(DATASET)"
+evaluation-run: ## Run a frozen PageIndex evaluation experiment from a reviewed suite.
+	@test -n "$(INDEX_HASH)" || { echo "INDEX_HASH=<sha256> is required" >&2; exit 2; }
+	cd $(API_DIR) && $(UV) run python scripts/run_evaluation.py --index-hash "$(INDEX_HASH)"
+evaluation-report: ## Build the local report for the latest frozen evaluation experiment.
+	cd $(API_DIR) && $(UV) run python scripts/report_evaluation.py
 
 secret-api-pepper: ## Print a generated API_KEY_PEPPER assignment.
 	@printf 'API_KEY_PEPPER=%s\n' "$$(openssl rand -hex 32)"

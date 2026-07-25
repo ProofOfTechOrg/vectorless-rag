@@ -6,7 +6,15 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from vectorless_rag.models import DocumentStatus, JobStatus, QueryRunStatus, RunRoute
+from vectorless_rag.models import (
+    DocumentStatus,
+    IndexLifecycleStatus,
+    IngestionMode,
+    JobStatus,
+    ProviderAvailability,
+    QueryRunStatus,
+    RunRoute,
+)
 
 
 class StrictModel(BaseModel):
@@ -39,6 +47,9 @@ class Citation(StrictModel):
     source_id: str
     title: str
     node_id: str | None = None
+    node_ids: list[str] = Field(default_factory=list)
+    section_paths: list[list[str]] = Field(default_factory=list)
+    content_truncated: bool = False
     page_start: int | None = Field(default=None, ge=1)
     page_end: int | None = Field(default=None, ge=1)
     retrieval_reason: str | None = None
@@ -118,10 +129,13 @@ class Evidence(StrictModel):
     source_id: str
     title: str
     node_id: str | None = None
+    node_ids: list[str] = Field(default_factory=list)
+    section_paths: list[list[str]] = Field(default_factory=list)
     page_start: int | None = None
     page_end: int | None = None
     content: str
     retrieval_reason: str
+    content_truncated: bool = False
 
 
 class DocumentSummary(StrictModel):
@@ -152,7 +166,15 @@ class IdentityResponse(StrictModel):
 
 
 class SyncRequest(StrictModel):
-    force: bool = False
+    arxiv_ids: list[str] | None = Field(default=None, max_length=100)
+    mode: IngestionMode = IngestionMode.ensure_current
+    force: bool | None = None
+
+    @model_validator(mode="after")
+    def translate_force_alias(self) -> SyncRequest:
+        if self.force and self.mode == IngestionMode.ensure_current:
+            self.mode = IngestionMode.rebuild_index
+        return self
 
 
 class SyncResponse(StrictModel):
@@ -160,6 +182,9 @@ class SyncResponse(StrictModel):
     queued: int
     deduplicated: int
     pilot_limit_reached: bool
+    pilot_limit: int | None = None
+    registered_count: int = 0
+    remaining_capacity: int | None = None
 
 
 class JobResponse(StrictModel):
@@ -167,6 +192,10 @@ class JobResponse(StrictModel):
     document_id: uuid.UUID
     status: JobStatus
     attempts: int
+    mode: IngestionMode
+    current_stage: str | None = None
+    provider_wait_reason: str | None = None
+    active_index_version_id: uuid.UUID | None = None
     diagnostic: str | None
     metrics: dict[str, object]
     created_at: datetime
@@ -183,7 +212,15 @@ class ThreadRun(StrictModel):
     citations: list[dict[str, object]]
     insufficient: bool
     status: QueryRunStatus
-    failure_code: Literal["deadline_exceeded", "request_failed"] | None = None
+    failure_code: (
+        Literal[
+            "deadline_exceeded",
+            "request_failed",
+            "provider_unavailable",
+            "upstream_invalid_response",
+        ]
+        | None
+    ) = None
     created_at: datetime
 
 
@@ -207,3 +244,30 @@ class ThreadPage(StrictModel):
 class FeedbackRequest(StrictModel):
     value: Literal[-1, 1]
     comment: str | None = Field(default=None, max_length=2_000)
+
+
+class ProviderStatusResponse(StrictModel):
+    availability: ProviderAvailability
+    reason: str | None
+    checked_at: datetime
+    stale: bool
+
+
+class IndexVersionSummary(StrictModel):
+    id: uuid.UUID
+    document_id: uuid.UUID
+    artifact_schema_version: int
+    recipe_key: str
+    configuration_hash: str | None
+    manifest_sha256: str | None
+    pageindex_description: str | None
+    page_count: int | None
+    node_count: int | None
+    max_depth: int | None
+    quality: dict[str, object]
+    lifecycle_status: IndexLifecycleStatus
+    verified_at: datetime | None
+    created_at: datetime
+    active: bool = False
+
+    model_config = ConfigDict(from_attributes=True, extra="forbid")

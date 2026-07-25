@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -20,9 +20,11 @@ from vectorless_rag.models import (
     ArtifactAction,
     Document,
     DocumentStatus,
+    ExperimentMembership,
     IngestionAttempt,
     IngestionAttemptStatus,
     IngestionJob,
+    IngestionMode,
     JobStatus,
 )
 from vectorless_rag.operational_logging import emit_event
@@ -38,7 +40,13 @@ class IngestionClaim:
     attempt_number: int
     trace_id: str
     worker_id: str
-    force: bool
+    mode: IngestionMode
+    lease_token: uuid.UUID
+    lease_expires_at: datetime
+
+    @property
+    def force(self) -> bool:
+        return self.mode != IngestionMode.ensure_current
 
 
 def make_engine(url: str, *, pool_size: int = 10) -> AsyncEngine:
@@ -64,12 +72,71 @@ class Database:
         await self.engine.dispose()
 
 
+async def set_ingestion_provider_admission(
+    session: AsyncSession,
+    *,
+    available: bool,
+    reason: str | None,
+) -> None:
+    if available:
+        await session.execute(
+            update(IngestionJob)
+            .where(
+                IngestionJob.status.in_([JobStatus.waiting_provider, JobStatus.deferred]),
+                IngestionJob.is_active.is_(True),
+            )
+            .values(
+                status=JobStatus.queued,
+                provider_wait_reason=None,
+                current_stage="queued",
+            )
+        )
+        waiting_documents = list(
+            (
+                await session.scalars(
+                    select(Document).where(
+                        Document.status.in_(
+                            [DocumentStatus.waiting_provider, DocumentStatus.deferred]
+                        ),
+                        Document.active_index_version_id.is_(None),
+                    )
+                )
+            ).all()
+        )
+        for document in waiting_documents:
+            document.status = DocumentStatus.queued
+            document.diagnostic = None
+        return
+
+    jobs = list(
+        (
+            await session.scalars(
+                select(IngestionJob)
+                .where(
+                    IngestionJob.status == JobStatus.queued,
+                    IngestionJob.is_active.is_(True),
+                )
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+    )
+    safe_reason = (reason or "provider_state_unknown")[:80]
+    for job in jobs:
+        job.status = JobStatus.waiting_provider
+        job.provider_wait_reason = safe_reason
+        job.current_stage = "waiting_provider"
+        document = await session.get(Document, job.document_id, with_for_update=True)
+        if document is not None and document.active_index_version_id is None:
+            document.status = DocumentStatus.waiting_provider
+            document.diagnostic = "Model work is waiting for provider availability."
+
+
 async def claim_ingestion_job(
     session: AsyncSession, worker_id: str, settings: Settings
 ) -> IngestionClaim | None:
     """Atomically claim queued or abandoned work; concurrent workers skip locked rows."""
     now = datetime.now(UTC)
-    stale_before = now - timedelta(
+    legacy_stale_before = now - timedelta(
         seconds=settings.pageindex_timeout_seconds + settings.ingestion_stale_grace_seconds
     )
     statement = (
@@ -79,8 +146,14 @@ async def claim_ingestion_job(
                 IngestionJob.status == JobStatus.queued,
                 and_(
                     IngestionJob.status == JobStatus.running,
-                    IngestionJob.started_at.is_not(None),
-                    IngestionJob.started_at < stale_before,
+                    or_(
+                        IngestionJob.lease_expires_at < now,
+                        and_(
+                            IngestionJob.lease_expires_at.is_(None),
+                            IngestionJob.started_at.is_not(None),
+                            IngestionJob.started_at < legacy_stale_before,
+                        ),
+                    ),
                 ),
             )
         )
@@ -101,12 +174,18 @@ async def claim_ingestion_job(
         .with_for_update()
         .limit(1)
     )
-    if job.attempts >= settings.ingestion_max_attempts:
+    if job.retry_budget_consumed >= settings.ingestion_max_attempts:
         document = await session.get(Document, job.document_id, with_for_update=True)
         diagnostic = "Ingestion recovery attempts were exhausted; retry explicitly to continue."
         job.status = JobStatus.failed
         job.worker_id = None
         job.completed_at = now
+        job.lease_token = None
+        job.lease_expires_at = None
+        job.heartbeat_at = None
+        job.current_stage = "failed"
+        job.active_attempt_id = None
+        job.is_active = False
         job.diagnostic = diagnostic
         job.metrics = {**job.metrics, "failure_code": "ingestion_recovery_exhausted"}
         if previous_attempt is not None:
@@ -130,8 +209,12 @@ async def claim_ingestion_job(
                 release=settings.release,
             )
         if document is not None:
-            document.status = DocumentStatus.failed
-            document.diagnostic = diagnostic
+            if document.active_index_version_id is None:
+                document.status = DocumentStatus.failed
+                document.diagnostic = diagnostic
+            else:
+                document.status = DocumentStatus.ready
+                document.diagnostic = None
         await session.flush()
         return None
     if previous_attempt is not None:
@@ -140,6 +223,7 @@ async def claim_ingestion_job(
         previous_attempt.failure_code = "stale_attempt_reclaimed"
         previous_attempt.completed_at = now
         previous_attempt.elapsed_seconds = elapsed_seconds
+        previous_attempt.retry_budget_consumed = False
         emit_event(
             logger,
             "ingestion_attempt_abandoned",
@@ -154,11 +238,20 @@ async def claim_ingestion_job(
             telemetry_complete=False,
             release=settings.release,
         )
+        await session.flush([previous_attempt])
     job.status = JobStatus.running
     job.worker_id = worker_id
     job.attempts += 1
     job.started_at = now
     job.completed_at = None
+    lease_token = uuid.uuid4()
+    lease_expires_at = now + timedelta(seconds=settings.ingestion_lease_seconds)
+    job.lease_token = lease_token
+    job.lease_expires_at = lease_expires_at
+    job.heartbeat_at = now
+    job.current_stage = "claimed"
+    job.provider_wait_reason = None
+    job.is_active = True
     attempt_id = uuid.uuid4()
     trace_id = uuid.uuid4().hex
     attempt = IngestionAttempt(
@@ -170,8 +263,23 @@ async def claim_ingestion_job(
         status=IngestionAttemptStatus.running,
         artifact_action=ArtifactAction.none,
         started_at=now,
+        lease_token=lease_token,
+        retry_budget_consumed=False,
     )
     session.add(attempt)
+    await session.flush([attempt])
+    if job.experiment_id is not None:
+        session.add(
+            ExperimentMembership(
+                experiment_id=job.experiment_id,
+                attempt_id=attempt.id,
+                trial_key=f"ingestion:{job.document_id}",
+                repetition=job.attempts,
+                sequence_number=job.attempts - 1,
+                included=True,
+            )
+        )
+    job.active_attempt_id = attempt_id
     await session.flush()
     return IngestionClaim(
         job_id=job.id,
@@ -180,5 +288,72 @@ async def claim_ingestion_job(
         attempt_number=job.attempts,
         trace_id=trace_id,
         worker_id=worker_id,
-        force=job.force,
+        mode=job.mode,
+        lease_token=lease_token,
+        lease_expires_at=lease_expires_at,
     )
+
+
+async def renew_ingestion_lease(
+    session: AsyncSession,
+    claim: IngestionClaim,
+    settings: Settings,
+    *,
+    stage: str,
+) -> bool:
+    now = datetime.now(UTC)
+    job = await session.get(IngestionJob, claim.job_id, with_for_update=True)
+    if (
+        job is None
+        or job.status != JobStatus.running
+        or job.worker_id != claim.worker_id
+        or job.lease_token != claim.lease_token
+        or job.active_attempt_id != claim.attempt_id
+        or job.lease_expires_at is None
+        or job.lease_expires_at <= now
+    ):
+        return False
+    attempt = await session.get(IngestionAttempt, claim.attempt_id, with_for_update=True)
+    if (
+        attempt is None
+        or attempt.status != IngestionAttemptStatus.running
+        or attempt.lease_token != claim.lease_token
+    ):
+        return False
+    job.heartbeat_at = now
+    job.lease_expires_at = now + timedelta(seconds=settings.ingestion_lease_seconds)
+    job.current_stage = stage[:80]
+    await session.flush()
+    return True
+
+
+async def abandon_ingestion_claim(
+    session: AsyncSession,
+    claim: IngestionClaim,
+    *,
+    failure_code: str,
+) -> None:
+    now = datetime.now(UTC)
+    job = await session.get(IngestionJob, claim.job_id, with_for_update=True)
+    attempt = await session.get(IngestionAttempt, claim.attempt_id, with_for_update=True)
+    if (
+        job is None
+        or attempt is None
+        or job.lease_token != claim.lease_token
+        or job.active_attempt_id != claim.attempt_id
+    ):
+        return
+    attempt.status = IngestionAttemptStatus.abandoned
+    attempt.failure_code = failure_code[:80]
+    attempt.completed_at = now
+    attempt.elapsed_seconds = max(0.0, (now - attempt.started_at).total_seconds())
+    attempt.retry_budget_consumed = False
+    job.status = JobStatus.queued
+    job.worker_id = None
+    job.lease_token = None
+    job.lease_expires_at = None
+    job.heartbeat_at = None
+    job.current_stage = "queued"
+    job.active_attempt_id = None
+    job.is_active = True
+    await session.flush()

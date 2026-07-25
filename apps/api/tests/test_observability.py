@@ -23,12 +23,12 @@ def test_masker_removes_credentials_and_reasoning() -> None:
     assert masked["safe"] == "value"
 
 
-def test_long_passages_become_hash_size_and_short_preview() -> None:
+def test_long_passages_become_hash_and_size_without_a_preview() -> None:
     value = "x" * 1000
     masked = mask_payload(value)
     assert masked["bytes"] == 1000
     assert len(masked["sha256"]) == 64
-    assert len(masked["preview"]) == 120
+    assert "preview" not in masked
     locators = redacted_locator_payload([{"document": "a", "page": 1}])
     assert locators["count"] == 1
 
@@ -76,6 +76,25 @@ def test_score_comments_are_fingerprinted_before_langfuse() -> None:
     assert client.payload is not None
     assert private_comment not in repr(client.payload)
     assert '"bytes":21' in str(client.payload["comment"])
+
+
+def test_categorical_score_sets_langfuse_data_type() -> None:
+    client = _ScoreClient()
+    telemetry = Observability(Settings())
+    telemetry.client = cast(Any, client)
+
+    telemetry.categorical_score(
+        "trace",
+        "measurement_eligibility",
+        "excluded:insufficient_credit",
+    )
+
+    assert client.payload == {
+        "trace_id": "trace",
+        "name": "measurement_eligibility",
+        "value": "excluded:insufficient_credit",
+        "data_type": "CATEGORICAL",
+    }
 
 
 def test_native_generation_telemetry_contains_only_hashes_and_normalized_tokens() -> None:
