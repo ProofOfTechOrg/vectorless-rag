@@ -359,7 +359,7 @@ Completion requires all gates to pass, raw history totals to remain unchanged, c
 
 ## Implementation record
 
-Implementation is present in the working tree based on `cfbea604c64d51c20ca1cea413b2bfa35be94471`. No implementation commit was created by this session, so an implementation SHA does not yet exist; record the eventual commit here without replacing the baseline.
+Implementation commit `94b43c799fa1f0a947e5411f0275671c6913bf44` is based on `cfbea604c64d51c20ca1cea413b2bfa35be94471` on branch `pageindex-v2-hardening`.
 
 ### Implemented revisions and identities
 
