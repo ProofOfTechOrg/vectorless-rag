@@ -458,8 +458,8 @@ async def test_combined_tree_payload_is_bounded_and_rejects_omitted_nodes(
     monkeypatch: MonkeyPatch,
 ) -> None:
     limit = 500
-    first_id = uuid.uuid4()
-    second_id = uuid.uuid4()
+    first_id = uuid.UUID(int=1)
+    second_id = uuid.UUID(int=2)
     documents = [
         Document(
             id=first_id,
