@@ -47,6 +47,7 @@ from vectorless_rag.pageindex_artifact import (
     load_manifest_v2,
     store_build_v2,
 )
+from vectorless_rag.provider import persist_provider_interruption
 from vectorless_rag.reporting import build_pilot_report as build_pilot_report
 from vectorless_rag.schemas import DocumentMetadata, SyncResponse
 from vectorless_rag.storage import ObjectStore
@@ -77,6 +78,30 @@ UNSUPPORTED_PDF_DIAGNOSTICS = {
         "The PDF has insufficient extractable text; OCR is not enabled."
     ),
 }
+
+HARD_PROVIDER_INTERRUPTION_CODES = frozenset(
+    {
+        "insufficient_credit",
+        "provider_unavailable",
+        "pageindex_authentication_failed",
+        "pageindex_permission_denied",
+        "pageindex_provider_unavailable",
+    }
+)
+TRANSIENT_PROVIDER_INTERRUPTION_CODES = frozenset(
+    {
+        "network_error",
+        "rate_limited",
+        "provider_server_error",
+        "pageindex_network_error",
+        "pageindex_rate_limited",
+        "pageindex_insufficient_system_resource",
+        "pageindex_llm_retry_exhausted",
+        "pageindex_provider_server_error",
+        "pageindex_transient_provider_error",
+    }
+)
+SAFE_METRIC_VALUE = re.compile(r"^[a-zA-Z0-9_.-]{1,80}$")
 
 
 class UnsupportedPDF(ValueError):
@@ -109,12 +134,18 @@ class PreparedIngestion:
     version_key: str
     prior_index_version_id: UUID | None
     reusable_index_version_id: UUID | None
+    metadata_version_id: UUID | None
+    metadata: DocumentMetadata | None
+    metadata_page_count: int | None
+    metadata_extraction_quality: float | None
+    metadata_recipe: str
     trace_id: str
     started: float
 
 
 @dataclass(frozen=True)
 class CompletedBuild:
+    metadata_version_id: UUID | None
     metadata: DocumentMetadata
     page_count: int
     extraction_quality: float
@@ -150,6 +181,15 @@ def validate_pdf(data: bytes, filename: str, maximum_bytes: int) -> None:
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def metadata_recipe_key(settings: Settings) -> str:
+    return configuration_digest(
+        {
+            "prompt_version": settings.metadata_prompt_version,
+            "model": settings.deepseek_model,
+        }
+    )
 
 
 def extract_first_pages(data: bytes, count: int = 3) -> tuple[str, int, float, str | None]:
@@ -209,6 +249,7 @@ async def register_pdf(
 ) -> tuple[Document, IngestionJob | None, bool]:
     if force and mode == IngestionMode.ensure_current:
         mode = IngestionMode.rebuild_index
+    force = force or mode != IngestionMode.ensure_current
     validate_pdf(data, filename, settings.upload_max_bytes)
     digest = sha256_bytes(data)
     existing = await session.scalar(select(Document).where(Document.sha256 == digest))
@@ -231,7 +272,11 @@ async def register_pdf(
             is_active=True,
         )
         session.add(job)
-        existing.status = DocumentStatus.queued
+        if existing.active_index_version_id is None:
+            existing.status = DocumentStatus.queued
+        else:
+            existing.status = DocumentStatus.ready
+            existing.diagnostic = None
         await session.flush()
         return existing, job, True
 
@@ -346,7 +391,10 @@ async def retry_failed_ingestion(session: AsyncSession, failed_job: IngestionJob
         is_active=True,
     )
     session.add(replacement)
-    document.status = DocumentStatus.queued
+    if document.active_index_version_id is None:
+        document.status = DocumentStatus.queued
+    else:
+        document.status = DocumentStatus.ready
     document.diagnostic = None
     await session.flush()
     return replacement
@@ -450,14 +498,21 @@ class IngestionProcessor:
             self.settings.metadata_prompt_version,
             self.settings.pageindex_model,
         )
+        metadata_recipe = metadata_recipe_key(self.settings)
         reusable_id: UUID | None = None
         if mode == IngestionMode.ensure_current:
             reusable_id = await session.scalar(
                 select(IndexVersion.id)
+                .join(
+                    DocumentMetadataVersion,
+                    IndexVersion.metadata_version_id == DocumentMetadataVersion.id,
+                )
                 .where(
                     IndexVersion.document_id == document.id,
                     IndexVersion.version_key == version_key,
                     IndexVersion.artifact_schema_version == 2,
+                    DocumentMetadataVersion.recipe_key == metadata_recipe,
+                    DocumentMetadataVersion.configuration_hash == metadata_recipe,
                     IndexVersion.lifecycle_status.in_(
                         [IndexLifecycleStatus.verified, IndexLifecycleStatus.active]
                     ),
@@ -466,6 +521,40 @@ class IngestionProcessor:
                 .order_by(IndexVersion.verified_at.desc(), IndexVersion.created_at.desc())
                 .limit(1)
             )
+        metadata_version: DocumentMetadataVersion | None = None
+        if reusable_id is None and mode != IngestionMode.reextract_all:
+            if document.active_index_version_id is not None:
+                active_metadata_id = await session.scalar(
+                    select(IndexVersion.metadata_version_id).where(
+                        IndexVersion.id == document.active_index_version_id,
+                        IndexVersion.document_id == document.id,
+                    )
+                )
+                if active_metadata_id is not None:
+                    candidate = await session.get(DocumentMetadataVersion, active_metadata_id)
+                    if (
+                        candidate is not None
+                        and candidate.document_id == document.id
+                        and candidate.recipe_key == metadata_recipe
+                        and candidate.configuration_hash == metadata_recipe
+                    ):
+                        metadata_version = candidate
+            if metadata_version is None:
+                metadata_version = await session.scalar(
+                    select(DocumentMetadataVersion)
+                    .where(
+                        DocumentMetadataVersion.document_id == document.id,
+                        DocumentMetadataVersion.recipe_key == metadata_recipe,
+                        DocumentMetadataVersion.configuration_hash == metadata_recipe,
+                    )
+                    .order_by(DocumentMetadataVersion.created_at.desc())
+                    .limit(1)
+                )
+        metadata = (
+            DocumentMetadata.model_validate(metadata_version.metadata_payload)
+            if metadata_version is not None
+            else None
+        )
         if document.active_index_version_id is None:
             document.status = DocumentStatus.indexing
         job.current_stage = "reuse_check" if reusable_id is not None else "building"
@@ -482,6 +571,15 @@ class IngestionProcessor:
             version_key=version_key,
             prior_index_version_id=document.active_index_version_id,
             reusable_index_version_id=reusable_id,
+            metadata_version_id=metadata_version.id if metadata_version is not None else None,
+            metadata=metadata,
+            metadata_page_count=(
+                metadata_version.page_count if metadata_version is not None else None
+            ),
+            metadata_extraction_quality=(
+                metadata_version.extraction_quality if metadata_version is not None else None
+            ),
+            metadata_recipe=metadata_recipe,
             trace_id=attempt.trace_id,
             started=time.monotonic(),
         )
@@ -490,12 +588,31 @@ class IngestionProcessor:
         if prepared.reusable_index_version_id is not None:
             return None
         pdf_data = await self.store.get_bytes(prepared.pdf_object_key)
-        metadata, page_count, quality = await extract_metadata(
-            pdf_data,
-            prepared.original_filename,
-            self.llm,
-            self.settings,
-        )
+        if prepared.metadata is None:
+            with usage_context(
+                UsageOwner(
+                    trace_id=prepared.trace_id,
+                    ingestion_attempt_id=prepared.attempt_id,
+                )
+            ):
+                metadata, page_count, quality = await extract_metadata(
+                    pdf_data,
+                    prepared.original_filename,
+                    self.llm,
+                    self.settings,
+                )
+            metadata_version_id = None
+        else:
+            if (
+                prepared.metadata_version_id is None
+                or prepared.metadata_page_count is None
+                or prepared.metadata_extraction_quality is None
+            ):
+                raise RuntimeError("prepared metadata snapshot is incomplete")
+            metadata = prepared.metadata
+            page_count = prepared.metadata_page_count
+            quality = prepared.metadata_extraction_quality
+            metadata_version_id = prepared.metadata_version_id
         metadata_payload = metadata.model_dump(mode="json")
         with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
             await asyncio.to_thread(handle.write, pdf_data)
@@ -520,6 +637,7 @@ class IngestionProcessor:
             + sum(len(value) for _, value in artifact.page_objects)
         )
         return CompletedBuild(
+            metadata_version_id=metadata_version_id,
             metadata=metadata,
             page_count=page_count,
             extraction_quality=quality,
@@ -585,31 +703,41 @@ class IngestionProcessor:
         else:
             metadata_payload = build.metadata.model_dump(mode="json")
             metadata_sha256 = configuration_digest(metadata_payload)
-            metadata_recipe = configuration_digest(
-                {
-                    "prompt_version": self.settings.metadata_prompt_version,
-                    "model": self.settings.deepseek_model,
-                }
-            )
-            metadata_version = await session.scalar(
-                select(DocumentMetadataVersion).where(
-                    DocumentMetadataVersion.document_id == document.id,
-                    DocumentMetadataVersion.recipe_key == metadata_recipe,
-                    DocumentMetadataVersion.content_sha256 == metadata_sha256,
+            if build.metadata_version_id is not None:
+                metadata_version = await session.get(
+                    DocumentMetadataVersion,
+                    build.metadata_version_id,
                 )
-            )
-            if metadata_version is None:
-                metadata_version = DocumentMetadataVersion(
-                    document_id=document.id,
-                    recipe_key=metadata_recipe,
-                    configuration_hash=metadata_recipe,
-                    content_sha256=metadata_sha256,
-                    metadata_payload=metadata_payload,
-                    page_count=build.page_count,
-                    extraction_quality=build.extraction_quality,
+                if (
+                    metadata_version is None
+                    or metadata_version.document_id != document.id
+                    or metadata_version.recipe_key != prepared.metadata_recipe
+                    or metadata_version.configuration_hash != prepared.metadata_recipe
+                    or metadata_version.content_sha256 != metadata_sha256
+                    or metadata_version.page_count != build.page_count
+                    or metadata_version.extraction_quality != build.extraction_quality
+                ):
+                    raise RuntimeError("reusable metadata version is no longer valid")
+            else:
+                metadata_version = await session.scalar(
+                    select(DocumentMetadataVersion).where(
+                        DocumentMetadataVersion.document_id == document.id,
+                        DocumentMetadataVersion.recipe_key == prepared.metadata_recipe,
+                        DocumentMetadataVersion.content_sha256 == metadata_sha256,
+                    )
                 )
-                session.add(metadata_version)
-                await session.flush()
+                if metadata_version is None:
+                    metadata_version = DocumentMetadataVersion(
+                        document_id=document.id,
+                        recipe_key=prepared.metadata_recipe,
+                        configuration_hash=prepared.metadata_recipe,
+                        content_sha256=metadata_sha256,
+                        metadata_payload=metadata_payload,
+                        page_count=build.page_count,
+                        extraction_quality=build.extraction_quality,
+                    )
+                    session.add(metadata_version)
+                    await session.flush()
             manifest = build.artifact.manifest
             version = await session.scalar(
                 select(IndexVersion).where(
@@ -716,6 +844,8 @@ class IngestionProcessor:
             or job.active_attempt_id != prepared.attempt_id
         ):
             return
+        finish_reason: str | None = None
+        llm_attempts = 0
         if isinstance(error, asyncio.CancelledError):
             attempt_status = IngestionAttemptStatus.abandoned
             failure_code = "worker_cancelled"
@@ -741,18 +871,20 @@ class IngestionProcessor:
                 failure_code = error.failure_code
                 diagnostic = error.diagnostic
                 retryable = getattr(error, "retryable", False)
-            provider_interruption = failure_code in {
-                "insufficient_credit",
-                "provider_unavailable",
-                "network_error",
-                "rate_limited",
-                "provider_server_error",
-            }
-            if provider_interruption:
+                finish_reason = error.finish_reason
+                llm_attempts = error.attempts
+            hard_provider_interruption = failure_code in HARD_PROVIDER_INTERRUPTION_CODES
+            transient_provider_interruption = failure_code in TRANSIENT_PROVIDER_INTERRUPTION_CODES
+            if hard_provider_interruption or transient_provider_interruption:
                 attempt_status = IngestionAttemptStatus.deferred
                 job_status = JobStatus.waiting_provider
-                attempt.retry_budget_consumed = False
+                attempt.retry_budget_consumed = transient_provider_interruption
                 job.provider_wait_reason = failure_code
+                await persist_provider_interruption(
+                    session,
+                    self.settings,
+                    failure_code,
+                )
             else:
                 attempt_status = IngestionAttemptStatus.failed
                 job_status = JobStatus.failed
@@ -787,157 +919,14 @@ class IngestionProcessor:
             prepared.started,
             diagnostic=diagnostic,
         )
+        failure_metrics: dict[str, object] = {"failure_code": failure_code}
+        if finish_reason is not None and SAFE_METRIC_VALUE.fullmatch(finish_reason):
+            failure_metrics["provider_finish_reason"] = finish_reason
+        if 0 < llm_attempts <= 100:
+            failure_metrics["llm_attempts"] = llm_attempts
+        job.metrics = {**job.metrics, **failure_metrics}
         if job_status in (JobStatus.queued, JobStatus.waiting_provider):
             job.is_active = True
-
-    async def process(
-        self,
-        session: AsyncSession,
-        job: IngestionJob,
-        attempt: IngestionAttempt,
-    ) -> None:
-        started = time.monotonic()
-        if attempt.job_id != job.id or attempt.status != IngestionAttemptStatus.running:
-            raise RuntimeError("ingestion attempt is no longer active")
-        document = await session.get(Document, job.document_id, with_for_update=True)
-        if document is None:
-            raise RuntimeError("ingestion document no longer exists")
-        document.status = DocumentStatus.indexing
-        with usage_context(UsageOwner(trace_id=attempt.trace_id, ingestion_attempt_id=attempt.id)):
-            try:
-                pdf_data = await self.store.get_bytes(document.pdf_object_key)
-                metadata, page_count, quality = await extract_metadata(
-                    pdf_data, document.original_filename, self.llm, self.settings
-                )
-                document.title = metadata.title
-                document.authors = metadata.authors
-                document.abstract = metadata.abstract
-                document.description = metadata.description
-                document.topics = metadata.topics
-                document.submitted_date = metadata.submitted_date
-                document.page_count = page_count
-                attempt.page_count = page_count
-                attempt.extraction_quality = quality
-                version_key = artifact_version_key(
-                    document.sha256,
-                    self.settings.pageindex_version,
-                    self.settings.metadata_prompt_version,
-                    self.settings.pageindex_model,
-                )
-                existing = await session.scalar(
-                    select(IndexVersion).where(
-                        IndexVersion.document_id == document.id,
-                        IndexVersion.version_key == version_key,
-                    )
-                )
-                if existing is not None and not job.force:
-                    document.active_index_version_id = existing.id
-                    document.status = DocumentStatus.ready
-                    document.diagnostic = None
-                    attempt.artifact_action = ArtifactAction.reused
-                    await self._finish(
-                        session,
-                        job,
-                        attempt,
-                        JobStatus.completed,
-                        IngestionAttemptStatus.completed,
-                        None,
-                        started,
-                    )
-                    return
-                metadata_payload = metadata.model_dump(mode="json")
-                with tempfile.NamedTemporaryFile(suffix=".pdf") as handle:
-                    await asyncio.to_thread(handle.write, pdf_data)
-                    await asyncio.to_thread(handle.flush)
-                    artifact = await self.pageindex.index(
-                        Path(handle.name),
-                        str(document.id),
-                        metadata_payload,
-                        ingestion_attempt_id=attempt.id,
-                        trace_id=attempt.trace_id,
-                    )
-                artifact_digest = sha256_bytes(artifact)
-                artifact_key = f"artifacts/{document.id}/{version_key}.json"
-                await self.store.put_bytes(artifact_key, artifact, "application/json")
-                index = existing or IndexVersion(
-                    document_id=document.id,
-                    version_key=version_key,
-                    recipe_key=version_key,
-                    pageindex_version=self.settings.pageindex_version,
-                    prompt_version=self.settings.metadata_prompt_version,
-                    model_name=self.settings.pageindex_model,
-                    artifact_object_key=artifact_key,
-                    artifact_sha256=artifact_digest,
-                )
-                index.artifact_object_key = artifact_key
-                index.artifact_sha256 = artifact_digest
-                index.extraction_quality = quality
-                index.elapsed_seconds = time.monotonic() - started
-                attempt.artifact_action = (
-                    ArtifactAction.created if existing is None else ArtifactAction.rebuilt
-                )
-                attempt.artifact_bytes = len(artifact)
-                if existing is None:
-                    session.add(index)
-                await session.flush()
-                totals = await self._usage_summary(session, attempt.id)
-                index.input_tokens = totals["input_tokens"]
-                index.output_tokens = totals["output_tokens"]
-                document.active_index_version_id = index.id
-                document.status = DocumentStatus.ready
-                document.diagnostic = None
-                await self._finish(
-                    session,
-                    job,
-                    attempt,
-                    JobStatus.completed,
-                    IngestionAttemptStatus.completed,
-                    None,
-                    started,
-                    usage=totals,
-                )
-            except UnsupportedPDF as exc:
-                document.status = DocumentStatus.unsupported
-                document.diagnostic = exc.diagnostic
-                await self._finish(
-                    session,
-                    job,
-                    attempt,
-                    JobStatus.unsupported,
-                    IngestionAttemptStatus.unsupported,
-                    exc.failure_code,
-                    started,
-                    diagnostic=exc.diagnostic,
-                )
-            except Exception as exc:
-                failure_code = "ingestion_failed"
-                diagnostic = "Ingestion failed unexpectedly."
-                finish_reason: str | None = None
-                attempts = 0
-                if isinstance(exc, (PageIndexError, LLMError)):
-                    failure_code = exc.failure_code
-                    diagnostic = exc.diagnostic
-                    finish_reason = exc.finish_reason
-                    attempts = exc.attempts
-                document.status = DocumentStatus.failed
-                document.diagnostic = diagnostic
-                await self._finish(
-                    session,
-                    job,
-                    attempt,
-                    JobStatus.failed,
-                    IngestionAttemptStatus.failed,
-                    failure_code,
-                    started,
-                    diagnostic=diagnostic,
-                )
-                failure_metrics: dict[str, object] = {"failure_code": failure_code}
-                if finish_reason is not None:
-                    failure_metrics["provider_finish_reason"] = finish_reason
-                if attempts:
-                    failure_metrics["llm_attempts"] = attempts
-                job.metrics = {**job.metrics, **failure_metrics}
-                raise
 
     @staticmethod
     async def _usage_summary(session: AsyncSession, attempt_id: UUID) -> dict[str, int | bool]:

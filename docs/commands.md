@@ -24,6 +24,10 @@ This page lists every public Make target and the variables that alter operator c
 | Evaluation | `make evaluation-build`, `make evaluation-check`, `make evaluation-review-pack`, `make evaluation-seed`, `make evaluation-run INDEX_HASH=…`, `make evaluation-report` |
 | Secret generation | `make secret-api-pepper`, `make secret-session`, `make secrets-langfuse` |
 
+`make pilot-run` writes its immutable result to `apps/api/pilots/run/result.json`. Set `PILOT_OUTPUT=path/to/result.json` to select another new output directory. The target fails before provider work when that directory already exists.
+
+`make evaluation-seed` streams the reviewed PageIndex suite into the API container with an explicit suite selector and corpus manifest. Direct script callers must pass `--suite pageindex-v2` when the dataset arrives through `/dev/stdin`.
+
 `make playwright-live` exits with status 2 unless both `PLAYWRIGHT_BASE_URL` and the process-only `PLAYWRIGHT_API_KEY` are set. Use the [disposable live-stack procedure](operator-guide.md#verify-a-disposable-live-stack) to create both values without saving the key.
 
 `make ci` installs Playwright Chromium and its operating-system dependencies through `make playwright-install` before it runs browser tests.

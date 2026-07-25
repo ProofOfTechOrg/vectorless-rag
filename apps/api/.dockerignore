@@ -1,0 +1,9 @@
+.venv/
+**/__pycache__/
+.pytest_cache/
+.ruff_cache/
+.basedpyright/
+.coverage
+dist/
+evaluation/run/
+pilots/run/

@@ -136,6 +136,7 @@ async def run_worker() -> None:
                     session,
                     available=provider.admits_model_work,
                     reason=provider.reason or provider.availability.value,
+                    checked_at=provider.checked_at,
                 )
                 if not provider.admits_model_work:
                     claim = None

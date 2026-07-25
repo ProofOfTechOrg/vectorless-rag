@@ -34,6 +34,44 @@ from vectorless_rag.storage import ObjectStore
 
 QUOTED_PHRASE = re.compile(r'"([^"\n]+)"|“([^”\n]+)”')
 FALLBACK_SEARCH_EXCLUDED_TOKENS = frozenset({"or", "and", "not"})
+MODEL_TEXT_TOKEN_LIMIT = 2_048
+COMPARISON_TEXT_TOKEN_FLOOR = 8
+COMPARISON_TEXT_TOKEN_LIMIT = 256
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _token_count(encoding: tiktoken.Encoding, value: object) -> int:
+    text = value if isinstance(value, str) else _canonical_json(value)
+    return len(encoding.encode(text))
+
+
+def _wrapped_token_count(encoding: tiktoken.Encoding, value: object) -> int:
+    text = value if isinstance(value, str) else _canonical_json(value)
+    return len(encoding.encode(wrap_untrusted_document(text)))
+
+
+def _truncate_text(
+    encoding: tiktoken.Encoding,
+    value: str,
+    limit: int,
+    cache: dict[str, list[int]],
+) -> str:
+    if not value or limit <= 0:
+        return ""
+    tokens = cache.get(value)
+    if tokens is None:
+        character_limit = min(len(value), MODEL_TEXT_TOKEN_LIMIT * 16)
+        while True:
+            tokens = encoding.encode(value[:character_limit])
+            if len(tokens) >= MODEL_TEXT_TOKEN_LIMIT or character_limit == len(value):
+                break
+            character_limit = min(len(value), character_limit * 2)
+        tokens = tokens[:MODEL_TEXT_TOKEN_LIMIT]
+        cache[value] = tokens
+    return encoding.decode(tokens[:limit])
 
 
 def candidate_search_text(question: str) -> str:
@@ -75,6 +113,12 @@ class RankedDocument:
     rank: int
     signals: tuple[str, ...]
     reason: str
+
+
+@dataclass(frozen=True)
+class _CatalogBatch:
+    candidates: tuple[CandidateDocument, ...]
+    payload: tuple[dict[str, object], ...]
 
 
 @dataclass(frozen=True)
@@ -159,9 +203,21 @@ class CorpusRouter:
         statement = (
             select(
                 Document,
+                IndexVersion.pageindex_description,
+                IndexVersion.top_level_outline,
+                IndexVersion.manifest_sha256,
+                IndexVersion.artifact_sha256,
+                IndexVersion.configuration_hash,
                 rank.label("lexical_rank"),
                 strict_match.label("strict_match"),
                 exact.label("exact_match"),
+            )
+            .join(
+                IndexVersion,
+                and_(
+                    IndexVersion.id == Document.active_index_version_id,
+                    IndexVersion.document_id == Document.id,
+                ),
             )
             .where(and_(*filters))
             .order_by(
@@ -174,86 +230,314 @@ class CorpusRouter:
         )
         rows = (await session.execute(statement)).all()
         result: list[CandidateDocument] = []
-        for document, raw_rank, raw_strict, raw_exact in rows:
-            version = await session.get(IndexVersion, document.active_index_version_id)
-            if version is None:
-                continue
+        for (
+            document,
+            pageindex_description,
+            top_level_outline,
+            manifest_sha256,
+            artifact_sha256,
+            configuration_hash,
+            raw_rank,
+            raw_strict,
+            raw_exact,
+        ) in rows:
             result.append(
                 CandidateDocument(
                     document=document,
                     fts_match=bool(raw_strict),
                     lexical_rank=float(raw_rank or 0),
                     exact_match=bool(raw_exact),
-                    description=version.pageindex_description
+                    description=pageindex_description
                     or document.description
                     or document.abstract
                     or "",
-                    outline=list(version.top_level_outline or []),
-                    index_digest=version.manifest_sha256 or version.artifact_sha256,
-                    configuration_hash=version.configuration_hash,
+                    outline=list(top_level_outline or []),
+                    index_digest=manifest_sha256 or artifact_sha256,
+                    configuration_hash=configuration_hash,
                 )
             )
         return result
 
-    def _payload(self, candidate: CandidateDocument) -> dict[str, object]:
+    def _payload(
+        self,
+        candidate: CandidateDocument,
+        *,
+        text_token_limit: int = MODEL_TEXT_TOKEN_LIMIT,
+        title_token_limit: int | None = None,
+        outline_limit: int = 64,
+        cache: dict[str, list[int]] | None = None,
+    ) -> dict[str, object]:
+        token_cache = cache if cache is not None else {}
+
+        def text(value: str, character_limit: int | None = None) -> str:
+            bounded = value if character_limit is None else value[:character_limit]
+            return _truncate_text(
+                self.encoding,
+                bounded,
+                text_token_limit,
+                token_cache,
+            )
+
+        outline: list[dict[str, object]] = []
+        for raw in candidate.outline[:outline_limit]:
+            value: dict[str, object] = {}
+            for key in ("node_id", "page_start", "page_end"):
+                if key in raw:
+                    value[key] = raw[key]
+            for key in ("title", "summary"):
+                raw_text = raw.get(key)
+                if isinstance(raw_text, str):
+                    value[key] = text(raw_text)
+            outline.append(value)
         return {
             "id": str(candidate.document.id),
             "arxiv_id": candidate.document.arxiv_id,
-            "title": (candidate.document.title or "")[:300],
-            "description": candidate.description[:4_000],
-            "abstract": (candidate.document.abstract or "")[:1_200],
-            "topics": [topic[:80] for topic in candidate.document.topics[:8]],
-            "outline": candidate.outline[:64],
+            "title": _truncate_text(
+                self.encoding,
+                (candidate.document.title or "")[:300],
+                title_token_limit if title_token_limit is not None else text_token_limit,
+                token_cache,
+            ),
+            "description": text(candidate.description, 4_000),
+            "abstract": text(candidate.document.abstract or "", 1_200),
+            "topics": [
+                bounded for topic in candidate.document.topics[:8] if (bounded := text(topic, 80))
+            ],
+            "outline": outline,
             "signals": list(candidate.signals),
             "fts_match": candidate.fts_match,
             "lexical_rank": round(candidate.lexical_rank, 8),
         }
 
+    def _bounded_payload(self, candidate: CandidateDocument) -> dict[str, object]:
+        limit = self.settings.catalog_batch_token_limit
+        cache: dict[str, list[int]] = {}
+
+        title_floor = 1 if candidate.document.title else 0
+
+        def payload(
+            text_limit: int,
+            outline_limit: int,
+            *,
+            preserve_title: bool = True,
+        ) -> dict[str, object]:
+            return self._payload(
+                candidate,
+                text_token_limit=text_limit,
+                title_token_limit=max(title_floor, text_limit) if preserve_title else text_limit,
+                outline_limit=outline_limit,
+                cache=cache,
+            )
+
+        outline_limit = min(len(candidate.outline), 64)
+        structural = payload(0, outline_limit)
+        if _wrapped_token_count(self.encoding, [structural]) > limit:
+            low = 0
+            high = outline_limit
+            while low < high:
+                middle = (low + high + 1) // 2
+                if _wrapped_token_count(self.encoding, [payload(0, middle)]) <= limit:
+                    low = middle
+                else:
+                    high = middle - 1
+            outline_limit = low
+            structural = payload(0, outline_limit)
+        if _wrapped_token_count(self.encoding, [structural]) > limit:
+            structural = payload(0, 0, preserve_title=False)
+            if _wrapped_token_count(self.encoding, [structural]) > limit:
+                raise ValueError("catalog batch token limit cannot fit a minimal candidate")
+            outline_limit = 0
+            title_floor = 0
+
+        low = 0
+        high = MODEL_TEXT_TOKEN_LIMIT
+        while low < high:
+            middle = (low + high + 1) // 2
+            if (
+                _wrapped_token_count(
+                    self.encoding,
+                    [payload(middle, outline_limit)],
+                )
+                <= limit
+            ):
+                low = middle
+            else:
+                high = middle - 1
+        return payload(low, outline_limit)
+
     def _batches(
         self,
         candidates: Sequence[CandidateDocument],
-    ) -> list[list[CandidateDocument]]:
+    ) -> list[_CatalogBatch]:
         limit = self.settings.catalog_batch_token_limit
-        batches: list[list[CandidateDocument]] = []
+        batches: list[_CatalogBatch] = []
         current: list[CandidateDocument] = []
-        tokens = 0
+        current_payload: list[dict[str, object]] = []
         for candidate in candidates:
-            payload_tokens = len(
-                self.encoding.encode(
-                    json.dumps(self._payload(candidate), sort_keys=True, separators=(",", ":"))
+            payload = self._bounded_payload(candidate)
+            if (
+                current
+                and _wrapped_token_count(
+                    self.encoding,
+                    [*current_payload, payload],
+                )
+                > limit
+            ):
+                batches.append(_CatalogBatch(tuple(current), tuple(current_payload)))
+                current = []
+                current_payload = []
+            current.append(candidate)
+            current_payload.append(payload)
+        if current:
+            batches.append(_CatalogBatch(tuple(current), tuple(current_payload)))
+        return batches
+
+    def _comparison_payload(
+        self,
+        candidate: CandidateDocument,
+        prior_reason: str,
+        *,
+        text_token_limit: int,
+        cache: dict[str, list[int]],
+    ) -> dict[str, object]:
+        def text(value: str) -> str:
+            return _truncate_text(
+                self.encoding,
+                value,
+                text_token_limit,
+                cache,
+            )
+
+        return {
+            "id": str(candidate.document.id),
+            "arxiv_id": candidate.document.arxiv_id,
+            "title": text(candidate.document.title or candidate.document.original_filename),
+            "synopsis": text(
+                candidate.description
+                or candidate.document.abstract
+                or candidate.document.title
+                or ""
+            ),
+            "prior_reason": text(prior_reason),
+            "signals": list(candidate.signals),
+            "fts_match": candidate.fts_match,
+            "lexical_rank": round(candidate.lexical_rank, 8),
+        }
+
+    def _comparison_batches(
+        self,
+        pool: Sequence[tuple[CandidateDocument, str]],
+    ) -> list[_CatalogBatch]:
+        limit = self.settings.catalog_batch_token_limit
+        maximum_batch_size = self.settings.document_limit * 4
+        batches: list[_CatalogBatch] = []
+        offset = 0
+        while offset < len(pool):
+            remaining = len(pool) - offset
+            if remaining == 1:
+                candidate, reason = pool[offset]
+                payload = self._comparison_payload(
+                    candidate,
+                    reason,
+                    text_token_limit=COMPARISON_TEXT_TOKEN_FLOOR,
+                    cache={},
+                )
+                if _wrapped_token_count(self.encoding, [payload]) > limit:
+                    raise ValueError(
+                        "catalog batch token limit cannot fit a minimal reduction candidate"
+                    )
+                batches.append(_CatalogBatch((candidate,), (payload,)))
+                break
+
+            maximum_size = min(maximum_batch_size, remaining)
+
+            def payloads(
+                size: int,
+                text_limit: int,
+                start: int = offset,
+            ) -> list[dict[str, object]]:
+                cache: dict[str, list[int]] = {}
+                return [
+                    self._comparison_payload(
+                        candidate,
+                        reason,
+                        text_token_limit=text_limit,
+                        cache=cache,
+                    )
+                    for candidate, reason in pool[start : start + size]
+                ]
+
+            low = 2
+            high = maximum_size
+            fitting_size = 0
+            while low <= high:
+                middle = (low + high) // 2
+                if (
+                    _wrapped_token_count(
+                        self.encoding,
+                        payloads(middle, COMPARISON_TEXT_TOKEN_FLOOR),
+                    )
+                    <= limit
+                ):
+                    fitting_size = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if fitting_size < 2:
+                raise ValueError(
+                    "catalog batch token limit cannot fit two minimal reduction candidates"
+                )
+
+            low = COMPARISON_TEXT_TOKEN_FLOOR
+            high = COMPARISON_TEXT_TOKEN_LIMIT
+            text_limit = COMPARISON_TEXT_TOKEN_FLOOR
+            while low <= high:
+                middle = (low + high) // 2
+                if (
+                    _wrapped_token_count(
+                        self.encoding,
+                        payloads(fitting_size, middle),
+                    )
+                    <= limit
+                ):
+                    text_limit = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            batch_pool = pool[offset : offset + fitting_size]
+            batches.append(
+                _CatalogBatch(
+                    tuple(candidate for candidate, _ in batch_pool),
+                    tuple(payloads(fitting_size, text_limit)),
                 )
             )
-            if current and tokens + payload_tokens > limit:
-                batches.append(current)
-                current = []
-                tokens = 0
-            current.append(candidate)
-            tokens += payload_tokens
-        if current:
-            batches.append(current)
+            offset += fitting_size
         return batches
 
     async def _select_batch(
         self,
         question: str,
-        candidates: Sequence[CandidateDocument],
+        batch: _CatalogBatch,
         *,
         phase: str,
+        selection_limit: int,
     ) -> list[tuple[CandidateDocument, str]]:
-        if len(candidates) <= self.settings.document_limit and phase == "reduce":
+        candidates = batch.candidates
+        if len(candidates) == 1 and phase == "reduce":
             return [
                 (candidate, "Retained by complete-catalog reduction.") for candidate in candidates
             ]
-        payload = [self._payload(candidate) for candidate in candidates]
+        payload_json = _canonical_json(batch.payload)
         selection = await self.llm.structured(
             CandidateSelection,
             UNTRUSTED_DOCUMENT_SYSTEM
-            + "\nReason over every supplied catalog entry. Select at most eight documents "
+            + f"\nReason over every supplied catalog entry. Select at most {selection_limit} "
+            "documents "
             "likely to contain answer evidence. Lexical and exact-match fields are ranking "
             "signals only; an entry without those signals remains eligible. "
             "Prefer documents marked fts_match when relevance is otherwise equal.",
             f"Question: {question}\nCatalog {phase} batch:\n"
-            + wrap_untrusted_document(json.dumps(payload, sort_keys=True)),
+            + wrap_untrusted_document(payload_json),
             thinking=True,
             stage=ModelCallStage.query_document_select,
         )
@@ -274,7 +558,7 @@ class CorpusRouter:
                     )[:2_000],
                 )
             )
-            if len(result) == self.settings.document_limit:
+            if len(result) == selection_limit:
                 break
         return result
 
@@ -297,28 +581,41 @@ class CorpusRouter:
             ]
         mapped: list[tuple[CandidateDocument, str]] = []
         for batch in self._batches(candidates):
-            mapped.extend(await self._select_batch(question, batch, phase="map"))
+            mapped.extend(
+                await self._select_batch(
+                    question,
+                    batch,
+                    phase="map",
+                    selection_limit=self.settings.document_limit,
+                )
+            )
         deduplicated: dict[uuid.UUID, tuple[CandidateDocument, str]] = {}
         for candidate, reason in mapped:
             deduplicated.setdefault(candidate.document.id, (candidate, reason))
         pool = list(deduplicated.values())
         while len(pool) > self.settings.document_limit:
             reduced: list[tuple[CandidateDocument, str]] = []
-            for offset in range(0, len(pool), self.settings.document_limit * 4):
-                batch = [
-                    item[0] for item in pool[offset : offset + self.settings.document_limit * 4]
-                ]
-                reduced.extend(await self._select_batch(question, batch, phase="reduce"))
+            for batch in self._comparison_batches(pool):
+                reduced.extend(
+                    await self._select_batch(
+                        question,
+                        batch,
+                        phase="reduce",
+                        selection_limit=min(
+                            self.settings.document_limit,
+                            len(batch.candidates) - 1,
+                        ),
+                    )
+                )
             next_pool: dict[uuid.UUID, tuple[CandidateDocument, str]] = {}
             for candidate, reason in reduced:
                 next_pool.setdefault(candidate.document.id, (candidate, reason))
             if len(next_pool) >= len(pool):
-                pool = pool[: self.settings.document_limit]
-                break
+                raise AssertionError("catalog reduction did not shrink its candidate pool")
             pool = list(next_pool.values())
         return [
             RankedDocument(candidate.document, rank, candidate.signals, reason)
-            for rank, (candidate, reason) in enumerate(pool[: self.settings.document_limit], 1)
+            for rank, (candidate, reason) in enumerate(pool, 1)
         ]
 
     async def select(
@@ -493,41 +790,277 @@ class PageIndexRetriever:
             configuration_hash=None,
         )
 
-    def _visible_tree(
+    def _tree_node_payload(
         self,
+        artifact: _ArtifactView,
+        node_id: str,
+        *,
+        maximum_depth: int,
+        used: set[str],
+        text_token_limit: int,
+        text_cache: dict[str, list[int]],
+        visible_ids: set[str],
+    ) -> dict[str, object]:
+        node = artifact.nodes[node_id]
+        visible_ids.add(node.node_id)
+        children = (
+            [
+                self._tree_node_payload(
+                    artifact,
+                    child,
+                    maximum_depth=maximum_depth,
+                    used=used,
+                    text_token_limit=text_token_limit,
+                    text_cache=text_cache,
+                    visible_ids=visible_ids,
+                )
+                for child in node.children
+            ]
+            if node.depth < maximum_depth
+            else []
+        )
+        result: dict[str, object] = {
+            "node_id": node.node_id,
+            "pages": [node.page_start, node.page_end],
+            "used": node.node_id in used,
+            "children": children,
+            "hidden_child_count": len(node.children) - len(children),
+        }
+        title = _truncate_text(
+            self.encoding,
+            node.title,
+            text_token_limit,
+            text_cache,
+        )
+        if title:
+            result["title"] = title
+        section_path = [
+            value
+            for item in node.section_path
+            if (
+                value := _truncate_text(
+                    self.encoding,
+                    item,
+                    text_token_limit,
+                    text_cache,
+                )
+            )
+        ]
+        if section_path:
+            result["section_path"] = section_path
+        collapsed = bool(node.children) and not children
+        summary = _truncate_text(
+            self.encoding,
+            node.subtree_summary if collapsed else node.direct_summary,
+            text_token_limit,
+            text_cache,
+        )
+        if summary:
+            result["subtree_summary" if collapsed else "direct_summary"] = summary
+        return result
+
+    def _tree_document_payload(
+        self,
+        document: Document,
+        artifact: _ArtifactView,
+        *,
+        root_ids: Sequence[str],
+        maximum_depth: int,
+        used: set[str],
+        text_token_limit: int,
+        text_cache: dict[str, list[int]],
+    ) -> tuple[dict[str, object], set[str]]:
+        visible_ids: set[str] = set()
+        tree = [
+            self._tree_node_payload(
+                artifact,
+                node_id,
+                maximum_depth=maximum_depth,
+                used=used,
+                text_token_limit=text_token_limit,
+                text_cache=text_cache,
+                visible_ids=visible_ids,
+            )
+            for node_id in root_ids
+        ]
+        result: dict[str, object] = {
+            "document_id": str(document.id),
+            "tree": tree,
+            "omitted_root_count": len(artifact.roots) - len(root_ids),
+        }
+        title = _truncate_text(
+            self.encoding,
+            document.title or "",
+            text_token_limit,
+            text_cache,
+        )
+        if title:
+            result["title"] = title
+        description = _truncate_text(
+            self.encoding,
+            artifact.description,
+            text_token_limit,
+            text_cache,
+        )
+        if description:
+            result["description"] = description
+        return result, visible_ids
+
+    def _bounded_tree_document(
+        self,
+        document: Document,
         artifact: _ArtifactView,
         *,
         round_number: int,
         used: set[str],
-    ) -> list[dict[str, object]]:
-        def serialize(node_id: str, maximum_depth: int) -> dict[str, object]:
-            node = artifact.nodes[node_id]
-            children = (
-                [serialize(child, maximum_depth) for child in node.children]
-                if node.depth < maximum_depth
-                else []
-            )
-            return {
-                "node_id": node.node_id,
-                "title": node.title,
-                "pages": [node.page_start, node.page_end],
-                "direct_summary": node.direct_summary,
-                "subtree_summary": node.subtree_summary,
-                "section_path": list(node.section_path),
-                "used": node.node_id in used,
-                "children": children,
-                "hidden_child_count": len(node.children) - len(children),
-            }
+        token_limit: int,
+    ) -> tuple[dict[str, object], set[str]]:
+        text_cache: dict[str, list[int]] = {}
+        roots = artifact.roots
+        maximum_artifact_depth = max(
+            (node.depth for node in artifact.nodes.values()),
+            default=0,
+        )
+        requested_depth = min(round_number - 1, maximum_artifact_depth)
 
-        full_depth = max((node.depth for node in artifact.nodes.values()), default=0)
-        full = [serialize(node_id, full_depth) for node_id in artifact.roots]
-        if (
-            len(self.encoding.encode(json.dumps(full, sort_keys=True, separators=(",", ":"))))
-            <= self.settings.catalog_batch_token_limit
-        ):
-            return full
-        maximum_depth = round_number - 1
-        return [serialize(node_id, maximum_depth) for node_id in artifact.roots]
+        def build(
+            root_ids: Sequence[str],
+            maximum_depth: int,
+            text_limit: int,
+        ) -> tuple[dict[str, object], set[str]]:
+            return self._tree_document_payload(
+                document,
+                artifact,
+                root_ids=root_ids,
+                maximum_depth=maximum_depth,
+                used=used,
+                text_token_limit=text_limit,
+                text_cache=text_cache,
+            )
+
+        selected_roots: Sequence[str] = roots
+        selected_depth: int | None = None
+        depth_candidates = [maximum_artifact_depth]
+        depth_candidates.extend(
+            depth for depth in range(requested_depth, -1, -1) if depth != maximum_artifact_depth
+        )
+        for maximum_depth in depth_candidates:
+            structural, _ = build(roots, maximum_depth, 0)
+            if _token_count(self.encoding, structural) <= token_limit:
+                selected_depth = maximum_depth
+                break
+
+        if selected_depth is None:
+            offset = (round_number - 1) % len(roots)
+            rotated_roots = (*roots[offset:], *roots[:offset])
+            selected: list[str] = []
+            for root_id in rotated_roots:
+                proposed = [*selected, root_id]
+                structural, _ = build(proposed, 0, 0)
+                if _token_count(self.encoding, structural) <= token_limit:
+                    selected.append(root_id)
+            selected_roots = selected
+            selected_depth = 0
+
+        low = 0
+        high = MODEL_TEXT_TOKEN_LIMIT
+        while low < high:
+            middle = (low + high + 1) // 2
+            candidate, _ = build(selected_roots, selected_depth, middle)
+            if _token_count(self.encoding, candidate) <= token_limit:
+                low = middle
+            else:
+                high = middle - 1
+        return build(selected_roots, selected_depth, low)
+
+    def _node_selection_payload(
+        self,
+        documents: list[Document],
+        artifacts: dict[uuid.UUID, _ArtifactView],
+        *,
+        round_number: int,
+        used_nodes: dict[uuid.UUID, set[str]],
+    ) -> tuple[str | None, dict[uuid.UUID, set[str]], list[NodeChoice]]:
+        forced: list[NodeChoice] = []
+        eligible: list[tuple[Document, _ArtifactView]] = []
+        visible_ids: dict[uuid.UUID, set[str]] = {}
+        for document in documents:
+            artifact = artifacts[document.id]
+            if len(artifact.nodes) == 1:
+                only = next(iter(artifact.nodes.values()))
+                visible_ids[document.id] = {only.node_id}
+                if only.node_id not in used_nodes[document.id]:
+                    forced.append(
+                        NodeChoice(
+                            document_id=document.id,
+                            node_id=only.node_id,
+                            reason="The document contains one evidence node.",
+                        )
+                    )
+            else:
+                eligible.append((document, artifact))
+                visible_ids[document.id] = set()
+
+        if not eligible:
+            return None, visible_ids, forced
+
+        base_documents: list[dict[str, object]] = []
+        for document, artifact in eligible:
+            base_documents.append(
+                {
+                    "document_id": str(document.id),
+                    "tree": [],
+                    "omitted_root_count": len(artifact.roots),
+                }
+            )
+        limit = self.settings.catalog_batch_token_limit
+        base_payload: dict[str, object] = {"documents": base_documents}
+        if _wrapped_token_count(self.encoding, base_payload) > limit:
+            raise ValueError("node selection token limit cannot fit document envelopes")
+
+        payload_documents: list[dict[str, object]] = list(base_documents)
+        for index, (document, artifact) in enumerate(eligible):
+            current_payload: dict[str, object] = {"documents": payload_documents}
+            available = limit - _wrapped_token_count(self.encoding, current_payload)
+            remaining_documents = len(eligible) - index
+            share = available // remaining_documents
+            base_tokens = _token_count(self.encoding, base_documents[index])
+            candidate, candidate_visible = self._bounded_tree_document(
+                document,
+                artifact,
+                round_number=round_number,
+                used=used_nodes[document.id],
+                token_limit=base_tokens + share,
+            )
+            proposed_documents: list[dict[str, object]] = list(payload_documents)
+            proposed_documents[index] = candidate
+            proposed: dict[str, object] = {"documents": proposed_documents}
+            proposed_tokens = _wrapped_token_count(self.encoding, proposed)
+            if proposed_tokens > limit:
+                candidate, candidate_visible = self._bounded_tree_document(
+                    document,
+                    artifact,
+                    round_number=round_number,
+                    used=used_nodes[document.id],
+                    token_limit=max(
+                        base_tokens,
+                        base_tokens + share - (proposed_tokens - limit) - 4,
+                    ),
+                )
+                proposed_documents[index] = candidate
+                proposed = {"documents": proposed_documents}
+            if _wrapped_token_count(self.encoding, proposed) > limit:
+                candidate = base_documents[index]
+                candidate_visible = set[str]()
+                proposed_documents[index] = candidate
+            payload_documents = proposed_documents
+            visible_ids[document.id] = candidate_visible
+
+        payload = {"documents": payload_documents}
+        payload_json = _canonical_json(payload)
+        if _wrapped_token_count(self.encoding, payload_json) > limit:
+            raise AssertionError("node selection payload exceeds its token limit")
+        return payload_json, visible_ids, forced
 
     @staticmethod
     def _lineage(nodes: dict[str, _NodeView], node: _NodeView) -> set[str]:
@@ -557,34 +1090,13 @@ class PageIndexRetriever:
         evidence: list[Evidence] = []
         metrics: dict[str, object] = {}
         for round_number in range(1, 4):
-            forced: list[NodeChoice] = []
-            tree_payload: list[dict[str, object]] = []
-            for document in documents:
-                artifact = artifacts[document.id]
-                if len(artifact.nodes) == 1:
-                    only = next(iter(artifact.nodes.values()))
-                    if only.node_id not in used_nodes[document.id]:
-                        forced.append(
-                            NodeChoice(
-                                document_id=document.id,
-                                node_id=only.node_id,
-                                reason="The document contains one evidence node.",
-                            )
-                        )
-                else:
-                    tree_payload.append(
-                        {
-                            "document_id": str(document.id),
-                            "title": document.title,
-                            "description": artifact.description,
-                            "tree": self._visible_tree(
-                                artifact,
-                                round_number=round_number,
-                                used=used_nodes[document.id],
-                            ),
-                        }
-                    )
-            if tree_payload:
+            payload_json, visible_ids, forced = self._node_selection_payload(
+                documents,
+                artifacts,
+                round_number=round_number,
+                used_nodes=used_nodes,
+            )
+            if payload_json is not None:
                 selected = await self.llm.structured(
                     NodeSelection,
                     UNTRUSTED_DOCUMENT_SYSTEM
@@ -592,9 +1104,7 @@ class PageIndexRetriever:
                     "or redundant ancestor/descendant pairs. Use the missing-evidence note from "
                     "the prior round when present.",
                     f"Question: {question}\nPrior missing evidence: {prior_missing or 'none'}\n"
-                    + wrap_untrusted_document(
-                        json.dumps({"documents": tree_payload}, sort_keys=True)
-                    ),
+                    + wrap_untrusted_document(payload_json),
                     thinking=True,
                     stage=ModelCallStage.query_node_select,
                 )
@@ -608,20 +1118,9 @@ class PageIndexRetriever:
                 if artifact is None:
                     continue
                 node = artifact.nodes.get(choice.node_id)
-                visible_tree = self._visible_tree(
-                    artifact,
-                    round_number=round_number,
-                    used=used_nodes[choice.document_id],
-                )
-                visible_ids: set[str] = set()
-                pending = list(visible_tree)
-                while pending:
-                    value = pending.pop()
-                    visible_ids.add(str(value["node_id"]))
-                    pending.extend(cast(list[dict[str, object]], value["children"]))
                 if (
                     node is None
-                    or node.node_id not in visible_ids
+                    or node.node_id not in visible_ids.get(choice.document_id, set())
                     or node.node_id in used_nodes[choice.document_id]
                 ):
                     continue
@@ -643,6 +1142,15 @@ class PageIndexRetriever:
                         page in selected_pages for page in range(node.page_start, node.page_end + 1)
                     ):
                         continue
+                proposed_intervals = [
+                    (item.node.page_start, item.node.page_end) for item in selected_for_document
+                ]
+                proposed_intervals.append((node.page_start, node.page_end))
+                if (
+                    len(self._merge_intervals(proposed_intervals))
+                    > self.settings.page_ranges_per_document
+                ):
+                    continue
                 selected_nodes.append(
                     _SelectedNode(choice.document_id, node, choice.reason[:2_000])
                 )
@@ -653,7 +1161,11 @@ class PageIndexRetriever:
                 documents,
                 artifacts,
                 selected_nodes,
-                evidence_token_budget or self.settings.evidence_token_limit,
+                (
+                    evidence_token_budget
+                    if evidence_token_budget is not None
+                    else self.settings.evidence_token_limit
+                ),
             )
             current_pages = cast(set[tuple[uuid.UUID, int]], assembly["page_keys"])
             metrics = assembly
@@ -705,49 +1217,6 @@ class PageIndexRetriever:
                 merged.append((start, end))
         return merged
 
-    def _fetch_evidence(
-        self,
-        question: str,
-        documents: list[Document],
-        artifacts: dict[uuid.UUID, dict[str, Any]],
-        selection: NodeSelection,
-        existing: list[Evidence],
-        used_nodes: set[tuple[uuid.UUID, str]],
-    ) -> list[Evidence]:
-        del question
-        document_map = {document.id: document for document in documents}
-        views = {
-            document_id: self._coerce_artifact(artifact)
-            for document_id, artifact in artifacts.items()
-        }
-        selected: list[_SelectedNode] = []
-        ranges_per_document: defaultdict[uuid.UUID, int] = defaultdict(int)
-        for item in existing:
-            ranges_per_document[uuid.UUID(item.source_id)] += 1
-        for choice in selection.selections:
-            key = (choice.document_id, choice.node_id)
-            view = views.get(choice.document_id)
-            if (
-                key in used_nodes
-                or view is None
-                or choice.document_id not in document_map
-                or ranges_per_document[choice.document_id] >= self.settings.page_ranges_per_document
-            ):
-                continue
-            node = view.nodes.get(choice.node_id)
-            if node is None:
-                continue
-            selected.append(_SelectedNode(choice.document_id, node, choice.reason))
-            used_nodes.add(key)
-            ranges_per_document[choice.document_id] += 1
-        assembled, _ = self._assemble_evidence(
-            documents,
-            views,
-            selected,
-            self.settings.evidence_token_limit,
-        )
-        return [*existing, *assembled]
-
     def _assemble_evidence(
         self,
         documents: list[Document],
@@ -778,8 +1247,7 @@ class PageIndexRetriever:
                 if len(page_keys) >= self.settings.fetched_page_limit:
                     truncated_any = True
                     break
-                remaining_tokens = token_budget - tokens_used
-                if remaining_tokens <= 0:
+                if token_budget - tokens_used <= 0:
                     truncated_any = True
                     break
                 content_parts: list[str] = []
@@ -787,36 +1255,64 @@ class PageIndexRetriever:
                 actual_end: int | None = None
                 content_truncated = False
                 for page in range(start, end + 1):
-                    text = artifact.pages.get(page, "")
-                    if not text.strip():
+                    text = artifact.pages.get(page, "").strip()
+                    if not text:
                         continue
                     if len(page_keys) >= self.settings.fetched_page_limit:
                         content_truncated = True
                         break
                     prefix = f"[Page {page}]\n"
-                    encoded = self.encoding.encode(prefix + text)
-                    if len(encoded) > remaining_tokens:
-                        partial = self.encoding.decode(encoded[:remaining_tokens])
-                        if partial.strip():
-                            content_parts.append(partial)
+                    page_content = prefix + text
+                    proposed_content = "\n\n".join([*content_parts, page_content])
+                    proposed_tokens = _token_count(self.encoding, proposed_content)
+                    available_tokens = token_budget - tokens_used
+                    if proposed_tokens > available_tokens:
+                        encoded_text = self.encoding.encode(text)
+                        low = 1
+                        high = len(encoded_text)
+                        best_content = ""
+                        best_page_content = ""
+                        while low <= high:
+                            middle = (low + high) // 2
+                            partial_text = self.encoding.decode(encoded_text[:middle])
+                            candidate_page_content = prefix + partial_text
+                            candidate_content = "\n\n".join(
+                                [*content_parts, candidate_page_content]
+                            )
+                            if (
+                                partial_text.strip()
+                                and _token_count(self.encoding, candidate_content)
+                                <= available_tokens
+                            ):
+                                best_content = candidate_content
+                                best_page_content = candidate_page_content
+                                low = middle + 1
+                            else:
+                                high = middle - 1
+                        if best_content:
+                            content_parts.append(best_page_content)
                             page_keys.add((document_id, page))
-                            actual_start = actual_start or page
+                            if actual_start is None:
+                                actual_start = page
                             actual_end = page
-                            tokens_used += remaining_tokens
                         content_truncated = True
                         break
-                    content_parts.append(prefix + text)
+                    content_parts.append(page_content)
                     page_keys.add((document_id, page))
-                    actual_start = actual_start or page
+                    if actual_start is None:
+                        actual_start = page
                     actual_end = page
-                    tokens_used += len(encoded)
-                    remaining_tokens -= len(encoded)
                 if not content_parts or actual_start is None or actual_end is None:
+                    truncated_any = True
                     continue
+                content = "\n\n".join(content_parts)
+                content_tokens = _token_count(self.encoding, content)
+                if tokens_used + content_tokens > token_budget:
+                    raise AssertionError("assembled evidence exceeds its token budget")
                 contributors = [
                     item
                     for item in choices
-                    if item.node.page_start <= actual_end and item.node.page_end >= start
+                    if item.node.page_start <= actual_end and item.node.page_end >= actual_start
                 ]
                 document = document_map[document_id]
                 result.append(
@@ -829,14 +1325,18 @@ class PageIndexRetriever:
                         section_paths=[list(item.node.section_path) for item in contributors],
                         page_start=actual_start,
                         page_end=actual_end,
-                        content="\n\n".join(content_parts),
+                        content=content,
                         content_truncated=content_truncated,
                         retrieval_reason="; ".join(
                             dict.fromkeys(item.reason for item in contributors)
                         )[:4_000],
                     )
                 )
+                tokens_used += content_tokens
                 truncated_any = truncated_any or content_truncated
+        actual_tokens = sum(_token_count(self.encoding, item.content) for item in result)
+        if actual_tokens != tokens_used:
+            raise AssertionError("evidence token accounting drifted from emitted content")
         return result, {
             "page_keys": page_keys,
             "unique_pages": len(page_keys),

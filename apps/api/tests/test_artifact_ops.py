@@ -4,10 +4,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
+import pytest
+
 from vectorless_rag.artifact_ops import (
     activate_index_version,
     apply_gc_plan,
     build_gc_plan,
+    verify_and_activate_index_version,
     verify_index_version,
 )
 from vectorless_rag.models import (
@@ -39,6 +42,8 @@ class _Session:
         self.rows = list(rows or [])
         self.objects = objects or {}
         self.added: list[object] = []
+        self.rollbacks = 0
+        self.executed: list[tuple[object, object | None]] = []
 
     async def scalars(self, statement: object) -> _ScalarRows:
         del statement
@@ -55,6 +60,16 @@ class _Session:
 
     def add(self, value: object) -> None:
         self.added.append(value)
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
+
+    async def execute(
+        self,
+        statement: object,
+        parameters: object | None = None,
+    ) -> None:
+        self.executed.append((statement, parameters))
 
 
 def _build(document_id: uuid.UUID):
@@ -127,6 +142,7 @@ async def test_verify_and_rollback_v2_index() -> None:
         original_filename="document.pdf",
         pdf_object_key="sources/document.pdf",
         status=DocumentStatus.failed,
+        diagnostic="stale failure",
     )
     session = _Session(
         objects={
@@ -140,18 +156,106 @@ async def test_verify_and_rollback_v2_index() -> None:
     assert result.page_count == 2
     assert result.node_count == 1
 
-    await activate_index_version(
+    await verify_and_activate_index_version(
         cast(Any, session),
+        store,
         document_id=document_id,
         version_id=version_id,
         actor="operator",
     )
     assert document.active_index_version_id == version_id
     assert document.status == DocumentStatus.ready
+    assert document.diagnostic is None
     assert len(session.added) == 1
     activation = cast(IndexActivation, session.added[0])
     assert activation.index_version_id == version_id
     assert activation.actor == "operator"
+    assert len(session.executed) == 1
+
+
+async def test_idempotent_activation_repairs_document_lifecycle() -> None:
+    now = datetime(2026, 7, 25, tzinfo=UTC)
+    document_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    build = _build(document_id)
+    version = _version(
+        document_id=document_id,
+        version_id=version_id,
+        build=build,
+        verified_at=now,
+    )
+    document = Document(
+        id=document_id,
+        sha256="d" * 64,
+        original_filename="document.pdf",
+        pdf_object_key="sources/document.pdf",
+        status=DocumentStatus.failed,
+        diagnostic="stale failure",
+        active_index_version_id=version_id,
+    )
+    session = _Session(
+        objects={
+            (IndexVersion, version_id): version,
+            (Document, document_id): document,
+        }
+    )
+
+    await activate_index_version(
+        cast(Any, session),
+        document_id=document_id,
+        version_id=version_id,
+        actor="operator",
+    )
+
+    assert document.active_index_version_id == version_id
+    assert document.status == DocumentStatus.ready
+    assert document.diagnostic is None
+    assert session.added == []
+
+
+async def test_rollback_verifies_artifacts_before_activation() -> None:
+    now = datetime(2026, 7, 25, tzinfo=UTC)
+    document_id = uuid.uuid4()
+    active_version_id = uuid.uuid4()
+    rollback_version_id = uuid.uuid4()
+    build = _build(document_id)
+    store = MemoryObjectStore()
+    await store_build_v2(store, build)
+    store.objects[build.manifest_object_key] = b"corrupt"
+    version = _version(
+        document_id=document_id,
+        version_id=rollback_version_id,
+        build=build,
+        verified_at=now,
+    )
+    document = Document(
+        id=document_id,
+        sha256="e" * 64,
+        original_filename="document.pdf",
+        pdf_object_key="sources/document.pdf",
+        status=DocumentStatus.ready,
+        active_index_version_id=active_version_id,
+    )
+    session = _Session(
+        objects={
+            (IndexVersion, rollback_version_id): version,
+            (Document, document_id): document,
+        }
+    )
+
+    with pytest.raises(ValueError, match="checksum"):
+        await verify_and_activate_index_version(
+            cast(Any, session),
+            store,
+            document_id=document_id,
+            version_id=rollback_version_id,
+            actor="operator",
+        )
+
+    assert document.active_index_version_id == active_version_id
+    assert session.rollbacks == 0
+    assert session.added == []
+    assert len(session.executed) == 1
 
 
 async def test_gc_preserves_active_version_and_recent_orphans() -> None:

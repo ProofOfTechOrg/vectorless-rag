@@ -5,31 +5,38 @@ import os
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import TypeVar
+from typing import TypeVar, cast
 
 import psycopg
 import pytest
 from psycopg import errors
 from pydantic import BaseModel
-from sqlalchemy import delete, select, update
+from sqlalchemy import Numeric, delete, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from vectorless_rag.config import Settings
-from vectorless_rag.db import claim_ingestion_job, make_engine
+from vectorless_rag.db import (
+    claim_ingestion_job,
+    make_engine,
+    set_ingestion_provider_admission,
+)
 from vectorless_rag.models import (
     Document,
     DocumentStatus,
+    Experiment,
     IndexLifecycleStatus,
     IndexVersion,
     IngestionAttempt,
     IngestionAttemptStatus,
     IngestionJob,
     JobStatus,
+    ModelCallCostReservation,
     ModelCallStage,
 )
 from vectorless_rag.retrieval import CorpusRouter
 from vectorless_rag.schemas import MetadataConstraints
 from vectorless_rag.sql_guard import PostgreSQLAdapter, validate_sql
+from vectorless_rag.telemetry_classification import classification_report
 from vectorless_rag.usage import (
     RECONCILE_MODEL_CALL_RESERVATION_SQL,
     RESERVE_MODEL_CALL_SQL,
@@ -38,6 +45,18 @@ from vectorless_rag.usage import (
 OWNER_URL = os.getenv("TEST_OWNER_DATABASE_URL")
 READER_URL = os.getenv("TEST_DATABASE_URL")
 StructuredT = TypeVar("StructuredT", bound=BaseModel)
+
+
+def test_cost_orm_columns_match_the_numeric_database_contract() -> None:
+    for column in (
+        Experiment.__table__.c.maximum_cost_usd,
+        ModelCallCostReservation.__table__.c.reserved_cost_usd,
+        ModelCallCostReservation.__table__.c.measured_cost_usd,
+    ):
+        assert isinstance(column.type, Numeric)
+        assert column.type.precision == 14
+        assert column.type.scale == 6
+        assert column.type.asdecimal is True
 
 
 class _UnusedRouterLLM:
@@ -52,6 +71,90 @@ class _UnusedRouterLLM:
     ) -> StructuredT:
         del schema, system, user, thinking, stage
         raise AssertionError("candidate lookup does not invoke the LLM")
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not OWNER_URL, reason="PostgreSQL owner URL not set")
+async def test_classification_report_queries_migrated_view_contract() -> None:
+    assert OWNER_URL is not None
+
+    report = await classification_report(
+        Settings(
+            database_admin_url=OWNER_URL,
+            langfuse_public_key=None,
+            langfuse_secret_key=None,
+        )
+    )
+
+    effective = cast(dict[str, int], report["effective"])
+    assert report["apply"] is False
+    assert set(effective) == {"excluded", "reinstated"}
+    assert effective["excluded"] >= 0
+    assert effective["reinstated"] >= 0
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not OWNER_URL, reason="PostgreSQL owner URL not set")
+async def test_provider_admission_requires_the_retry_cooldown() -> None:
+    assert OWNER_URL is not None
+    engine = make_engine(OWNER_URL, pool_size=2)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    document = Document(
+        id=uuid.uuid4(),
+        sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+        original_filename="provider-cooldown.pdf",
+        pdf_object_key="pdf/provider-cooldown.pdf",
+        status=DocumentStatus.waiting_provider,
+        diagnostic="waiting",
+    )
+    job = IngestionJob(
+        id=uuid.uuid4(),
+        document_id=document.id,
+        status=JobStatus.waiting_provider,
+        provider_wait_reason="pageindex_rate_limited",
+        current_stage="waiting_provider",
+        is_active=True,
+    )
+    try:
+        async with sessions() as session:
+            session.add_all([document, job])
+            await session.commit()
+            await session.refresh(job)
+            failed_at = job.updated_at
+
+        async with sessions() as session:
+            await set_ingestion_provider_admission(
+                session,
+                available=True,
+                reason=None,
+                checked_at=failed_at + timedelta(seconds=1),
+            )
+            await session.commit()
+            waiting = await session.get(IngestionJob, job.id)
+            assert waiting is not None
+            assert waiting.status == JobStatus.waiting_provider
+
+        async with sessions() as session:
+            await set_ingestion_provider_admission(
+                session,
+                available=True,
+                reason=None,
+                checked_at=failed_at + timedelta(seconds=31),
+            )
+            await session.commit()
+            queued = await session.get(IngestionJob, job.id)
+            available_document = await session.get(Document, document.id)
+            assert queued is not None and queued.status == JobStatus.queued
+            assert queued.provider_wait_reason is None
+            assert available_document is not None
+            assert available_document.status == DocumentStatus.queued
+            assert available_document.diagnostic is None
+    finally:
+        async with sessions() as session:
+            await session.execute(delete(IngestionJob).where(IngestionJob.id == job.id))
+            await session.execute(delete(Document).where(Document.id == document.id))
+            await session.commit()
+        await engine.dispose()
 
 
 def _router_document(

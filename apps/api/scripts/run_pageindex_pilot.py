@@ -7,10 +7,11 @@ import argparse
 import asyncio
 import hashlib
 import json
-import subprocess
+import re
 import time
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from PyPDF2 import PdfReader
@@ -38,15 +39,11 @@ TERMINAL = {
     JobStatus.deferred,
     JobStatus.cancelled,
 }
+RELEASE_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def git_value(*arguments: str) -> str:
-    return subprocess.run(  # noqa: S603
-        ["/usr/bin/git", *arguments],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+def report_cost(value: Decimal | float | int) -> float:
+    return float(round(value, 6))
 
 
 def validate_pdf(path: Path, expected: PilotDocument) -> None:
@@ -71,13 +68,13 @@ async def wait_for_job(database: Database, job_id: uuid.UUID) -> IngestionJob:
 async def run(args: argparse.Namespace) -> dict[str, object]:
     settings = get_settings()
     manifest = load_pilot_manifest(args.manifest)
+    release_sha = str(args.release_sha)
     if settings.allow_full_corpus_index:
         raise RuntimeError("the pilot requires ALLOW_FULL_CORPUS_INDEX=false")
     if settings.pilot_document_limit != 25 or settings.pilot_cost_limit_usd != 10:
         raise RuntimeError("the pilot requires the frozen 25-document/$10 safety settings")
-    if git_value("status", "--porcelain"):
-        raise RuntimeError("the pilot requires a clean worktree")
-    release_sha = git_value("rev-parse", "HEAD")
+    if RELEASE_SHA.fullmatch(release_sha) is None:
+        raise RuntimeError("the pilot requires an explicit 40-character release SHA")
     if settings.release != release_sha:
         raise RuntimeError("RELEASE must equal the immutable git commit SHA")
     for document in manifest.documents:
@@ -133,7 +130,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
                 repetitions=1,
                 evidence_token_budget=settings.evidence_token_limit,
                 seed=20_260_725,
-                maximum_cost_usd=settings.pilot_cost_limit_usd,
+                maximum_cost_usd=Decimal(str(settings.pilot_cost_limit_usd)),
                 frozen_at=datetime.now(UTC),
             )
             session.add(experiment)
@@ -211,12 +208,19 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             "manifest_hash": hashlib.sha256(args.manifest.read_bytes()).hexdigest(),
             "documents": results,
             "reservation_count": len(reservations),
-            "measured_or_reserved_cost_usd": round(committed, 6),
+            "measured_or_reserved_cost_usd": report_cost(committed),
             "cost_cap_usd": settings.pilot_cost_limit_usd,
             "retrieval_canaries": "pending_reviewed_evaluation_cases",
         }
     finally:
         await database.close()
+
+
+def reserve_output(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=False)
+    temporary = path.parent / f".{path.name}.tmp"
+    temporary.touch(exist_ok=False)
+    return temporary
 
 
 def main() -> None:
@@ -229,7 +233,8 @@ def main() -> None:
     )
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm-cost-cap", type=float)
-    parser.add_argument("--output", type=Path, default=root / "pilots" / "run" / "result.json")
+    parser.add_argument("--release-sha")
+    parser.add_argument("--output", default=str(root / "pilots" / "run" / "result.json"))
     args = parser.parse_args()
     load_pilot_manifest(args.manifest)
     if not args.apply:
@@ -239,10 +244,16 @@ def main() -> None:
         return
     if args.confirm_cost_cap != 10:
         raise SystemExit("--apply requires --confirm-cost-cap 10")
+    if args.release_sha is None:
+        raise SystemExit("--apply requires --release-sha")
+    output = None if args.output == "-" else Path(args.output)
+    temporary = reserve_output(output) if output is not None else None
     result = asyncio.run(run(args))
-    args.output.parent.mkdir(parents=True, exist_ok=False)
-    args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps(result, indent=2, sort_keys=True))
+    serialized = json.dumps(result, indent=2, sort_keys=True) + "\n"
+    if output is not None and temporary is not None:
+        temporary.write_text(serialized, encoding="utf-8")
+        temporary.replace(output)
+    print(serialized, end="")
 
 
 if __name__ == "__main__":

@@ -14,24 +14,33 @@ Configure `.env`, run `make up`, then `make health`. Mint a least-privilege key 
 
 Use the Ingestion page for one PDF, or `make upload-document PDF=/path/file.pdf`. Jobs are durable. Use `make logs SERVICE=worker` for worker detail.
 
-The UI polls every 1.5 seconds until the job reaches a terminal state. Transient status failures switch to five-second polling and do not discard the durable job. A provider wait or deferred state remains visible and continues polling.
+The UI polls every 1.5 seconds until the job reaches a terminal state. Transient status failures switch to five-second polling and do not discard the durable job. A provider wait or deferred state remains visible and continues polling. A fresh successful provider check can resume a waiting job after the provider retry cooldown. Cached checks and fresh checks made during that cooldown cannot resume it.
 
-Mounted sync scans only direct PDF children of `ARXIV_PDF_HOST_DIR`. `make sync-corpus` deduplicates by content. The API supports `ensure_current`, `rebuild_index`, and `reextract_all`; deprecated `force=true` maps to `rebuild_index` for one release.
+Mounted sync scans only direct Portable Document Format (PDF) children of `ARXIV_PDF_HOST_DIR`. `make sync-corpus` deduplicates by content. The API supports three modes:
 
-With `ALLOW_FULL_CORPUS_INDEX=false`, only 25 documents can be registered. Capacity is reported dynamically. Durable call accounting records measured usage when the provider returns it and retains a conservative reservation when it does not.
+- `ensure_current` reuses a compatible index or stored metadata
+- `rebuild_index` rebuilds the index from compatible stored metadata
+- `reextract_all` extracts fresh metadata and rebuilds the index
+
+Selecting either rebuild mode bypasses content deduplication. Deprecated `force=true` maps to `rebuild_index` for one release.
+
+With `ALLOW_FULL_CORPUS_INDEX=false`, only 25 documents can be registered. Capacity is reported dynamically. Durable call accounting includes metadata extraction and PageIndex calls. It records measured usage when the provider returns it and retains a conservative reservation when it does not. Exhausted transient provider retries consume retry budget. Credit and provider-availability waits do not consume retry budget.
 
 Run the tracked pilot only after committing the release and setting `RELEASE` to that exact SHA:
 
 ```bash
+make restart-app
 make pilot-check
 make pilot-run
 make artifact-verify
 make pilot-report
 ```
 
-`make pilot-run` requires a clean worktree, schema head `0005_measurement_experiments`, an available provider, all 25 exact PDFs, a complete price snapshot, no active ingestion jobs, and `--confirm-cost-cap 10`. It queues one manifest document at a time with `reextract_all`. PostgreSQL rejects any logical call whose three-attempt worst-case reservation would exceed the $10 experiment cap; the worker then defers the job without consuming retry budget. Do not enable full-corpus indexing or run ordinary 537-file sync until the pilot is accepted and separately authorized.
+`make pilot-run` requires a clean worktree, a running API image whose `RELEASE` equals the current commit, schema head `0005_measurement_experiments`, an available provider, all 25 exact PDFs, a complete price snapshot, and no active ingestion jobs. The Make target reserves `apps/api/pilots/run/` before it invokes the API container. An existing directory stops the command before provider work. A failed run leaves the directory reserved; inspect it before authorizing another run.
 
-Use `vectorless-rag artifact-rollback --document-id … --version-id …` to activate a verified prior version. `make artifact-gc` is dry-run only. Applying cleanup requires the exact dry-run count:
+The pilot queues one manifest document at a time with `reextract_all`. PostgreSQL rejects any logical call whose three-attempt worst-case reservation would exceed the $10 experiment cap. The worker then defers the job without consuming retry budget. Do not enable full-corpus indexing or run ordinary 537-file sync until the pilot is accepted and separately authorized.
+
+Use `vectorless-rag artifact-rollback --document-id … --version-id …` to activate a verified prior version. The command verifies the manifest and every referenced object before it changes the active pointer. Rollback and applied garbage collection use the same database lock, so garbage collection cannot delete a version while it is being activated. `make artifact-gc` is dry-run only. Applying cleanup requires the exact dry-run count:
 
 ```bash
 docker compose exec -T api vectorless-rag artifact-gc --apply --confirm-count COUNT

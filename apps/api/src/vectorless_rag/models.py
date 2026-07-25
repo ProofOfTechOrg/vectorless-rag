@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
@@ -17,6 +18,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -677,7 +679,7 @@ class Experiment(TimestampMixin, Base):
     repetitions: Mapped[int] = mapped_column(Integer, nullable=False)
     evidence_token_budget: Mapped[int] = mapped_column(Integer, nullable=False)
     seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    maximum_cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    maximum_cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
     valid: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     invalid_reason: Mapped[str | None] = mapped_column(String(80))
     frozen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -760,8 +762,8 @@ class ModelCallCostReservation(TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("agent.experiments.id"), nullable=False
     )
     logical_call_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    reserved_cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
-    measured_cost_usd: Mapped[float | None] = mapped_column(Float)
+    reserved_cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
+    measured_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

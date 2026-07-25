@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vectorless_rag.models import (
@@ -38,6 +38,13 @@ class GarbageCollectionPlan:
     delete_keys: tuple[str, ...]
     delete_bytes: int
     retained_orphan_keys: tuple[str, ...]
+
+
+async def lock_artifact_mutations(session: AsyncSession) -> None:
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_id)"),
+        {"lock_id": 0x564543544F52},
+    )
 
 
 async def verify_index_version(
@@ -86,20 +93,42 @@ async def activate_index_version(
         or version.verified_at is None
     ):
         raise ValueError("only a verified index version can be activated")
-    if document.active_index_version_id == version.id:
-        return
-    prior = document.active_index_version_id
-    session.add(
-        IndexActivation(
-            document_id=document.id,
-            prior_index_version_id=prior,
-            index_version_id=version.id,
-            reason=reason,
-            actor=actor[:128],
+    if document.active_index_version_id != version.id:
+        prior = document.active_index_version_id
+        session.add(
+            IndexActivation(
+                document_id=document.id,
+                prior_index_version_id=prior,
+                index_version_id=version.id,
+                reason=reason,
+                actor=actor[:128],
+            )
         )
-    )
-    document.active_index_version_id = version.id
+        document.active_index_version_id = version.id
     document.status = DocumentStatus.ready
+    document.diagnostic = None
+
+
+async def verify_and_activate_index_version(
+    session: AsyncSession,
+    store: ObjectStore,
+    *,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    actor: str,
+    reason: IndexActivationReason = IndexActivationReason.rollback,
+) -> None:
+    await lock_artifact_mutations(session)
+    verification = await verify_index_version(session, store, version_id)
+    if verification.document_id != document_id:
+        raise ValueError("index version does not belong to the requested document")
+    await activate_index_version(
+        session,
+        document_id=document_id,
+        version_id=version_id,
+        actor=actor,
+        reason=reason,
+    )
 
 
 def _manifest_keys(loaded: LoadedPageIndexV2, manifest_key: str) -> set[str]:

@@ -14,7 +14,9 @@ from vectorless_rag.pageindex_adapter import (
     artifact_version_key,
     normalize_artifact,
 )
+from vectorless_rag.pageindex_failures import PAGEINDEX_FAILURE_DIAGNOSTICS
 from vectorless_rag.run_pageindex import build_failure_report
+from vectorless_rag.usage import ExperimentBudgetExceeded
 
 _ATTEMPT_ID = uuid.uuid4()
 _TRACE_ID = uuid.uuid4().hex
@@ -138,6 +140,39 @@ def test_child_failure_report_maps_codes_to_fixed_safe_diagnostics() -> None:
         "failure_code": "pageindex_child_failed",
         "diagnostic": "PageIndex failed inside its isolated runtime.",
     }
+
+
+def test_experiment_cost_cap_survives_child_report_round_trip(tmp_path: Path) -> None:
+    report_path = tmp_path / "failure.json"
+    report_path.write_text(
+        json.dumps(build_failure_report(ExperimentBudgetExceeded())),
+        encoding="utf-8",
+    )
+
+    error = PageIndexAdapter._reported_failure(report_path)  # pyright: ignore[reportPrivateUsage]
+
+    assert error.failure_code == "experiment_cost_cap"
+    assert error.diagnostic == ("The frozen experiment cost cap was reached before the next call.")
+    assert error.attempts == 0
+
+
+@pytest.mark.parametrize(
+    ("failure_code", "diagnostic"),
+    PAGEINDEX_FAILURE_DIAGNOSTICS.items(),
+)
+def test_every_safe_child_diagnostic_survives_the_parent_boundary(
+    tmp_path: Path,
+    failure_code: str,
+    diagnostic: str,
+) -> None:
+    report_path = tmp_path / f"{failure_code}.json"
+    source = PageIndexError(failure_code, "private child detail")
+    report_path.write_text(json.dumps(build_failure_report(source)), encoding="utf-8")
+
+    error = PageIndexAdapter._reported_failure(report_path)  # pyright: ignore[reportPrivateUsage]
+
+    assert error.failure_code == failure_code
+    assert error.diagnostic == diagnostic
 
 
 async def test_single_page_builds_deterministic_artifact_without_pageindex(

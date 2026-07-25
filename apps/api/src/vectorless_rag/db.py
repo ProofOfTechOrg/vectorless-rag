@@ -28,6 +28,7 @@ from vectorless_rag.models import (
     JobStatus,
 )
 from vectorless_rag.operational_logging import emit_event
+from vectorless_rag.provider import STATUS_CACHE_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -77,34 +78,36 @@ async def set_ingestion_provider_admission(
     *,
     available: bool,
     reason: str | None,
+    checked_at: datetime,
 ) -> None:
     if available:
-        await session.execute(
+        transitioned = await session.execute(
             update(IngestionJob)
             .where(
-                IngestionJob.status.in_([JobStatus.waiting_provider, JobStatus.deferred]),
+                IngestionJob.status == JobStatus.waiting_provider,
                 IngestionJob.is_active.is_(True),
+                IngestionJob.updated_at <= checked_at - STATUS_CACHE_WINDOW,
             )
             .values(
                 status=JobStatus.queued,
                 provider_wait_reason=None,
                 current_stage="queued",
             )
+            .returning(IngestionJob.document_id)
         )
-        waiting_documents = list(
+        document_ids = set(transitioned.scalars().all())
+        if not document_ids:
+            return
+        transitioned_documents = list(
             (
                 await session.scalars(
-                    select(Document).where(
-                        Document.status.in_(
-                            [DocumentStatus.waiting_provider, DocumentStatus.deferred]
-                        ),
-                        Document.active_index_version_id.is_(None),
-                    )
+                    select(Document).where(Document.id.in_(document_ids)).with_for_update()
                 )
             ).all()
         )
-        for document in waiting_documents:
-            document.status = DocumentStatus.queued
+        for document in transitioned_documents:
+            if document.active_index_version_id is None:
+                document.status = DocumentStatus.queued
             document.diagnostic = None
         return
 

@@ -24,6 +24,23 @@ def test_every_phony_make_target_has_a_help_description() -> None:
     assert not missing, f"Make targets missing help descriptions: {missing}"
 
 
+def test_operator_make_targets_pass_explicit_runtime_contracts() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+
+    assert "scripts/seed_evaluation.py /dev/stdin \\" in makefile
+    assert "--suite pageindex-v2 --corpus evaluation/pageindex-v2-corpus.json" in makefile
+    assert "$(COMPOSE) exec -T api python scripts/run_pageindex_pilot.py" in makefile
+    assert '--release-sha "$$release_sha" --output -' in makefile
+    assert 'mkdir -p "$$(dirname "$$output_dir")"' in makefile
+    assert makefile.index('mkdir "$$output_dir"') < makefile.index(
+        "$(COMPOSE) exec -T api python scripts/run_pageindex_pilot.py"
+    )
+
+    dockerignore = (ROOT / "apps/api/.dockerignore").read_text().splitlines()
+    assert "evaluation/run/" in dockerignore
+    assert "pilots/run/" in dockerignore
+
+
 def test_helm_secret_references_match_the_deployment_inventory() -> None:
     templates = "\n".join(
         path.read_text()

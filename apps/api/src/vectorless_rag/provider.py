@@ -98,6 +98,7 @@ class ProviderGate:
         self.settings = settings
         self.client = client
         self._hard_failure: ProviderFailure | None = None
+        self._hard_failure_at: datetime | None = None
 
     @property
     def hard_failure(self) -> ProviderFailure | None:
@@ -107,10 +108,12 @@ class ProviderGate:
         failure = classify_provider_failure(error)
         if failure.blocks_provider:
             self._hard_failure = failure
+            self._hard_failure_at = datetime.now(UTC)
         return failure
 
     def observe_completion_success(self) -> None:
         self._hard_failure = None
+        self._hard_failure_at = None
 
     async def status(
         self,
@@ -122,7 +125,7 @@ class ProviderGate:
         configuration_hash = provider_configuration_hash(self.settings)
         state = await session.get(ProviderState, "deepseek")
         if self.settings.deepseek_api_key is None:
-            return await self._persist(
+            return await self.persist_observation(
                 session,
                 state,
                 ProviderAvailability.unconfigured,
@@ -130,17 +133,46 @@ class ProviderGate:
                 now,
                 configuration_hash,
             )
-        if self._hard_failure is not None:
-            return await self._persist(
-                session,
-                state,
-                ProviderAvailability.unavailable,
-                self._hard_failure.code,
-                now,
-                configuration_hash,
-            )
+        hard_failure = self._hard_failure
+        if hard_failure is not None:
+            if (
+                state is not None
+                and state.configuration_hash == configuration_hash
+                and self._hard_failure_at is not None
+                and state.checked_at > self._hard_failure_at
+                and state.availability == ProviderAvailability.available
+            ):
+                self.observe_completion_success()
+                return ProviderObservation(
+                    availability=state.availability,
+                    reason=state.reason,
+                    checked_at=state.checked_at,
+                    stale=False,
+                )
+            if (
+                state is None
+                or state.configuration_hash != configuration_hash
+                or state.availability != ProviderAvailability.unavailable
+                or state.reason != hard_failure.code
+            ):
+                return await self.persist_observation(
+                    session,
+                    state,
+                    ProviderAvailability.unavailable,
+                    hard_failure.code,
+                    now,
+                    configuration_hash,
+                )
+            if now - state.checked_at <= STATUS_CACHE_WINDOW:
+                return ProviderObservation(
+                    availability=ProviderAvailability.unavailable,
+                    reason=hard_failure.code,
+                    checked_at=state.checked_at,
+                    stale=False,
+                )
         if (
-            not refresh
+            hard_failure is None
+            and not refresh
             and state is not None
             and state.configuration_hash == configuration_hash
             and now - state.checked_at <= STATUS_CACHE_WINDOW
@@ -154,6 +186,15 @@ class ProviderGate:
         try:
             available = await self._balance_available()
         except Exception:
+            if hard_failure is not None:
+                return await self.persist_observation(
+                    session,
+                    state,
+                    ProviderAvailability.unavailable,
+                    hard_failure.code,
+                    now,
+                    configuration_hash,
+                )
             if (
                 state is not None
                 and state.configuration_hash == configuration_hash
@@ -166,7 +207,7 @@ class ProviderGate:
                     checked_at=state.checked_at,
                     stale=True,
                 )
-            return await self._persist(
+            return await self.persist_observation(
                 session,
                 state,
                 ProviderAvailability.unknown,
@@ -175,7 +216,8 @@ class ProviderGate:
                 configuration_hash,
             )
         if available:
-            return await self._persist(
+            self.observe_completion_success()
+            return await self.persist_observation(
                 session,
                 state,
                 ProviderAvailability.available,
@@ -184,7 +226,8 @@ class ProviderGate:
                 configuration_hash,
             )
         self._hard_failure = ProviderFailure("insufficient_credit", False, 402, True)
-        return await self._persist(
+        self._hard_failure_at = now
+        return await self.persist_observation(
             session,
             state,
             ProviderAvailability.unavailable,
@@ -212,7 +255,7 @@ class ProviderGate:
         state = await session.get(ProviderState, "deepseek")
         if error is None:
             self.observe_completion_success()
-            await self._persist(
+            await self.persist_observation(
                 session,
                 state,
                 ProviderAvailability.available,
@@ -223,7 +266,7 @@ class ProviderGate:
             return
         failure = self.observe_completion_failure(error)
         if failure.blocks_provider:
-            await self._persist(
+            await self.persist_observation(
                 session,
                 state,
                 ProviderAvailability.unavailable,
@@ -262,7 +305,7 @@ class ProviderGate:
                 await client.aclose()
 
     @staticmethod
-    async def _persist(
+    async def persist_observation(
         session: AsyncSession,
         state: ProviderState | None,
         availability: ProviderAvailability,
@@ -296,3 +339,20 @@ class ProviderGate:
             checked_at=checked_at,
             stale=False,
         )
+
+
+async def persist_provider_interruption(
+    session: AsyncSession,
+    settings: Settings,
+    reason: str,
+) -> ProviderObservation:
+    now = datetime.now(UTC)
+    state = await session.get(ProviderState, "deepseek")
+    return await ProviderGate.persist_observation(
+        session,
+        state,
+        ProviderAvailability.unavailable,
+        reason,
+        now,
+        provider_configuration_hash(settings),
+    )

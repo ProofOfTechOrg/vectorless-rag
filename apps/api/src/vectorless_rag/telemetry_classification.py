@@ -186,8 +186,8 @@ async def classification_report(
                         text(
                             """
                         SELECT
-                          count(*) FILTER (WHERE effective_action = 'exclude') AS excluded,
-                          count(*) FILTER (WHERE effective_action = 'reinstate') AS reinstated
+                          count(*) FILTER (WHERE action = 'exclude') AS excluded,
+                          count(*) FILTER (WHERE action = 'reinstate') AS reinstated
                         FROM agent.effective_measurement_classifications
                         """
                         )

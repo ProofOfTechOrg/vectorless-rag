@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from vectorless_rag import __version__
+from vectorless_rag.artifact_ops import verify_and_activate_index_version
 from vectorless_rag.auth import (
     AdminPrincipal,
     AnyPrincipal,
@@ -43,9 +44,6 @@ from vectorless_rag.ingestion import (
 from vectorless_rag.llm import DeepSeekLLM, LLMError
 from vectorless_rag.models import (
     Document,
-    DocumentStatus,
-    IndexActivation,
-    IndexActivationReason,
     IndexLifecycleStatus,
     IndexVersion,
     IngestionJob,
@@ -60,7 +58,6 @@ from vectorless_rag.models import (
 )
 from vectorless_rag.observability import Observability
 from vectorless_rag.operational_logging import emit_event
-from vectorless_rag.pageindex_artifact import load_manifest_v2
 from vectorless_rag.provider import ProviderGate
 from vectorless_rag.retrieval import CorpusRouter, PageIndexRetriever, VectorlessRetriever
 from vectorless_rag.schemas import (
@@ -644,35 +641,23 @@ async def activate_document_index_version(
         or version.verified_at is None
     ):
         raise HTTPException(status.HTTP_409_CONFLICT, "index version is not verified v2")
-    object_key = version.manifest_object_key
-    digest = version.manifest_sha256
-    await session.rollback()
     try:
-        await load_manifest_v2(runtime.store, object_key, digest)
+        await verify_and_activate_index_version(
+            session,
+            runtime.store,
+            document_id=document_id,
+            version_id=version_id,
+            actor=f"api-key:{principal.api_key_id}",
+        )
     except ValueError as error:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "index version artifact verification failed",
         ) from error
-    document = await session.get(Document, document_id, with_for_update=True)
-    version = await session.get(IndexVersion, version_id, with_for_update=True)
-    if document is None or version is None or version.document_id != document_id:
-        raise HTTPException(status.HTTP_409_CONFLICT, "index version changed during verification")
-    prior = document.active_index_version_id
-    if prior != version.id:
-        session.add(
-            IndexActivation(
-                document_id=document.id,
-                prior_index_version_id=prior,
-                index_version_id=version.id,
-                reason=IndexActivationReason.rollback,
-                actor=f"api-key:{principal.api_key_id}"[:128],
-            )
-        )
-        document.active_index_version_id = version.id
-    document.status = DocumentStatus.ready
-    document.diagnostic = None
     await session.flush()
+    version = await session.get(IndexVersion, version_id)
+    if version is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "index version changed during activation")
     return IndexVersionSummary.model_validate(version).model_copy(update={"active": True})
 
 
@@ -689,7 +674,7 @@ async def synchronize(
         session,
         runtime.store,
         runtime.settings,
-        force=bool(payload.force),
+        force=bool(payload.force) or payload.mode != IngestionMode.ensure_current,
         mode=payload.mode,
         arxiv_ids=payload.arxiv_ids,
     )

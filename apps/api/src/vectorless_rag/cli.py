@@ -14,9 +14,10 @@ from sqlalchemy import select
 
 from alembic import command
 from vectorless_rag.artifact_ops import (
-    activate_index_version,
     apply_gc_plan,
     build_gc_plan,
+    lock_artifact_mutations,
+    verify_and_activate_index_version,
     verify_index_version,
 )
 from vectorless_rag.auth import generate_api_key, hash_api_key, validate_scopes
@@ -246,10 +247,12 @@ def artifact_rollback(
     async def rollback() -> None:
         settings = get_settings()
         database = Database(settings)
+        store = S3ObjectStore(settings)
         try:
             async with database.session() as session:
-                await activate_index_version(
+                await verify_and_activate_index_version(
                     session,
+                    store,
                     document_id=document_id,
                     version_id=version_id,
                     actor=actor,
@@ -274,13 +277,14 @@ def artifact_gc(
         store = S3ObjectStore(settings)
         try:
             async with database.session() as session:
+                if apply:
+                    await lock_artifact_mutations(session)
                 plan = await build_gc_plan(session, store)
-            if apply:
-                if confirm_count != len(plan.delete_keys):
-                    raise ValueError(
-                        f"--confirm-count must equal the dry-run count ({len(plan.delete_keys)})"
-                    )
-                await apply_gc_plan(store, plan)
+                if apply:
+                    if confirm_count != len(plan.delete_keys):
+                        count = len(plan.delete_keys)
+                        raise ValueError(f"--confirm-count must equal the dry-run count ({count})")
+                    await apply_gc_plan(store, plan)
             result = dataclasses.asdict(plan)
             result["applied"] = apply
             return result

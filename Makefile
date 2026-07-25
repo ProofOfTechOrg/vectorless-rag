@@ -25,6 +25,7 @@ DATASET ?= apps/api/evaluation/pageindex-v2-regression.jsonl
 DATASET_NAME ?= vectorless-rag-pageindex-v2-regression
 INDEX_HASH ?=
 PAGEINDEX_SOURCE ?= /opt/pageindex
+PILOT_OUTPUT ?= apps/api/pilots/run/result.json
 
 export UV_CACHE_DIR
 
@@ -189,7 +190,23 @@ upload-document: ## Upload PDF through FastAPI with VECTORLESS_RAG_ADMIN_KEY.
 pilot-check: ## Validate the frozen 25-document pilot manifest offline.
 	cd $(API_DIR) && $(UV) run python scripts/check_pageindex_pilot.py
 pilot-run: ## Run the frozen pilot with an explicit ten-dollar confirmation.
-	cd $(API_DIR) && $(UV) run python scripts/run_pageindex_pilot.py --apply --confirm-cost-cap 10
+	@test -z "$$(git status --porcelain)" || { echo "pilot-run requires a clean worktree" >&2; exit 2; }
+	@release_sha="$$(git rev-parse HEAD)"; \
+		output="$(PILOT_OUTPUT)"; \
+		output_dir="$$(dirname "$$output")"; \
+		mkdir -p "$$(dirname "$$output_dir")"; \
+		mkdir "$$output_dir"; \
+		temporary="$$output_dir/.$$(basename "$$output").tmp"; \
+		: > "$$temporary"; \
+		if $(COMPOSE) exec -T api python scripts/run_pageindex_pilot.py \
+			--apply --confirm-cost-cap 10 --release-sha "$$release_sha" --output - \
+			> "$$temporary"; then \
+			mv "$$temporary" "$$output"; \
+			cat "$$output"; \
+		else \
+			echo "pilot failed; reserved output remains at $$output_dir" >&2; \
+			exit 1; \
+		fi
 pilot-report: ## Print the configured stratified-pilot report from the API container.
 	@$(COMPOSE) exec -T api vectorless-rag pilot-report
 query-cost-report: ## Print aggregate query cost data for DAYS (default 30).
@@ -208,7 +225,9 @@ evaluation-review-pack: ## Rebuild the local PageIndex evaluation review pack.
 	cd $(API_DIR) && $(UV) run python scripts/build_evaluation_review_pack.py
 evaluation-seed: ## Seed the reviewed PageIndex evaluation suite into Langfuse.
 	@test -f "$(DATASET)" || { echo "DATASET does not exist: $(DATASET)" >&2; exit 2; }
-	$(COMPOSE) exec -T api python scripts/seed_evaluation.py /dev/stdin --name "$(DATASET_NAME)" < "$(DATASET)"
+	$(COMPOSE) exec -T api python scripts/seed_evaluation.py /dev/stdin \
+		--suite pageindex-v2 --corpus evaluation/pageindex-v2-corpus.json \
+		--name "$(DATASET_NAME)" < "$(DATASET)"
 evaluation-run: ## Run a frozen PageIndex evaluation experiment from a reviewed suite.
 	@test -n "$(INDEX_HASH)" || { echo "INDEX_HASH=<sha256> is required" >&2; exit 2; }
 	cd $(API_DIR) && $(UV) run python scripts/run_evaluation.py --index-hash "$(INDEX_HASH)"
