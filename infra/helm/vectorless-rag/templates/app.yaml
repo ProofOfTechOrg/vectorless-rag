@@ -104,6 +104,7 @@ spec:
 - {name: PAGEINDEX_LLM_MAX_ATTEMPTS, value: {{ .Values.pageindexLlmMaxAttempts | quote }}}
 - {name: PAGEINDEX_ASYNC_CONCURRENCY, value: {{ .Values.pageindexAsyncConcurrency | quote }}}
 - {name: PAGEINDEX_MAX_OUTPUT_TOKENS, value: {{ .Values.pageindexMaxOutputTokens | quote }}}
+- {name: QUERY_NODE_SELECTION_MAX_OUTPUT_TOKENS, value: {{ .Values.queryNodeSelectionMaxOutputTokens | quote }}}
 - {name: PAGEINDEX_CALL_TIMEOUT_SECONDS, value: {{ .Values.pageindexCallTimeoutSeconds | quote }}}
 - {name: PAGEINDEX_TIMEOUT_SECONDS, value: {{ .Values.pageindexTimeoutSeconds | quote }}}
 - {name: INGESTION_MAX_ATTEMPTS, value: {{ .Values.ingestionMaxAttempts | quote }}}
@@ -113,6 +114,7 @@ spec:
 - {name: CATALOG_BATCH_TOKEN_LIMIT, value: {{ .Values.catalogBatchTokenLimit | quote }}}
 - {name: DOCUMENT_LIMIT, value: {{ .Values.documentLimit | quote }}}
 - {name: EVIDENCE_TOKEN_LIMIT, value: {{ .Values.evidenceTokenLimit | quote }}}
+- {name: REQUEST_DEADLINE_SECONDS, value: {{ .Values.requestDeadlineSeconds | quote }}}
 - {name: ARXIV_PDF_DIR, value: {{ .Values.corpus.mountPath | quote }}}
 - {name: OBJECT_STORE_ENDPOINT, value: {{ include "vectorless-rag.s3Endpoint" . | quote }}}
 - name: OBJECT_STORE_ACCESS_KEY

@@ -111,6 +111,16 @@ def test_langchain_usage_preserves_cache_and_reasoning_partitions() -> None:
     assert usage.output_tokens == 40
     assert usage.reasoning_output_tokens == 12
     assert usage.total_tokens == 140
+    details = usage.langfuse_details()
+    assert details == {
+        "input": 50,
+        "cache_read_input_tokens": 30,
+        "cache_write_input_tokens": 20,
+        "output": 28,
+        "reasoning_output_tokens": 12,
+        "total": 140,
+    }
+    assert sum(value for key, value in details.items() if key != "total") == 140
 
 
 def test_litellm_usage_and_missing_cache_details_are_normalized_honestly() -> None:

@@ -21,6 +21,7 @@ pageindexModel: deepseek/deepseek-v4-pro
 pageindexLlmMaxAttempts: 3
 pageindexAsyncConcurrency: 8
 pageindexMaxOutputTokens: 8192
+queryNodeSelectionMaxOutputTokens: 4096
 pageindexCallTimeoutSeconds: 120
 pageindexTimeoutSeconds: 3600
 ingestionMaxAttempts: 3
@@ -30,6 +31,7 @@ ingestionStaleGraceSeconds: 300
 catalogBatchTokenLimit: 24000
 documentLimit: 8
 evidenceTokenLimit: 40000
+requestDeadlineSeconds: 180
 pilotDocumentLimit: 25
 pilotCostLimitUsd: 10
 allowFullCorpusIndex: false

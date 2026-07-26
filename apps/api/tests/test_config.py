@@ -36,6 +36,15 @@ def test_ingestion_operational_defaults_are_bounded_and_patch_versioned() -> Non
     assert settings.ingestion_max_attempts == 3
     assert settings.ingestion_stale_grace_seconds == 300
     assert settings.pageindex_version.endswith("+vr4")
+    assert settings.query_node_selection_max_output_tokens == 4_096
+    assert settings.request_deadline_seconds == 180
+
+
+def test_query_runtime_limits_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        Settings(query_node_selection_max_output_tokens=0)
+    with pytest.raises(ValidationError):
+        Settings(request_deadline_seconds=0)
 
 
 @pytest.mark.parametrize("price", [-1, float("inf"), float("nan")])

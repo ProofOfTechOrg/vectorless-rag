@@ -19,7 +19,6 @@ from vectorless_rag.graph import (
     format_inline_citations,
     remove_inline_citations,
 )
-from vectorless_rag.llm import LLMError
 from vectorless_rag.models import ModelCallStage, QueryRun, RunRoute, SqlAudit
 from vectorless_rag.retrieval import RetrievalResult
 from vectorless_rag.schemas import ChatRequest, Evidence, RouteDecision, SQLPlan, SynthesisResult
@@ -108,8 +107,9 @@ class _LLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> RouteDecision:
-        del schema, thinking, stage
+        del schema, thinking, stage, max_output_tokens
         self.system = system
         self.user = user
         return RouteDecision(
@@ -285,22 +285,18 @@ class _SQLLLM:
         *,
         route: RunRoute = RunRoute.sql,
         synthesis_answer: str = "The catalog contains One-page verification fixture.",
-        citation_ids: list[str] | None = None,
         repair_answer: str | None = None,
-        repair_citation_ids: list[str] | None = None,
         sql: str = "SELECT document_id, title FROM agent.paper_catalog_v1",
         synthesis_insufficient: bool = False,
     ) -> None:
         self.route = route
         self.synthesis_answer = synthesis_answer
-        self.citation_ids = citation_ids or []
         self.sql = sql
         self.system_prompts: list[str] = []
         self.user_prompts: list[str] = []
         self.schemas: list[object] = []
         self.synthesis_insufficient = synthesis_insufficient
         self.repair_answer = repair_answer
-        self.repair_citation_ids = repair_citation_ids
         self.synthesis_calls = 0
 
     async def structured(
@@ -311,8 +307,9 @@ class _SQLLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> RouteDecision | SQLPlan | SynthesisResult:
-        del thinking, stage
+        del thinking, stage, max_output_tokens
         self.system_prompts.append(system)
         self.user_prompts.append(user)
         self.schemas.append(schema)
@@ -332,12 +329,10 @@ class _SQLLLM:
             if self.synthesis_calls > 1 and self.repair_answer is not None:
                 return SynthesisResult(
                     answer=self.repair_answer,
-                    citation_ids=self.repair_citation_ids or [],
                     insufficient=self.synthesis_insufficient,
                 )
             return SynthesisResult(
                 answer=self.synthesis_answer,
-                citation_ids=self.citation_ids,
                 insufficient=self.synthesis_insufficient,
             )
         raise AssertionError(f"unexpected schema: {schema}")
@@ -814,7 +809,6 @@ async def test_hybrid_non_empty_sql_rows_bypass_document_insufficiency() -> None
     llm = _SQLLLM(
         route=RunRoute.hybrid,
         synthesis_answer="The catalog row provides the answer [E1].",
-        citation_ids=["E1"],
         synthesis_insufficient=True,
     )
     retriever = _Retriever(RetrievalResult([], [], [], False, 2))
@@ -869,7 +863,6 @@ async def test_documents_empty_retrieval_remains_insufficient() -> None:
     llm = _SQLLLM(
         route=RunRoute.documents,
         synthesis_answer="The catalog includes the fixture [E1].",
-        citation_ids=["E1"],
     )
     adapter = _SQLAdapter()
     session = _Session([])
@@ -896,7 +889,7 @@ async def test_documents_empty_retrieval_remains_insufficient() -> None:
     assert adapter.calls == 0
 
 
-async def test_documents_synthesis_repairs_declared_marker_mismatch_once() -> None:
+async def test_documents_synthesis_uses_inline_markers_as_citation_authority() -> None:
     current = _current("Compare the papers", "thread-doc-marker-mismatch")
     evidence = [
         Evidence(
@@ -911,15 +904,13 @@ async def test_documents_synthesis_repairs_declared_marker_mismatch_once() -> No
         )
         for index in range(1, 3)
     ]
+    llm = _SQLLLM(
+        route=RunRoute.documents,
+        synthesis_answer="The second paper supports this claim [E2].",
+    )
     runner = GraphRunner(
         Settings(),
-        _SQLLLM(
-            route=RunRoute.documents,
-            synthesis_answer="The second paper supports this claim [E2].",
-            citation_ids=["E1"],
-            repair_answer="The second paper supports this claim [E2].",
-            repair_citation_ids=["E2"],
-        ),  # pyright: ignore[reportArgumentType]
+        llm,  # pyright: ignore[reportArgumentType]
         _Retriever(
             RetrievalResult(
                 evidence,
@@ -942,9 +933,58 @@ async def test_documents_synthesis_repairs_declared_marker_mismatch_once() -> No
     assert result["answer"] == "The second paper supports this claim [1]."
     assert [citation["source_id"] for citation in result["citations"]] == [evidence[1].source_id]
     assert result["insufficient"] is False
+    assert llm.synthesis_calls == 1
 
 
-async def test_documents_synthesis_rejects_unknown_inline_citation_marker() -> None:
+async def test_documents_synthesis_repairs_invalid_inline_marker_once() -> None:
+    current = _current("Compare the papers", "thread-doc-marker-repair")
+    evidence = [
+        Evidence(
+            source_type="document",
+            source_id=str(uuid.uuid4()),
+            title=f"Paper {index}",
+            node_id=f"node-{index}",
+            page_start=index,
+            page_end=index,
+            content=f"Evidence {index}",
+            retrieval_reason="Relevant passage",
+        )
+        for index in range(1, 3)
+    ]
+    llm = _SQLLLM(
+        route=RunRoute.documents,
+        synthesis_answer="The fifth paper supports this claim [E5].",
+        repair_answer="The second paper supports this claim [E2].",
+    )
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
+        _Retriever(
+            RetrievalResult(
+                evidence,
+                [uuid.UUID(item.source_id) for item in evidence],
+                [uuid.UUID(item.source_id) for item in evidence],
+                True,
+                1,
+            )
+        ),  # pyright: ignore[reportArgumentType]
+        _SQLAdapter(),  # pyright: ignore[reportArgumentType]
+        _Observability(),  # pyright: ignore[reportArgumentType]
+    )
+
+    result = await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(message=current.question, thread_id=current.thread_id),
+        current,
+    )
+
+    assert result["answer"] == "The second paper supports this claim [1]."
+    assert [citation["source_id"] for citation in result["citations"]] == [evidence[1].source_id]
+    assert result["insufficient"] is False
+    assert llm.synthesis_calls == 2
+
+
+async def test_documents_synthesis_fails_closed_after_unknown_inline_citation_marker() -> None:
     current = _current("Compare the papers", "thread-doc-unknown-marker")
     evidence = [
         Evidence(
@@ -959,13 +999,13 @@ async def test_documents_synthesis_rejects_unknown_inline_citation_marker() -> N
         )
         for index in range(1, 3)
     ]
+    llm = _SQLLLM(
+        route=RunRoute.documents,
+        synthesis_answer="The fifth paper supports this claim [E5].",
+    )
     runner = GraphRunner(
         Settings(),
-        _SQLLLM(
-            route=RunRoute.documents,
-            synthesis_answer="The fifth paper supports this claim [E5].",
-            citation_ids=["E1"],
-        ),  # pyright: ignore[reportArgumentType]
+        llm,  # pyright: ignore[reportArgumentType]
         _Retriever(
             RetrievalResult(
                 evidence,
@@ -979,32 +1019,76 @@ async def test_documents_synthesis_rejects_unknown_inline_citation_marker() -> N
         _Observability(),  # pyright: ignore[reportArgumentType]
     )
 
-    with pytest.raises(LLMError) as error:
-        await runner.run(
-            _Session([]),  # pyright: ignore[reportArgumentType]
-            ChatRequest(message=current.question, thread_id=current.thread_id),
-            current,
-        )
-    assert error.value.failure_code == "upstream_invalid_response"
+    result = await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(message=current.question, thread_id=current.thread_id),
+        current,
+    )
+
+    assert result["answer"] == FALLBACK_ANSWER
+    assert result["citations"] == []
+    assert result["insufficient"] is True
+    assert llm.synthesis_calls == 2
 
 
-async def test_sql_synthesis_rejects_unknown_inline_citation_marker() -> None:
-    current = _current("List the papers", "thread-sql-unknown-marker")
+async def test_documents_synthesis_fails_closed_after_missing_inline_citation() -> None:
+    current = _current("Explain the paper", "thread-doc-missing-marker")
+    document_id = uuid.uuid4()
+    evidence = Evidence(
+        source_type="document",
+        source_id=str(document_id),
+        title="Paper",
+        node_id="node-1",
+        page_start=1,
+        page_end=1,
+        content="Evidence",
+        retrieval_reason="Relevant passage",
+    )
+    llm = _SQLLLM(
+        route=RunRoute.documents,
+        synthesis_answer="The paper supports this claim.",
+    )
     runner = GraphRunner(
         Settings(),
-        _SQLLLM(synthesis_answer="The catalog contains a paper [E9]."),  # pyright: ignore[reportArgumentType]
+        llm,  # pyright: ignore[reportArgumentType]
+        _Retriever(RetrievalResult([evidence], [document_id], [document_id], True, 1)),  # pyright: ignore[reportArgumentType]
+        _SQLAdapter(),  # pyright: ignore[reportArgumentType]
+        _Observability(),  # pyright: ignore[reportArgumentType]
+    )
+
+    result = await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(message=current.question, thread_id=current.thread_id),
+        current,
+    )
+
+    assert result["answer"] == FALLBACK_ANSWER
+    assert result["citations"] == []
+    assert result["insufficient"] is True
+    assert llm.synthesis_calls == 2
+
+
+async def test_sql_synthesis_fails_closed_after_inline_citation_marker() -> None:
+    current = _current("List the papers", "thread-sql-unknown-marker")
+    llm = _SQLLLM(synthesis_answer="The catalog contains a paper [E9].")
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
         object(),  # pyright: ignore[reportArgumentType]
         _SQLAdapter(),  # pyright: ignore[reportArgumentType]
         _Observability(),  # pyright: ignore[reportArgumentType]
     )
 
-    with pytest.raises(LLMError) as error:
-        await runner.run(
-            _Session([]),  # pyright: ignore[reportArgumentType]
-            ChatRequest(message=current.question, thread_id=current.thread_id),
-            current,
-        )
-    assert error.value.failure_code == "upstream_invalid_response"
+    result = await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(message=current.question, thread_id=current.thread_id),
+        current,
+    )
+
+    assert result["answer"] == FALLBACK_ANSWER
+    assert result["citations"] == []
+    assert result["insufficient"] is True
+    assert llm.synthesis_calls == 2
 
 
 async def test_documents_non_empty_insufficient_evidence_preserves_refusal() -> None:

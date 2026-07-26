@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     pageindex_llm_max_attempts: int = 3
     pageindex_async_concurrency: int = 8
     pageindex_max_output_tokens: int = 8_192
+    query_node_selection_max_output_tokens: int = 4_096
     pageindex_call_timeout_seconds: int = 120
     pageindex_timeout_seconds: int = 3_600
     ingestion_max_attempts: int = 3
@@ -50,7 +51,7 @@ class Settings(BaseSettings):
     langfuse_public_key: str | None = None
     langfuse_secret_key: SecretStr | None = None
     api_key_pepper: SecretStr = SecretStr("development-only-change-me")
-    request_deadline_seconds: int = 120
+    request_deadline_seconds: int = 180
     upload_max_bytes: int = 200 * 1024 * 1024
     candidate_limit: int = 50
     catalog_batch_token_limit: int = 24_000
@@ -81,6 +82,7 @@ class Settings(BaseSettings):
         "pageindex_llm_max_attempts",
         "pageindex_async_concurrency",
         "pageindex_max_output_tokens",
+        "query_node_selection_max_output_tokens",
         "pageindex_call_timeout_seconds",
         "pageindex_timeout_seconds",
         "ingestion_max_attempts",
@@ -88,6 +90,7 @@ class Settings(BaseSettings):
         "ingestion_heartbeat_seconds",
         "ingestion_stale_grace_seconds",
         "catalog_batch_token_limit",
+        "request_deadline_seconds",
     )
     @classmethod
     def positive_limits(cls, value: int) -> int:

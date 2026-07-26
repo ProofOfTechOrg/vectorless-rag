@@ -42,8 +42,9 @@ class UnusedLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT:
-        del schema, system, user, thinking, stage
+        del schema, system, user, thinking, stage, max_output_tokens
         raise AssertionError("the evidence cap test does not invoke the LLM")
 
 
@@ -61,8 +62,9 @@ class RangeSelectionLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT:
-        del system, user, thinking, stage
+        del system, user, thinking, stage, max_output_tokens
         if schema is NodeSelection:
             self.node_round += 1
             node_ids = ["n1"] if self.node_round == 1 else ["n2", "n3"]
@@ -183,8 +185,9 @@ class SelectionLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT:
-        del thinking, stage
+        del thinking, stage, max_output_tokens
         self.system = system
         self.user = user
         if schema is not CandidateSelection:
@@ -247,8 +250,9 @@ class CatalogCaptureLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT:
-        del system, thinking, stage
+        del system, thinking, stage, max_output_tokens
         if schema is not CandidateSelection:
             raise AssertionError(f"unexpected schema: {schema}")
         wrapped, payload_text = _wrapped_payload(user)
@@ -411,6 +415,8 @@ class TreeCaptureLLM:
         self.payload_text = ""
         self.wrapped_payload = ""
         self.omitted_choice: str | None = None
+        self.thinking: bool | None = None
+        self.max_output_tokens: int | None = None
 
     async def structured(
         self,
@@ -420,8 +426,11 @@ class TreeCaptureLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT:
-        del system, thinking, stage
+        del system, stage
+        self.thinking = thinking
+        self.max_output_tokens = max_output_tokens
         if schema is not NodeSelection:
             raise AssertionError("an omitted node must not produce evidence")
         self.wrapped_payload, self.payload_text = _wrapped_payload(user)
@@ -531,6 +540,8 @@ async def test_combined_tree_payload_is_bounded_and_rejects_omitted_nodes(
     assert rounds == 1
     assert metrics["evidence_tokens"] == 0
     assert llm.omitted_choice is not None
+    assert llm.thinking is False
+    assert llm.max_output_tokens == 4_096
     assert len(retriever.encoding.encode(llm.wrapped_payload)) <= limit
     assert "&lt;document_data>" in llm.wrapped_payload
     payload = json.loads(llm.payload_text)
@@ -549,6 +560,7 @@ async def test_combined_tree_payload_is_bounded_and_rejects_omitted_nodes(
 class NestedSelectionLLM:
     def __init__(self, document_id: uuid.UUID) -> None:
         self.document_id = document_id
+        self.calls: list[tuple[type[BaseModel], bool, int | None]] = []
 
     async def structured(
         self,
@@ -558,8 +570,10 @@ class NestedSelectionLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT:
-        del system, user, thinking, stage
+        del system, user, stage
+        self.calls.append((schema, thinking, max_output_tokens))
         if schema is NodeSelection:
             return schema.model_validate(
                 {
@@ -621,10 +635,11 @@ async def test_complete_tree_remains_visible_in_round_one_when_it_fits(
         index_digest="d" * 64,
         configuration_hash=None,
     )
+    llm = NestedSelectionLLM(document_id)
     retriever = PageIndexRetriever(
         Settings(catalog_batch_token_limit=2_000),
         MemoryObjectStore(),
-        NestedSelectionLLM(document_id),
+        llm,
     )
 
     async def artifact(session: object, selected: Document) -> _ArtifactView:
@@ -643,6 +658,10 @@ async def test_complete_tree_remains_visible_in_round_one_when_it_fits(
     assert rounds == 1
     assert evidence[0].node_id == "child"
     assert evidence[0].page_start == 2
+    assert llm.calls == [
+        (NodeSelection, False, 4_096),
+        (SufficiencyDecision, True, None),
+    ]
 
 
 class SufficiencyOnlyLLM:
@@ -657,8 +676,9 @@ class SufficiencyOnlyLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT:
-        del system, user, thinking, stage
+        del system, user, thinking, stage, max_output_tokens
         self.schemas.append(schema)
         if schema is not SufficiencyDecision:
             raise AssertionError("a sole evidence node must be selected without the LLM")

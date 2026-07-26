@@ -130,16 +130,17 @@ def test_native_generation_telemetry_contains_only_hashes_and_normalized_tokens(
         "output": content_fingerprint(response),
         "metadata": {"attempt": 2, "finish_reason": "stop"},
         "usage_details": {
-            "input": 11,
+            "input": 5,
             "cache_read_input_tokens": 4,
-            "cache_miss_input_tokens": 7,
             "cache_write_input_tokens": 2,
-            "unattributed_input_tokens": 0,
-            "output": 7,
+            "output": 4,
             "reasoning_output_tokens": 3,
             "total": 18,
         },
     }
+    assert handle.update_payload is not None
+    usage_details = cast(dict[str, int], handle.update_payload["usage_details"])
+    assert sum(value for key, value in usage_details.items() if key != "total") == 18
     assert handle.ended
     serialized = repr((client.start_payload, handle.update_payload))
     for forbidden in (
@@ -157,9 +158,7 @@ def test_token_normalization_preserves_valid_buckets_and_repairs_invalid_partiti
     ) == {
         "input": 3,
         "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
         "cache_write_input_tokens": 0,
-        "unattributed_input_tokens": 3,
         "output": 4,
         "reasoning_output_tokens": 0,
         "total": 7,
@@ -186,9 +185,7 @@ def test_failed_generation_hashes_provider_output_and_normalizes_available_usage
         "usage_details": {
             "input": 5,
             "cache_read_input_tokens": 0,
-            "cache_miss_input_tokens": 0,
             "cache_write_input_tokens": 0,
-            "unattributed_input_tokens": 5,
             "output": 2,
             "reasoning_output_tokens": 0,
             "total": 7,

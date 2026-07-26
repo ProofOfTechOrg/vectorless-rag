@@ -156,13 +156,17 @@ class TokenUsage:
         assert self.output_tokens is not None
         assert self.reasoning_output_tokens is not None
         assert self.total_tokens is not None
+        ordinary_input_tokens = (
+            self.cache_miss_input_tokens
+            - self.cache_write_input_tokens
+            + self.unattributed_input_tokens
+        )
+        ordinary_output_tokens = self.output_tokens - self.reasoning_output_tokens
         return {
-            "input": self.input_tokens,
+            "input": ordinary_input_tokens,
             "cache_read_input_tokens": self.cache_hit_input_tokens,
-            "cache_miss_input_tokens": self.cache_miss_input_tokens,
             "cache_write_input_tokens": self.cache_write_input_tokens,
-            "unattributed_input_tokens": self.unattributed_input_tokens,
-            "output": self.output_tokens,
+            "output": ordinary_output_tokens,
             "reasoning_output_tokens": self.reasoning_output_tokens,
             "total": self.total_tokens,
         }

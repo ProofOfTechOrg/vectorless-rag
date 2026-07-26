@@ -1105,8 +1105,9 @@ class PageIndexRetriever:
                     "the prior round when present.",
                     f"Question: {question}\nPrior missing evidence: {prior_missing or 'none'}\n"
                     + wrap_untrusted_document(payload_json),
-                    thinking=True,
+                    thinking=False,
                     stage=ModelCallStage.query_node_select,
+                    max_output_tokens=self.settings.query_node_selection_max_output_tokens,
                 )
                 choices = (forced + selected.selections)[:32]
             else:

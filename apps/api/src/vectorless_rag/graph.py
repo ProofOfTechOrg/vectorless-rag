@@ -18,7 +18,6 @@ from sqlglot.errors import SqlglotError
 from vectorless_rag.config import Settings
 from vectorless_rag.llm import (
     UNTRUSTED_DOCUMENT_SYSTEM,
-    LLMError,
     StructuredLLM,
     wrap_untrusted_document,
 )
@@ -393,10 +392,15 @@ not answer the question. Treat prior assistant text as conversation context, not
                 RunRoute.hybrid.value,
             }:
                 user_message += f"\nSQL used (catalog metadata only): {sql_query}"
+            citation_instruction = (
+                "Do not include [E#] document citation markers in a SQL-only answer."
+                if selected_route == RunRoute.sql.value
+                else "Attach [E#] immediately after every substantive claim."
+            )
             synthesis = await self.llm.structured(
                 SynthesisResult,
                 UNTRUSTED_DOCUMENT_SYSTEM
-                + "\nAnswer only from the evidence. Attach [E#] to every substantive claim. "
+                + f"\nAnswer only from the evidence. {citation_instruction} "
                 "A successful SQL result, including a zero count or empty row set, is sufficient "
                 "for catalog claims. If other evidence is insufficient, explicitly refuse. "
                 "When the SQL filtered or counted rows by text or pattern matching, say the "
@@ -411,25 +415,18 @@ not answer the question. Treat prior assistant text as conversation context, not
                     synthesis = synthesis.model_copy(
                         update={
                             "answer": "No matching catalog records were found.",
-                            "citation_ids": [],
                             "insufficient": False,
                         }
                     )
 
             def citation_problem(value: SynthesisResult) -> str | None:
-                cited = list(dict.fromkeys(value.citation_ids))
                 markers = set(re.findall(r"\[(E\d+)\]", value.answer))
                 if selected_route == RunRoute.sql.value:
-                    if cited or markers:
-                        return "SQL-only answers cannot declare document evidence markers"
+                    if markers:
+                        return "SQL-only answers cannot contain document evidence markers"
                     return None
-                if any(label not in labels for label in cited):
-                    return "a declared citation does not resolve to evidence"
                 if any(marker not in labels for marker in markers):
                     return "the answer contains an orphan citation marker"
-                missing = [label for label in cited if label not in markers]
-                if missing:
-                    return "declared citations are not attached inline"
                 if not value.insufficient and not markers:
                     return "a grounded answer has no inline citation"
                 return None
@@ -439,10 +436,10 @@ not answer the question. Treat prior assistant text as conversation context, not
                 synthesis = await self.llm.structured(
                     SynthesisResult,
                     UNTRUSTED_DOCUMENT_SYSTEM
-                    + "\nRepair citation placement once. Use only the supplied E# labels. "
-                    "Every citation_id must occur inline immediately after its supported "
-                    "claim. SQL-only answers must contain no E# labels. Do not append a "
-                    "citation list or place orphan markers.",
+                    + "\nRepair inline citation placement once. Use only the supplied [E#] "
+                    "labels and attach each marker immediately after its supported claim. "
+                    "SQL-only answers must contain no [E#] labels. Do not append a citation "
+                    "list or place orphan markers.",
                     user_message
                     + "\nPrior invalid synthesis:\n"
                     + wrap_untrusted_document(synthesis.model_dump_json())
@@ -452,24 +449,20 @@ not answer the question. Treat prior assistant text as conversation context, not
                 )
                 problem = citation_problem(synthesis)
             if problem is not None:
-                raise LLMError(
-                    "upstream_invalid_response",
-                    "The model could not produce valid inline citations.",
-                    attempts=2,
-                    retryable=False,
-                )
+                return {
+                    "answer": (
+                        "I could not find sufficient evidence in the indexed corpus "
+                        "to answer safely."
+                    ),
+                    "citations": [],
+                    "insufficient": True,
+                }
 
-            cited_labels = list(dict.fromkeys(synthesis.citation_ids))
             answer = synthesis.answer
             insufficient = synthesis.insufficient
             markers = set(re.findall(r"\[(E\d+)\]", answer))
             if selected_route != RunRoute.sql.value:
-                cited_labels.extend(
-                    sorted(
-                        markers - set(cited_labels),
-                        key=lambda marker: int(marker[1:]),
-                    )
-                )
+                cited_labels = sorted(markers, key=lambda marker: int(marker[1:]))
             else:
                 cited_labels = []
                 answer = remove_inline_citations(answer, list(labels))

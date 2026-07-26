@@ -9,8 +9,9 @@ import { createStaticSource } from '@astryxdesign/core/Typeahead'
 import { createFileRoute, Outlet, redirect, useNavigate, useRouterState } from '@tanstack/react-router'
 import { FileUp, Library, MessageSquare, Search, Settings } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { useReadiness } from '../hooks/use-readiness'
 import type { Identity } from '../lib/contracts'
-import { getReadiness, getSession, getThreads } from '../server/functions'
+import { getSession, getThreads } from '../server/functions'
 
 export const Route = createFileRoute('/_app')({
   beforeLoad: async ({ abortController }) => {
@@ -39,21 +40,12 @@ function OperatorShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const [isSideNavCollapsed, setIsSideNavCollapsed] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [ready, setReady] = useState<boolean | null>(null)
+  const ready = useReadiness()
   const allowedDestinations = useMemo(
     () => destinations.filter((item) => !item.requiredScope || session.scopes.includes(item.requiredScope)),
     [session.scopes],
   )
   const source = useMemo(() => createStaticSource(allowedDestinations), [allowedDestinations])
-  useEffect(() => {
-    const abortController = new AbortController()
-    getReadiness({ signal: abortController.signal })
-      .then((value) => setReady(value.ready))
-      .catch(() => {
-        if (!abortController.signal.aborted) setReady(false)
-      })
-    return () => abortController.abort()
-  }, [])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {

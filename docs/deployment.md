@@ -57,12 +57,14 @@ Keep these values aligned across `.env`, Compose, and Helm:
 | --- | ---: | --- |
 | `PAGEINDEX_ASYNC_CONCURRENCY` | 8 | Maximum concurrent PageIndex provider calls |
 | `PAGEINDEX_MAX_OUTPUT_TOKENS` | 8,192 | Explicit output ceiling used by calls and reservations |
+| `QUERY_NODE_SELECTION_MAX_OUTPUT_TOKENS` | 4,096 | Output ceiling for non-thinking query node selection |
 | `PAGEINDEX_CALL_TIMEOUT_SECONDS` | 120 | Per-call timeout |
 | `INGESTION_LEASE_SECONDS` | 120 | Renewable job lease |
 | `INGESTION_HEARTBEAT_SECONDS` | 30 | Lease renewal interval |
 | `CATALOG_BATCH_TOKEN_LIMIT` | 24,000 | Complete-catalog map batch size |
 | `DOCUMENT_LIMIT` | 8 | Maximum selected documents |
 | `EVIDENCE_TOKEN_LIMIT` | 40,000 | Public evidence ceiling |
+| `REQUEST_DEADLINE_SECONDS` | 180 | Complete chat request deadline |
 | `PILOT_DOCUMENT_LIMIT` | 25 | Registration safety gate |
 | `PILOT_COST_LIMIT_USD` | 10 | Frozen-pilot cost ceiling |
 

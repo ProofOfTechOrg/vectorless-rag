@@ -64,6 +64,7 @@ class StructuredLLM(Protocol):
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT: ...
 
 
@@ -120,7 +121,7 @@ class DeepSeekLLM:
         )
         self.provider_gate = provider_gate or ProviderGate(settings)
 
-    def _client(self, thinking: bool) -> ChatDeepSeek:
+    def _client(self, thinking: bool, max_output_tokens: int | None = None) -> ChatDeepSeek:
         extra_body: dict[str, object] = {
             "thinking": {"type": "enabled" if thinking else "disabled"},
         }
@@ -128,7 +129,11 @@ class DeepSeekLLM:
             model=self.settings.deepseek_model,
             api_key=self.api_key,
             max_retries=0,
-            max_tokens=self.settings.pageindex_max_output_tokens,
+            max_tokens=(
+                max_output_tokens
+                if max_output_tokens is not None
+                else self.settings.pageindex_max_output_tokens
+            ),
             extra_body=extra_body,
             reasoning_effort="high" if thinking else None,
         )
@@ -141,6 +146,7 @@ class DeepSeekLLM:
         thinking: bool,
         *,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
         attempt: int = 1,
         logical_call_id: uuid.UUID | None = None,
         retry_delay_ms: int | None = None,
@@ -152,7 +158,7 @@ class DeepSeekLLM:
             system = (
                 f"{system}\nReturn only a JSON object matching this JSON Schema:\n{schema_json}"
             )
-        runnable = self._client(thinking).with_structured_output(
+        runnable = self._client(thinking, max_output_tokens).with_structured_output(
             schema, method=method, include_raw=True
         )
         prompt_fingerprint_source = f"{system}\0{user}"
@@ -323,6 +329,7 @@ class DeepSeekLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT:
         corrected = False
         last_error: Exception | None = None
@@ -346,6 +353,7 @@ class DeepSeekLLM:
                     prompt,
                     thinking,
                     stage=stage,
+                    max_output_tokens=max_output_tokens,
                     attempt=attempt,
                     logical_call_id=logical_call_id,
                     retry_delay_ms=retry_delay_ms,

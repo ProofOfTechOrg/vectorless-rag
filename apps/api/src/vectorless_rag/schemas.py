@@ -115,7 +115,6 @@ class SufficiencyDecision(StrictModel):
 
 class SynthesisResult(StrictModel):
     answer: str
-    citation_ids: list[str]
     insufficient: bool = False
 
 

@@ -68,8 +68,9 @@ class _UnusedRouterLLM:
         *,
         thinking: bool,
         stage: ModelCallStage,
+        max_output_tokens: int | None = None,
     ) -> StructuredT:
-        del schema, system, user, thinking, stage
+        del schema, system, user, thinking, stage, max_output_tokens
         raise AssertionError("candidate lookup does not invoke the LLM")
 
 

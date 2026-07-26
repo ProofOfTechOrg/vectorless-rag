@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage
 from pydantic import SecretStr
 from pytest import MonkeyPatch, raises
 
+import vectorless_rag.llm as llm_module
 from vectorless_rag.config import Settings
 from vectorless_rag.llm import DeepSeekLLM, LLMError, StructuredOutputError
 from vectorless_rag.models import ModelCallOutcome, ModelCallStage, RunRoute
@@ -103,8 +104,8 @@ async def test_thinking_structured_output_uses_json_mode(monkeypatch: MonkeyPatc
     llm = DeepSeekLLM(Settings(deepseek_api_key=SecretStr("test-key")))
     calls: dict[str, Any] = {}
 
-    def client(thinking: bool) -> _Client:
-        del thinking
+    def client(thinking: bool, max_output_tokens: int | None = None) -> _Client:
+        del thinking, max_output_tokens
         return _Client(calls)
 
     monkeypatch.setattr(llm, "_client", client)
@@ -131,8 +132,8 @@ async def test_non_thinking_structured_output_keeps_function_calling(
     llm = DeepSeekLLM(Settings(deepseek_api_key=SecretStr("test-key")))
     calls: dict[str, Any] = {}
 
-    def client(thinking: bool) -> _Client:
-        del thinking
+    def client(thinking: bool, max_output_tokens: int | None = None) -> _Client:
+        del thinking, max_output_tokens
         return _Client(calls)
 
     monkeypatch.setattr(llm, "_client", client)
@@ -149,6 +150,73 @@ async def test_non_thinking_structured_output_keeps_function_calling(
     assert calls["messages"][0][1] == "Route this request."
 
 
+def test_client_uses_per_call_output_cap(monkeypatch: MonkeyPatch) -> None:
+    llm = DeepSeekLLM(
+        Settings(
+            deepseek_api_key=SecretStr("test-key"),
+            pageindex_max_output_tokens=8_192,
+        )
+    )
+    calls: list[dict[str, object]] = []
+
+    def client(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return object()
+
+    monkeypatch.setattr(llm_module, "ChatDeepSeek", client)
+
+    llm._client(False, 4_096)  # pyright: ignore[reportPrivateUsage]
+    llm._client(False)  # pyright: ignore[reportPrivateUsage]
+
+    assert calls[0]["max_tokens"] == 4_096
+    assert calls[1]["max_tokens"] == 8_192
+
+
+async def test_per_call_output_cap_is_preserved_across_retries(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    llm = DeepSeekLLM(Settings(deepseek_api_key=SecretStr("test-key")))
+    calls: list[tuple[int, int | None]] = []
+
+    async def invoke(
+        schema: type[RouteDecision],
+        system: str,
+        user: str,
+        thinking: bool,
+        *,
+        stage: ModelCallStage,
+        max_output_tokens: int | None = None,
+        attempt: int = 1,
+        **kwargs: object,
+    ) -> RouteDecision:
+        del schema, system, user, thinking, stage, kwargs
+        calls.append((attempt, max_output_tokens))
+        if attempt == 1:
+            raise TimeoutError
+        return RouteDecision(
+            route=RunRoute.sql,
+            reason="catalog inventory",
+            standalone_question="List every paper title",
+        )
+
+    async def no_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(llm, "_invoke", invoke)
+    monkeypatch.setattr(llm_module.asyncio, "sleep", no_sleep)
+
+    await llm.structured(
+        RouteDecision,
+        "system",
+        "user",
+        thinking=False,
+        stage=ModelCallStage.query_route,
+        max_output_tokens=4_096,
+    )
+
+    assert calls == [(1, 4_096), (2, 4_096)]
+
+
 async def test_usage_row_starts_before_provider_and_same_row_is_finalized(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -158,8 +226,8 @@ async def test_usage_row_starts_before_provider_and_same_row_is_finalized(
         ledger=_Ledger(calls),  # pyright: ignore[reportArgumentType]
     )
 
-    def client(thinking: bool) -> _Client:
-        del thinking
+    def client(thinking: bool, max_output_tokens: int | None = None) -> _Client:
+        del thinking, max_output_tokens
         return _Client(calls)
 
     monkeypatch.setattr(llm, "_client", client)
@@ -189,8 +257,8 @@ async def test_usage_finalize_failure_never_retries_provider(
         ledger=_Ledger(calls, fail_finalize=True),  # pyright: ignore[reportArgumentType]
     )
 
-    def client(thinking: bool) -> _Client:
-        del thinking
+    def client(thinking: bool, max_output_tokens: int | None = None) -> _Client:
+        del thinking, max_output_tokens
         return _Client(calls)
 
     monkeypatch.setattr(llm, "_client", client)
