@@ -10,9 +10,10 @@ COPY --chown=node:node apps/web ./apps/web
 
 FROM source AS development
 ENV NODE_ENV=development HOST=0.0.0.0 PORT=3001
+WORKDIR /app/apps/web
 USER node
 EXPOSE 3001
-CMD ["pnpm", "--filter", "@vectorless-rag/web", "exec", "vite", "dev", "--host", "0.0.0.0", "--port", "3001"]
+CMD ["node_modules/.bin/vite", "dev", "--host", "0.0.0.0", "--port", "3001"]
 
 FROM source AS build
 RUN pnpm --filter @vectorless-rag/web build \
