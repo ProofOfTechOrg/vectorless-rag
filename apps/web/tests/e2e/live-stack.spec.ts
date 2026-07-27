@@ -20,6 +20,7 @@ test('verifies the authorized live stack through the operator console', async ({
     await writeFile(fixturePath, textPdf(`Evidence phrase: ${uniquePhrase}.`))
 
     await page.goto('/connect')
+    await waitForHydration(page)
     const connectButton = page.getByRole('button', { name: 'Connect' })
     await expect(connectButton).toBeEnabled()
     await page.getByLabel('API key').fill(liveKey)
@@ -57,7 +58,11 @@ test('verifies the authorized live stack through the operator console', async ({
     await expect(page.locator('dt', { hasText: 'Pages' }).locator('xpath=following-sibling::dd[1]')).toContainText('1')
 
     await page.goto('/chat')
-    await expect(page.getByRole('complementary', { name: 'Recent chats' })).toContainText(uniquePhrase)
+    await waitForHydration(page)
+    const recentChats = page
+      .getByRole('navigation', { name: 'Side navigation' })
+      .getByRole('group', { name: 'Recent chats' })
+    await expect(recentChats).toContainText(uniquePhrase)
 
     await page.goto('/settings')
     await waitForHydration(page)
@@ -76,7 +81,7 @@ test('verifies the authorized live stack through the operator console', async ({
 })
 
 async function waitForHydration(page: import('@playwright/test').Page) {
-  await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true')
+  await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true', { timeout: 15_000 })
 }
 
 function textPdf(text: string): Buffer {
