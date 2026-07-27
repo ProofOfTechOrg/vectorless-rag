@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import { AppearanceProvider } from '../components/AppearanceProvider'
 import { RouteError } from '../components/RouteError'
 
-import appCss from '../styles.css?url'
+import '../styles.css'
 
 const THEME_INIT_SCRIPT = `(function(){try{var mode=localStorage.getItem('vectorless:appearance');if(mode==='light'||mode==='dark'){document.documentElement.setAttribute('data-theme',mode);}else{document.documentElement.removeAttribute('data-theme');}}catch(_){document.documentElement.removeAttribute('data-theme');}})();`
 
@@ -20,12 +20,6 @@ export const Route = createRootRoute({
       },
       {
         title: 'Vectorless RAG Operator Console',
-      },
-    ],
-    links: [
-      {
-        rel: 'stylesheet',
-        href: appCss,
       },
     ],
   }),

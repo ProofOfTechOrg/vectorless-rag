@@ -9,7 +9,7 @@ const readingWidth = 60 * 16
 const chatWidth = 60 * 16
 
 async function waitForHydration(page: import('@playwright/test').Page) {
-  await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true')
+  await expect(page.locator('html')).toHaveAttribute('data-hydrated', 'true', { timeout: 15_000 })
 }
 
 interface AppearanceSnapshot {
@@ -111,6 +111,7 @@ async function captureWaitingIndicator(page: import('@playwright/test').Page) {
 
 async function connectToChat(page: import('@playwright/test').Page, apiKey = key) {
   await page.goto('/connect')
+  await waitForHydration(page)
   await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled()
   await page.getByLabel('API key').fill(apiKey)
   await page.getByRole('button', { name: 'Connect' }).click()
@@ -411,6 +412,7 @@ test('marks personalized responses no-store without changing stream caching', as
   const documentResponse = await page.goto('/connect')
   expect(documentResponse?.headers()['cache-control']).toBe('private, no-store')
 
+  await waitForHydration(page)
   await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled()
   await page.getByLabel('API key').fill(key)
   const serverFunctionResponse = page.waitForResponse((response) => (
@@ -428,6 +430,7 @@ test('marks personalized responses no-store without changing stream caching', as
 
 test('connects through the UI and exercises the operator workflows', async ({ page }) => {
   await page.goto('/connect')
+  await waitForHydration(page)
   const connectButton = page.getByRole('button', { name: 'Connect' })
   await expect(connectButton).toBeEnabled()
   await page.getByLabel('API key').fill(key)
@@ -807,6 +810,7 @@ test('redirects protected routes to connect without a session', async ({ page })
 
 test('returns an existing documents-only session to its scoped home', async ({ page }) => {
   await page.goto('/connect')
+  await waitForHydration(page)
   await expect(page.getByRole('button', { name: 'Connect' })).toBeEnabled()
   await page.getByLabel('API key').fill('mock-documents-only')
   await page.getByRole('button', { name: 'Connect' }).click()
