@@ -15,7 +15,8 @@ EXPOSE 3001
 CMD ["pnpm", "--filter", "@vectorless-rag/web", "exec", "vite", "dev", "--host", "0.0.0.0", "--port", "3001"]
 
 FROM source AS build
-RUN pnpm --filter @vectorless-rag/web build
+RUN pnpm --filter @vectorless-rag/web build \
+    && pnpm --filter @vectorless-rag/web production-smoke
 
 FROM node:22.23-alpine AS runtime
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3001
