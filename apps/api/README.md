@@ -1,8 +1,8 @@
+<!-- Content type: Reference -->
+<!-- Content plan: Goal: route API package contributors to repository commands and documentation. Audience: Python contributors. Content: package scope, setup, tests, and repository links. Open questions: none. -->
+
 # Vectorless RAG API
 
-Python package for the Vectorless RAG FastAPI service and ingestion worker.
-Repository-wide setup, operations, deployment, and browser usage are documented in
-the [root README](../../README.md).
+This package contains the Vectorless RAG FastAPI service, ingestion worker, Alembic migrations, evaluation tools, and Python tests. Repository-wide setup, operations, deployment, and browser usage are documented in the [project overview](../../README.md).
 
-From the repository root, use `make api-install`, `make api-test`, and
-`make api-check`. From this directory, the equivalent package commands use `uv`.
+Run `make api-install`, `make api-test`, and `make api-check` from the repository root. Run equivalent package commands with `uv` from this directory.

@@ -1,4 +1,5 @@
 <!-- Content type: Reference -->
+<!-- Content plan: Goal: identify every supported Make command and its operator contract. Audience: contributors and operators. Content: setup, development, tests, lifecycle, corpus, evaluation, and diagnostics. Open questions: none. -->
 
 # Command reference
 
@@ -6,16 +7,16 @@ This page lists every public Make target and the variables that alter operator c
 
 | Area | Commands |
 | --- | --- |
-| Discovery and environment | `make help`, `make env` |
+| Discovery and environment | `make help`, `make env`, `make init` |
 | Dependencies | `make install`, `make api-install`, `make web-install` |
 | Formatting | `make format`, `make api-format`, `make web-format` |
 | Linting | `make lint`, `make api-lint`, `make web-lint` |
 | Type checking | `make typecheck`, `make api-typecheck`, `make web-typecheck` |
-| Unit and integration tests | `make test`, `make api-test`, `make web-test`, `make test-unit`, `make test-integration` |
+| Unit and integration tests | `make test`, `make api-test`, `make web-test`, `make test-unit`, `make test-integration`, `make test-integration-stack` |
 | Package builds | `make api-build`, `make web-build`, `make web-production-smoke` |
 | Browser tests | `make playwright-install`, `make playwright`, `make playwright-live PLAYWRIGHT_BASE_URL=http://127.0.0.1:3001` |
 | Web diagnostics | `make react-doctor`, `make react-doctor-diff`, `make astryx-doctor` |
-| Manifest validation | `make workflow-check`, `make migration-check`, `make compose-check`, `make helm-lint`, `make helm-template`, `make helm-check` |
+| Documentation and manifest validation | `make docs-check`, `make workflow-check`, `make migration-check`, `make compose-check`, `make helm-lint`, `make helm-template`, `make helm-check` |
 | Image builds | `make docker-build-api`, `make docker-build-web`, `make docker-build` |
 | Validation suites | `make api-check`, `make web-check`, `make deploy-check`, `make check ENV_FILE=.env.example`, `make ci` |
 | Lifecycle | `make up`, `make rebuild`, `make dev`, `make dev-build`, `make dev-health`, `make down`, `make stop`, `make restart`, `make restart-app`, `make restart-web`, `make restart-langfuse`, `make restart-observability`, `make ps`, `make logs SERVICE=worker`, `make health`, `make web-dev` |
@@ -26,11 +27,17 @@ This page lists every public Make target and the variables that alter operator c
 
 `make pilot-run` writes its immutable result to `apps/api/pilots/run/result.json`. Set `PILOT_OUTPUT=path/to/result.json` to select another new output directory. The target fails before provider work when that directory already exists.
 
+`make init` atomically creates a mode-600 `.env` with generated local infrastructure and session secrets. It leaves `DEEPSEEK_API_KEY` blank and refuses to overwrite an existing file.
+
+`make test-integration-stack` uses port `55432` and a unique disposable Compose project. Set `TEST_POSTGRES_PORT` to another unused port. The cleanup trap removes only that project and its volumes.
+
+`make docs-check` validates required community files, local Markdown targets and anchors, content declarations, language-tagged fences, and this documentation index.
+
 `make evaluation-seed` streams the reviewed PageIndex suite into the API container with an explicit suite selector and corpus manifest. Direct script callers must pass `--suite pageindex-v2` when the dataset arrives through `/dev/stdin`.
 
 `make playwright-live` exits with status 2 unless both `PLAYWRIGHT_BASE_URL` and the process-only `PLAYWRIGHT_API_KEY` are set. Use the [disposable live-stack procedure](operator-guide.md#verify-a-disposable-live-stack) to create both values without saving the key.
 
-`make ci` installs Playwright Chromium and its operating-system dependencies through `make playwright-install` before it runs browser tests.
+`make ci` runs the isolated PostgreSQL integration gate and installs Playwright Chromium with its operating-system dependencies before browser tests.
 
 ## Run the local development stack
 

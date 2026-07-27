@@ -1,4 +1,5 @@
 <!-- Content type: How-to -->
+<!-- Content plan: Goal: back up and restore a consistent Vectorless RAG deployment. Audience: operators. Content: persistent state, credentials, telemetry classification, restoration, and validation. Open questions: provider-specific backup automation. -->
 
 # Back up and restore Vectorless RAG
 

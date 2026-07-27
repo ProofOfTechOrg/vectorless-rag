@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a scoped change to Vectorless RAG.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the operator or research problem without prescribing an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: State the observable result and who benefits.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: List existing commands, workflows, or external tools you evaluated.
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Security and provider-cost impact
+      description: Note any credential, document-data, model-call, or deployment implications.
+    validations:
+      required: true

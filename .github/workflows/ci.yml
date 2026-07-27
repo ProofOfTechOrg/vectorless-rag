@@ -3,25 +3,29 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   api:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v8.3.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with: {version: "0.11.29", enable-cache: true}
       - run: make api-install
       - run: make api-lint
       - run: make api-typecheck
       - run: make api-test
       - run: make migration-check
+      - run: make test-integration-stack
 
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with: {node-version: 22, cache: pnpm}
       - run: make web-install
       - run: make playwright-install
@@ -38,11 +42,13 @@ jobs:
   deployment:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v8.3.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with: {version: "0.11.29"}
-      - uses: azure/setup-helm@v5
+      - uses: Azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with: {version: "v4.2.3"}
       - run: make api-install
+      - run: make docs-check
       - run: make workflow-check
       - run: make compose-check ENV_FILE=.env.example
       - run: make helm-check

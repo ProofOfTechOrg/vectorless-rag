@@ -1,55 +1,49 @@
 <!-- Content type: Landing -->
+<!-- Content plan: Goal: help researchers decide whether to run Vectorless RAG and reach the first cited answer. Audience: researchers, operators, and contributors. Content: status, use cases, architecture, costs, startup, testing, and project links. Open questions: measured vector-versus-PageIndex answer quality at full-corpus scale. -->
 
 # Vectorless RAG
 
-A self-hosted research application for asking grounded questions across a local PDF corpus without embeddings or a vector database. The browser-first Vectorless RAG Operator Console uses ASTRYX and TanStack Start. Its server-side BFF stores the API key in an encrypted HttpOnly cookie and calls FastAPI.
+[![CI](https://github.com/ProofOfTechOrg/vectorless-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/ProofOfTechOrg/vectorless-rag/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/ProofOfTechOrg/vectorless-rag)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/ProofOfTechOrg/vectorless-rag?include_prereleases)](https://github.com/ProofOfTechOrg/vectorless-rag/releases)
 
-PostgreSQL applies explicit metadata constraints and exact-match signals, DeepSeek reasons over the complete eligible catalog in bounded batches, and PageIndex retrieves from validated hierarchical trees. Responses include inline, resolvable page citations.
+Vectorless RAG is a self-hosted research preview for grounded question answering over local Portable Document Format (PDF) files. It uses PageIndex hierarchies instead of embeddings or a vector database, then returns inline citations that resolve to document pages.
 
-## Quick start
+Version 0.2.0 is a prerelease. It supports evaluation and bounded pilots, not production stability or unattended full-corpus ingestion.
 
-Requirements: Docker Compose 2.22 or later and GNU Make. Local package development also uses Python 3.12, `uv`, Node 22, and pnpm. Helm 3 is required only to validate or deploy the Kubernetes chart.
+## Choose this project for bounded research
 
-Run `make download-corpus` before `make up` if you want the full test corpus. The download is optional and requires Bash, `curl`, and approximately 1.5 GB of free space.
+Vectorless RAG fits these use cases:
 
-```bash
-make env
-make secret-api-pepper
-make secret-session
-make secrets-langfuse
-# Edit .env: replace change-me values and set DEEPSEEK_API_KEY.
-make up
-make bootstrap-key NAME=browser-operator
-```
+- Compare hierarchical, vectorless retrieval with a conventional vector retrieval-augmented generation (RAG) system
+- Ask cross-document questions over a small, controlled PDF corpus
+- Inspect retrieval routes, durable ingestion jobs, citations, token use, and provider costs
+- Run a self-hosted browser console with scoped API keys and server-side credential storage
 
-Save the one-time `vrag_…` key, open [http://localhost:3001](http://localhost:3001), and enter it on `/connect`. Langfuse remains on port 3000 and FastAPI/OpenAPI on [http://localhost:8000/docs](http://localhost:8000/docs).
+Do not use this preview for regulated workloads, scanned PDFs that require optical character recognition (OCR), or an unreviewed full-corpus migration.
 
-The key is validated by FastAPI, encrypted with AES-256-GCM, and stored for eight hours in an HttpOnly, `SameSite=Lax`, `Path=/` cookie. Production uses `Secure` and a `__Host-` name. It is never placed in browser storage, a URL, an SSR payload, or a browser-readable cookie.
+## Understand costs and limits before starting
 
-## Download the test corpus
+Ingestion and live chat call DeepSeek and can incur provider charges. The default safety controls cap registration at 25 documents, keep full-corpus indexing disabled, and enforce a $10 frozen-pilot ceiling. Provider prices can change, so check the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/) before a paid run.
 
-The repository tracks the 537 arXiv IDs used for corpus testing, but it does not distribute the PDFs. This command downloads missing PDFs directly from arXiv into `arxiv-pdfs`:
+The configured `deepseek-v4-pro` model remains available in that reference. Deterministic unit, integration, deployment, and browser tests do not require provider credentials.
 
-```bash
-make download-corpus
-```
+Current limitations include:
 
-Set `ARXIV_PDF_HOST_DIR` when your Compose corpus mount uses another host directory:
+- Born-digital PDFs only, with no OCR
+- No API-key lifecycle interface or embedded PDF viewer
+- Source builds only, with no package-registry or container-registry release
+- A pilot gate instead of a production-scale claim
+- No final vector-versus-PageIndex quality verdict
 
-```bash
-make download-corpus ARXIV_PDF_HOST_DIR=/srv/vectorless/arxiv-pdfs
-```
+## Follow the request path
 
-The command validates each response before installing it as `arxiv_id.pdf`. Reruns skip valid existing PDFs without network requests, while invalid existing paths remain untouched and cause a nonzero exit status.
-
-Downloading only creates local files. It does not start the stack or queue ingestion. After the stack is running, `make sync-corpus` queues mounted files up to the configured 25-document safety gate. The frozen pilot uses `make pilot-run`, which selects only its tracked manifest; do not use ordinary full-directory sync for that run. See the [command reference](docs/commands.md#download-the-test-corpus) for failure handling and request-rate details.
-
-## Architecture
+The browser-facing frontend (BFF) keeps API keys out of browser-readable storage. FastAPI authorizes each API request, LangGraph coordinates retrieval, and a durable worker builds PageIndex artifacts.
 
 ```mermaid
 flowchart LR
   Browser -->|same origin| BFF[TanStack Start BFF]
-  BFF -->|X-API-Key, server only| API[FastAPI]
+  BFF -->|server-side API key| API[FastAPI]
   API --> Auth[Scoped API keys]
   API --> Graph[LangGraph]
   Graph --> Catalog[(PostgreSQL)]
@@ -61,76 +55,54 @@ flowchart LR
   Worker --> Objects
 ```
 
-Browser requests never call FastAPI directly. TanStack server functions and routes authorize at their own boundary, validate runtime responses, enforce the configured full `APP_ORIGIN` on mutations, and clear a rejected session after an upstream `401`. Chat SSE is proxied without re-buffering and propagates cancellation.
+Docker Compose runs the console, API, worker, PostgreSQL, MinIO, Langfuse, ClickHouse, and Redis. The Helm chart exposes the same application boundaries for Kubernetes.
 
-## Console
+## Start with one PDF
 
-- `/connect`: API-key validation, safe errors, and bootstrap help.
-- `/chat` and `/chat/$threadId`: recent threads, route/progress states, Markdown, citations, cancel, retry, and feedback.
-- `/documents` and `/documents/$documentId`: cursor pagination, responsive table/list views, metadata, topics, status, diagnostics, and citation landing pages.
-- `/ingestion`: PDF upload, durable lease-backed job polling, mounted-corpus sync modes, provider state, and dynamic pilot capacity.
-- `/settings`: key identity/scopes, infrastructure readiness, sanitized provider state, system/light/dark appearance, setup details, and logout.
-
-The UI hides or disables actions outside the key's scopes, while FastAPI remains the authorization boundary.
-
-## Repository layout
-
-```text
-apps/api/                   Python package, tests, Alembic, evaluation, scripts, image
-apps/web/                   TanStack Start app, Vitest, Playwright, Node image
-infra/docker/postgres-init/ PostgreSQL first-start initialization
-infra/helm/vectorless-rag/ Full-stack Helm chart
-docs/                       Security, deployment, operator, command, evaluation, backup docs
-compose.yaml                Local full stack
-Makefile                    Repository command surface
-arxiv-pdfs/                 Git-ignored, user-owned local corpus
-```
-
-## Development and verification
+You need Docker Compose 2.22 or later, GNU Make, Python 3.12, and `uv`. Run these commands from the repository root:
 
 ```bash
-make dev              # full Compose stack with API, worker, and web reload
-make dev-health       # verify the web service is running through Vite
-make dev-build        # optional development image prebuild/troubleshooting
-make web-dev          # host web on :3001 against the Compose API on :8000
-make install          # install host API and web dependencies
+make init
+# Add DEEPSEEK_API_KEY to .env.
+make up
+make bootstrap-key NAME=browser-operator
+```
+
+Save the one-time `vrag_…` key. Open [the local operator console](http://localhost:3001/connect), enter the key, and upload one born-digital PDF from **Ingestion**. Ask a question from **Chat** after ingestion succeeds.
+
+The stack stores service data in named volumes. Stop containers without deleting data:
+
+```bash
+make down
+```
+
+Read [get started with one cited answer](docs/getting-started.md) for prerequisites, expected states, and cleanup.
+
+## Run provider-free verification
+
+Install the frozen development dependencies before running the complete local gates:
+
+```bash
+make install
+make docs-check
 make api-check
+make test-integration-stack
 make web-check
+make playwright
 make deploy-check ENV_FILE=.env.example
-make playwright-install # install Chromium and its operating-system dependencies
-make playwright       # deterministic mock-upstream browser suite
 make docker-build
-make ci               # local CI equivalent
 ```
 
-Use `make help` or the [command reference](docs/commands.md) for every target. Follow the [live verification workflow](docs/operator-guide.md#verify-a-disposable-live-stack) before running `make playwright-live`.
+`make playwright` uses the existing mock upstream only for deterministic browser coverage. It is not a product demo and does not replace the paid release gate.
 
-`make dev` is the canonical active-development command. It runs in the foreground, builds the current images, and mounts local API and web source into the containers. Web source edits update through Vite hot module replacement. Changes to `apps/web/package.json`, either workspace manifest, `pnpm-lock.yaml`, or `apps/web/Dockerfile` automatically rebuild and recreate the web service. `make dev-build` remains available as an optional image prebuild or troubleshooting command. Docker Compose 2.22 or later is required for these watch rules.
+Read [choose a test tier](docs/testing.md) for test prerequisites and provider boundaries.
 
-Changes to `.env`, `compose.yaml`, or `compose.dev.yaml` require stopping `make dev` with Ctrl+C and rerunning it so Compose can resolve the updated service configuration.
+## Find the next task
 
-`make up` starts an immutable deployment-style stack in the background and does not hot-reload or force image rebuilds. Run `make rebuild` to rebuild and recreate the complete stack. `make restart-app` rebuilds only API and worker, while `make restart-web` rebuilds only the production-style frontend. These commands preserve named volumes.
+The [documentation index](docs/README.md) routes setup, operation, deployment, security, evaluation, and historical design work. Start with:
 
-## Ingestion safety
-
-The default 25-document gate and $10 frozen-pilot ceiling remain enabled; full-corpus indexing remains disabled. Upload born-digital PDFs through the UI or use bounded sync. OCR and recursive/arbitrary server paths are out of scope. Use `make pilot-check` and the manifest-driven `make pilot-run` for the paid v2 pilot. See the [operator guide](docs/operator-guide.md).
-
-## Advanced API client path
-
-All `/v1` routes use `X-API-Key`; `/health/live` and `/health/ready` are public.
-
-```bash
-export VECTORLESS_RAG_ADMIN_KEY=vrag_replace_me
-curl --fail --silent --show-error http://localhost:8000/v1/auth/me \
-  -H "X-API-Key: $VECTORLESS_RAG_ADMIN_KEY"
-curl --fail --silent --show-error -X POST http://localhost:8000/v1/chat \
-  -H "X-API-Key: $VECTORLESS_RAG_ADMIN_KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"Compare retrieval quality in the indexed papers.","constraints":{}}'
-```
-
-`GET /v1/auth/me` returns only key name and scopes. `GET /v1/threads?limit=&cursor=` returns key-isolated recent threads ordered by activity. OpenAPI documents the complete surface.
-
-## Deployment
-
-`compose.yaml` runs web (3001), Langfuse (3000), API (8000), worker, PostgreSQL, ClickHouse, Redis, and MinIO while preserving the existing named volumes. The chart in `infra/helm/vectorless-rag` has separate API and optional frontend ingresses, services, probes, resources, and secret wiring. Read [deployment](docs/deployment.md) and [security](docs/security.md) before exposing the application.
+- [Contributing](CONTRIBUTING.md) for development and pull requests
+- [Security policy](SECURITY.md) for private vulnerability reports
+- [Support](SUPPORT.md) for questions and reproducible defects
+- [Changelog](CHANGELOG.md) for release status and limitations
+- [MIT License](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md) for redistribution terms

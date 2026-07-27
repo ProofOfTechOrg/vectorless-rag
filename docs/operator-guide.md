@@ -1,4 +1,5 @@
 <!-- Content type: How-to -->
+<!-- Content plan: Goal: operate bounded ingestion, inspect browser workflows, and run credential-safe live verification. Audience: local and release operators. Content: connection, ingestion, pilot safety, artifacts, browser operations, and disposable live tests. Open questions: none. -->
 
 # Operate Vectorless RAG
 

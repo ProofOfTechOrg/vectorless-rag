@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import stat
+import subprocess
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -159,3 +163,113 @@ def test_pilot_reserves_output_before_running(
 
     assert output.read_text(encoding="utf-8").endswith("\n")
     assert not (output.parent / ".result.json.tmp").exists()
+
+
+def test_environment_initializer_is_atomic_private_and_non_overwriting(tmp_path: Path) -> None:
+    root = API_ROOT.parents[1]
+    template = root / ".env.example"
+    output = tmp_path / ".env"
+    command = [
+        sys.executable,
+        str(root / "scripts/init_env.py"),
+        "--template",
+        str(template),
+        "--output",
+        str(output),
+    ]
+
+    processes = [
+        subprocess.Popen(  # noqa: S603
+            command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        for _ in range(2)
+    ]
+    results = [process.communicate(timeout=10) for process in processes]
+    return_codes = sorted(process.wait() for process in processes)
+
+    assert return_codes == [0, 2]
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert not list(tmp_path.glob(".env.tmp-*"))
+
+    assignments = dict(
+        line.split("=", maxsplit=1)
+        for line in output.read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    )
+    assert assignments["DEEPSEEK_API_KEY"] == ""
+
+    hex_keys = {
+        "SESSION_SECRET",
+        "POSTGRES_PASSWORD",
+        "RAG_OWNER_PASSWORD",
+        "RAG_APP_PASSWORD",
+        "RAG_READER_PASSWORD",
+        "API_KEY_PEPPER",
+        "MINIO_ROOT_PASSWORD",
+        "CLICKHOUSE_PASSWORD",
+        "REDIS_PASSWORD",
+        "LANGFUSE_DB_PASSWORD",
+        "LANGFUSE_NEXTAUTH_SECRET",
+        "LANGFUSE_SALT",
+        "LANGFUSE_ENCRYPTION_KEY",
+    }
+    for key in hex_keys:
+        assert re.fullmatch(r"[0-9a-f]{64}", assignments[key]), key
+    assert re.fullmatch(r"lf_pk_[0-9a-f]{64}", assignments["LANGFUSE_INIT_PROJECT_PUBLIC_KEY"])
+    assert re.fullmatch(r"lf_sk_[0-9a-f]{64}", assignments["LANGFUSE_INIT_PROJECT_SECRET_KEY"])
+    assert assignments["LANGFUSE_INIT_USER_PASSWORD"] == ""
+
+    combined_output = "\n".join(value for result in results for value in result)
+    for key in hex_keys:
+        assert assignments[key] not in combined_output
+
+    original = output.read_bytes()
+    repeated = subprocess.run(  # noqa: S603
+        command, text=True, capture_output=True, check=False
+    )
+    assert repeated.returncode == 2
+    assert output.read_bytes() == original
+    assert "already exists; leaving it unchanged" in repeated.stderr
+
+
+def test_integration_runner_cleans_only_its_project_after_failure(tmp_path: Path) -> None:
+    root = API_ROOT.parents[1]
+    call_log = tmp_path / "docker-calls.log"
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALL_LOG"\n',
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "CALL_LOG": str(call_log),
+            "DOCKER": str(fake_docker),
+            "UV": "/bin/false",
+            "MAKE": "/bin/true",
+            "TEST_POSTGRES_PORT": "55439",
+        }
+    )
+    result = subprocess.run(  # noqa: S603
+        [str(root / "scripts/test-integration-stack.sh")],
+        cwd=root,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    calls = call_log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 2
+    project_matches = [
+        re.search(r"--project-name (vectorless-rag-integration-[^ ]+)", call) for call in calls
+    ]
+    assert all(match is not None for match in project_matches)
+    project_names = [match.group(1) for match in project_matches if match is not None]
+    assert len(set(project_names)) == 1
+    assert "up -d --wait postgres" in calls[0]
+    assert "down --volumes --remove-orphans" in calls[1]
+    assert "--project-name vectorless-rag " not in "\n".join(calls)

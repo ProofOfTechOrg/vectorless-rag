@@ -3,6 +3,8 @@
 
 # Calculate provider costs for PageIndex and vector RAG
 
+> **Dated design record, July 2026:** This document preserves measurements, pricing, and projections from its recorded baselines. Check current provider prices before authorizing spend.
+
 This quantitative appendix calculates provider cost for PageIndex-based and embedding-based retrieval-augmented generation (RAG) over 537 Portable Document Format (PDF) files. It records corpus measurements, token formulas, live ingestion accounting, historical query traces, sensitivity analysis, and volume projections. Read [Compare vector RAG with the PageIndex system](vector-rag-vs-pageindex-analysis.md) for retrieval quality, latency, scaling, security, and the product decision.
 
 ## Measurement baselines
@@ -95,9 +97,9 @@ The durable report separates metadata and PageIndex calls across every recorded 
 
 The report includes 10 completed and seven failed ingestion attempts. Four calls lack reported usage, and 15 older jobs predate durable attempt accounting. The measured cost is therefore known post-migration spend, not complete lifetime spend.
 
-The ingestion path extracts up to 60,000 characters from the first three pages and asks DeepSeek for structured bibliographic metadata. See [`extract_metadata`](../apps/api/src/vectorless_rag/ingestion.py#L131-L153).
+The ingestion path extracts up to 60,000 characters from the first three pages and asks DeepSeek for structured bibliographic metadata. See [`extract_metadata` in `ingestion.py`](../apps/api/src/vectorless_rag/ingestion.py).
 
-PageIndex sends page and section text to DeepSeek while it builds structure, maps headings to pages, repairs mappings, summarizes nodes, and generates a document description. The adapter enables node summaries and document descriptions in [`PageIndexAdapter.index`](../apps/api/src/vectorless_rag/pageindex_adapter.py#L117-L231).
+PageIndex sends page and section text to DeepSeek while it builds structure, maps headings to pages, repairs mappings, summarizes nodes, and generates a document description. The adapter enables node summaries and document descriptions in [`PageIndexAdapter.index` in `pageindex_adapter.py`](../apps/api/src/vectorless_rag/pageindex_adapter.py).
 
 ### Current `vr3` full-corpus projection
 
@@ -218,7 +220,7 @@ The stages are:
 5. Synthesize the answer with citations
 6. Repeat node selection and sufficiency once when the first evidence set is insufficient
 
-The route and synthesis calls live in [`GraphRunner.run`](../apps/api/src/vectorless_rag/graph.py#L227-L524). Candidate selection, tree-node selection, and sufficiency evaluation live in [`retrieval.py`](../apps/api/src/vectorless_rag/retrieval.py#L124-L246).
+The route and synthesis calls live in [`GraphRunner.run` in `graph.py`](../apps/api/src/vectorless_rag/graph.py). Candidate selection, tree-node selection, and sufficiency evaluation live in [`retrieval.py`](../apps/api/src/vectorless_rag/retrieval.py).
 
 The configured retrieval limits are:
 
@@ -232,7 +234,7 @@ The configured retrieval limits are:
 | Retrieval rounds | 2 |
 | Structured-output attempts per call | 3 |
 
-See [`Settings`](../apps/api/src/vectorless_rag/config.py#L21-L59) for the limits except retrieval rounds, which are fixed in [`PageIndexRetriever.retrieve`](../apps/api/src/vectorless_rag/retrieval.py#L179-L246).
+See [`Settings` in `config.py`](../apps/api/src/vectorless_rag/config.py) for the limits except retrieval rounds, which are fixed in [`PageIndexRetriever.retrieve` in `retrieval.py`](../apps/api/src/vectorless_rag/retrieval.py).
 
 ### Historical document-answer cost
 
@@ -273,10 +275,7 @@ The successful document-answer sample is small. Treat its average as a measured 
 
 ### Historical v1 candidate-selection effect
 
-The v1 implementation filled a result set to `candidate_limit` and
-hard-excluded documents below that lexical boundary. The ten-document vr3
-pilot’s candidate-selection calls consumed about 3,026 input tokens. Its
-former linear projection to 50 documents was:
+The v1 implementation filled a result set to `candidate_limit` and hard-excluded documents below that lexical boundary. The ten-document vr3 pilot’s candidate-selection calls consumed about 3,026 input tokens. Its former linear projection to 50 documents was:
 
 ```text
 pilot successful answer input     ≈ 10,738 tokens
@@ -286,16 +285,9 @@ observed output                   ≈  1,678 tokens
 projected cache-miss answer cost  ≈ $0.0114
 ```
 
-Confidence: moderate-low. This is retained only as a vr3 historical baseline;
-it no longer describes production retrieval.
+Confidence: moderate-low. This is retained only as a vr3 historical baseline; it no longer describes production retrieval.
 
-The v2 retriever reasons over every eligible document in deterministic,
-token-bounded catalog batches and then reduces the batch selections. Lexical
-rank is a signal, not a recall cutoff. That design removes the 50-document
-blind spot but can issue multiple map calls as the catalog grows. No v2
-full-corpus cost is reported yet: the 25-document pilot must freeze one recipe,
-verify every artifact, and record measured and reserved spend before a
-projection is eligible.
+The v2 retriever reasons over every eligible document in deterministic, token-bounded catalog batches and then reduces the batch selections. Lexical rank is a signal, not a recall cutoff. That design removes the 50-document blind spot but can issue multiple map calls as the catalog grows. No v2 full-corpus cost is reported yet: the 25-document pilot must freeze one recipe, verify every artifact, and record measured and reserved spend before a projection is eligible.
 
 The 40,000-token evidence limit is not a request-level billing cap. The system can submit that evidence to sufficiency evaluation more than once and then submit it again for synthesis. Structured-output retries can repeat any failed call up to three times.
 
@@ -369,7 +361,7 @@ No token-cost break-even emerges from higher query volume under these assumption
 
 Index invalidation changes long-term cost even when the first index fits the budget.
 
-The PageIndex artifact key includes the PDF hash, PageIndex version, metadata prompt version, and PageIndex model. See [`artifact_version_key`](../apps/api/src/vectorless_rag/pageindex_adapter.py#L264-L268) and its use in [`IngestionProcessor.process`](../apps/api/src/vectorless_rag/ingestion.py#L316-L328).
+The PageIndex artifact key includes the PDF hash, PageIndex version, metadata prompt version, and PageIndex model. See [`artifact_version_key` in `pageindex_adapter.py`](../apps/api/src/vectorless_rag/pageindex_adapter.py) and its use in [`IngestionProcessor.process` in `ingestion.py`](../apps/api/src/vectorless_rag/ingestion.py).
 
 Changing any of these values creates a new artifact version and can trigger the full PageIndex cost:
 

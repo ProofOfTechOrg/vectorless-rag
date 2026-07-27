@@ -4,3 +4,12 @@ description: Full-stack Vectorless RAG with TanStack Start, FastAPI, worker, and
 type: application
 version: 0.2.0
 appVersion: "0.2.0"
+home: https://github.com/ProofOfTechOrg/vectorless-rag
+sources:
+  - https://github.com/ProofOfTechOrg/vectorless-rag
+maintainers:
+  - name: ProofOfTechOrg
+    email: hello@proofoftech.org
+    url: https://github.com/ProofOfTechOrg
+annotations:
+  artifacthub.io/license: MIT

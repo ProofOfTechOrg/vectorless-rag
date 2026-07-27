@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a reproducible defect in Vectorless RAG.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Remove API keys, provider prompts, document text, and other secrets before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the v0.2.x version or full commit SHA.
+      placeholder: v0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - API or worker
+        - Operator console
+        - Docker Compose
+        - Helm
+        - Documentation
+        - Evaluation
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: List the smallest provider-safe steps that reproduce the defect.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Include relevant logs or command output after removing secrets and document content.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and Discussions.
+          required: true
+        - label: I removed credentials, private documents, prompts, and provider response bodies.
+          required: true

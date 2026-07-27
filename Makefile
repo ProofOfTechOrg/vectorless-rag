@@ -4,6 +4,7 @@ SHELL := /usr/bin/env bash
 
 UV ?= uv
 UV_CACHE_DIR ?= .uv-cache
+PYTHON ?= python3
 PNPM ?= pnpm
 HELM ?= helm
 DOCKER ?= docker
@@ -29,8 +30,9 @@ PILOT_OUTPUT ?= apps/api/pilots/run/result.json
 
 export UV_CACHE_DIR
 
-.PHONY: help env install api-install web-install format api-format web-format lint api-lint web-lint \
+.PHONY: help env init install api-install web-install format api-format web-format lint api-lint web-lint \
 	typecheck api-typecheck web-typecheck test api-test web-test test-unit test-integration \
+	test-integration-stack docs-check \
 	api-build web-build web-production-smoke playwright-install playwright playwright-live react-doctor react-doctor-diff astryx-doctor workflow-check migration-check \
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up rebuild dev dev-build dev-health down stop restart restart-app restart-web \
@@ -44,6 +46,9 @@ help: ## Show all supported project commands.
 env: ## Create .env from .env.example if absent and restrict its permissions.
 	@if [[ -e .env ]]; then echo ".env already exists; leaving it unchanged"; else cp .env.example .env; echo "created .env"; fi
 	@chmod 600 .env
+
+init: ## Create a mode-600 .env with generated local secrets without overwriting.
+	$(PYTHON) scripts/init_env.py
 
 install: api-install web-install ## Install all frozen development dependencies.
 api-install: ## Install the frozen Python environment under apps/api.
@@ -82,6 +87,11 @@ test-integration: ## Run PostgreSQL integration tests with TEST_*_DATABASE_URL.
 	@test -n "$${TEST_OWNER_DATABASE_URL:-}" || { echo "TEST_OWNER_DATABASE_URL is required" >&2; exit 2; }
 	@test -n "$${TEST_DATABASE_URL:-}" || { echo "TEST_DATABASE_URL is required" >&2; exit 2; }
 	cd $(API_DIR) && $(UV) run pytest tests -m integration
+test-integration-stack: ## Run integration tests against an isolated disposable PostgreSQL project.
+	UV="$(UV)" DOCKER="$(DOCKER)" MAKE="$(MAKE)" scripts/test-integration-stack.sh
+
+docs-check: ## Validate community files, Markdown links, anchors, fences, and the documentation index.
+	$(PYTHON) scripts/docs_check.py
 
 api-build: ## Build the Python distribution.
 	$(UV) build --project $(API_DIR)
@@ -90,7 +100,11 @@ web-build: ## Build the TanStack Start production bundle.
 web-production-smoke: web-build ## Verify the built SSR document serves all referenced CSS and JavaScript assets.
 	$(PNPM) --filter @vectorless-rag/web production-smoke
 playwright-install: ## Install Chromium and its operating-system dependencies for Playwright.
-	$(PNPM) --filter @vectorless-rag/web exec playwright install --with-deps chromium
+	$(PNPM) --filter @vectorless-rag/web exec playwright install chromium
+	@if ! $(PNPM) --filter @vectorless-rag/web exec node scripts/verify-playwright-install.mjs; then \
+		$(PNPM) --filter @vectorless-rag/web exec playwright install-deps chromium; \
+		$(PNPM) --filter @vectorless-rag/web exec node scripts/verify-playwright-install.mjs; \
+	fi
 playwright: ## Run deterministic Playwright against the local mock upstream.
 	$(PNPM) --filter @vectorless-rag/web test:e2e
 playwright-live: ## Run Playwright against a live stack with an explicit URL and process-only key.
@@ -126,9 +140,9 @@ docker-build: docker-build-api docker-build-web ## Build both production images.
 api-check: api-lint api-typecheck api-test migration-check ## Validate the API package.
 web-check: web-lint web-typecheck web-test react-doctor web-production-smoke astryx-doctor ## Validate the web package.
 deploy-check: workflow-check compose-check helm-check ## Validate CI and deployment manifests.
-check: api-check web-check deploy-check ## Validate the full repository without browser or image builds.
+check: docs-check api-check web-check deploy-check ## Validate the full repository without browser or image builds.
 ci: ENV_FILE := .env.example
-ci: check playwright-install playwright docker-build ## Run the complete CI-equivalent validation.
+ci: check test-integration-stack playwright-install playwright docker-build ## Run the complete CI-equivalent validation.
 
 up: ## Start the complete Compose stack in the background without forcing rebuilds.
 	$(COMPOSE) up -d
