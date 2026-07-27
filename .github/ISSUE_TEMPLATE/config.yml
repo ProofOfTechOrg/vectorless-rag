@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and operator support
+    url: https://github.com/ProofOfTechOrg/vectorless-rag/discussions
+    about: Ask usage and troubleshooting questions in Discussions.
+  - name: Report a security vulnerability
+    url: https://github.com/ProofOfTechOrg/vectorless-rag/security/advisories/new
+    about: Send sensitive security reports through a private advisory.

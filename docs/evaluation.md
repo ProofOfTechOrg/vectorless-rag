@@ -1,4 +1,5 @@
 <!-- Content type: How-to -->
+<!-- Content plan: Goal: validate, review, seed, run, and report the tracked evaluation suites. Audience: retrieval researchers and maintainers. Content: deterministic checks, human review, experiment freezing, reports, and browser coverage. Open questions: sealed vector-versus-PageIndex evaluation results. -->
 
 # Run evaluation workflows
 

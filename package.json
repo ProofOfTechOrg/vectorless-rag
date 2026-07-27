@@ -1,6 +1,14 @@
 {
   "name": "vectorless-rag",
+  "version": "0.2.0",
+  "description": "Self-hosted vectorless RAG for grounded question answering over local PDFs",
   "private": true,
+  "license": "MIT",
+  "homepage": "https://github.com/ProofOfTechOrg/vectorless-rag#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ProofOfTechOrg/vectorless-rag.git"
+  },
   "packageManager": "pnpm@11.5.2",
   "engines": {
     "node": ">=22",

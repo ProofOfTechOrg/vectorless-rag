@@ -1,6 +1,9 @@
-<!-- Content type: Conceptual and reference -->
+<!-- Content type: Conceptual -->
+<!-- Content plan: Goal: preserve the implemented PageIndex v2 architecture and its original evidence. Audience: retrieval engineers and maintainers. Content: frozen baseline, defects, decisions, transitions, rollout, implementation record, and verification. Open questions: external paid gates recorded in the implementation section. -->
 
 # Harden PageIndex before comparing retrieval architectures
+
+> **Dated design record, July 2026:** This document preserves the decisions and evidence from its recorded repository baseline. Do not recalculate its historical conclusions with current dependencies or pricing.
 
 This record defines the PageIndex v2 implementation baseline, architecture, rollout, and verification evidence. It is the durable handoff for the work that starts at commit `cfbea604c64d51c20ca1cea413b2bfa35be94471`.
 
@@ -398,10 +401,7 @@ The implementation does not apply historical classifications, run the credential
 
 ### Verification results
 
-All results below are from the final working-tree source state. The PageIndex
-patch was regenerated as a canonical, ordered diff against the pinned upstream
-tree after a clean-clone image build exposed whitespace-sensitive hunks in the
-earlier patch file.
+All results below are from the final working-tree source state. The PageIndex patch was regenerated as a canonical, ordered diff against the pinned upstream tree after a clean-clone image build exposed whitespace-sensitive hunks in the earlier patch file.
 
 | Command or gate | Result |
 | --- | --- |
@@ -418,7 +418,4 @@ earlier patch file.
 | Disposable PostgreSQL migration and integration gate | Passed: both migrations applied at schema head and 4 integration tests passed. Validation databases and roles were then removed. |
 | `git diff --check` | Passed. Patch files explicitly disable end-of-line whitespace diagnostics because their context must preserve pinned upstream whitespace. |
 
-The credential-safe live fixture, exact seven-event historical classification,
-and paid 25-PDF pilot were not executed. Consequently there are no cleanup
-event IDs, pilot run IDs, v2 provider spend, or v2 quality results to append.
-Those are rollout operations, not missing deterministic verification.
+The credential-safe live fixture, exact seven-event historical classification, and paid 25-PDF pilot were not executed. Consequently there are no cleanup event IDs, pilot run IDs, v2 provider spend, or v2 quality results to append. Those are rollout operations, not missing deterministic verification.

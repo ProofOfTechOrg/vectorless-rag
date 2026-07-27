@@ -1,4 +1,5 @@
 <!-- Content type: Conceptual -->
+<!-- Content plan: Goal: explain the application trust boundaries and deployment controls. Audience: operators, security reviewers, and contributors. Content: browser sessions, authorization, corpus isolation, provider errors, and deployment checklist. Open questions: none. -->
 
 # Understand the security model
 

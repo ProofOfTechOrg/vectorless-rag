@@ -1,4 +1,5 @@
 <!-- Content type: How-to -->
+<!-- Content plan: Goal: configure and validate Compose or Helm deployments. Audience: operators and platform engineers. Content: runtime configuration, services, images, chart values, secrets, and validation. Open questions: high-availability reference architecture. -->
 
 # Deploy Vectorless RAG
 

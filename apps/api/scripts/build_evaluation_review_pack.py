@@ -12,6 +12,13 @@ def main() -> None:
     rows = json.loads((root / "pageindex-v2-review-source.json").read_text(encoding="utf-8"))
     output = root / "review-pack.md"
     lines = [
+        "<!-- Content type: Reference -->",
+        (
+            "<!-- Content plan: Goal: support human review of every tracked PageIndex evaluation "
+            "case. Audience: evaluation reviewers. Content: prompts, references, source pages, "
+            "and excerpts. Open questions: reviewer decisions remain in the JSONL record. -->"
+        ),
+        "",
         "# PageIndex v2 evaluation review pack",
         "",
         "Mark every case approved, edited, or rejected in the JSONL review record before seeding.",

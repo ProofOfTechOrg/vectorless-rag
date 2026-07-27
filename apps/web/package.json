@@ -1,6 +1,15 @@
 {
   "name": "@vectorless-rag/web",
+  "version": "0.2.0",
+  "description": "Operator console for Vectorless RAG",
   "private": true,
+  "license": "MIT",
+  "homepage": "https://github.com/ProofOfTechOrg/vectorless-rag#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ProofOfTechOrg/vectorless-rag.git",
+    "directory": "apps/web"
+  },
   "type": "module",
   "imports": {
     "#/*": "./src/*"

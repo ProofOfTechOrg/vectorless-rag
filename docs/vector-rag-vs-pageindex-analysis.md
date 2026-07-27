@@ -3,7 +3,7 @@
 
 # Compare vector RAG with the PageIndex system
 
-> **Provisional:** This comparison predates hierarchical PageIndex v2, complete-catalog retrieval, frozen full-corpus indexes, and a sealed post-freeze evaluation dataset. Keep the vr3 measurements as historical evidence, but do not use them as a final architecture verdict.
+> **Dated design record, July 2026:** This provisional comparison predates hierarchical PageIndex v2, complete-catalog retrieval, frozen full-corpus indexes, and a sealed post-freeze evaluation dataset. Keep the vr3 measurements as historical evidence, but do not use them as a final architecture verdict.
 
 This analysis compares conventional embedding and vector-search retrieval-augmented generation (RAG) with this repository’s PageIndex-based vectorless RAG implementation. It covers the implemented retrieval path, indexing lifecycle, retrieval quality, citations, latency, provider cost, scaling, failure modes, and the evidence required for a final product decision.
 
@@ -297,11 +297,7 @@ Historical traces predate durable query-call accounting. The prior trace analysi
 
 The measured pilot PageIndex answer costs 1.7 times the vector baseline. The full-candidate projection costs 3.2 times the vector baseline.
 
-The pre-v2 57-run cohort cannot validate those values because its query calls
-predate durable model-call accounting; the migration deliberately does not
-invent or backfill usage. New runs write durable call rows. Reports must keep
-the historical cohort marked legacy/incomplete and may assign zero model cost
-only to static help responses that made no model call.
+The pre-v2 57-run cohort cannot validate those values because its query calls predate durable model-call accounting; the migration deliberately does not invent or backfill usage. New runs write durable call rows. Reports must keep the historical cohort marked legacy/incomplete and may assign zero model cost only to static help responses that made no model call.
 
 ## Scaling and operations
 
@@ -312,12 +308,7 @@ The historical vr3 PageIndex path had two separate scaling limits:
 - Corpus search cannot retrieve a document ranked below the 50-document lexical boundary
 - Query cost grows when the selection model receives more candidate metadata
 
-The v2 implementation removes the lexical exclusion and uses complete-catalog,
-token-bounded map/reduce selection before nested tree search. Query cost still
-grows with catalog size, but in explicit catalog batches rather than a
-fixed-recall gate. This document remains provisional until the frozen
-25-document v2 pilot is accepted and both comparison arms are frozen against a
-new sealed evaluation dataset.
+The v2 implementation removes the lexical exclusion and uses complete-catalog, token-bounded map/reduce selection before nested tree search. Query cost still grows with catalog size, but in explicit catalog batches rather than a fixed-recall gate. This document remains provisional until the frozen 25-document v2 pilot is accepted and both comparison arms are frozen against a new sealed evaluation dataset.
 
 Vector indexing also has a smaller retry surface. An embedding pipeline can batch chunks, retry failed batches independently, and persist successful batches. PageIndex can spend dozens of model calls before a late validation or provider error invalidates an attempt.
 
