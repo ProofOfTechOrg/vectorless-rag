@@ -56,7 +56,25 @@ Seeding uses each case’s stable UUID as the Langfuse dataset item ID. The run 
 - `scores.jsonl`: append-only local score input
 - `summary.json`: aggregate output
 
-The plan contains 4,320 trials: four experiment types, three evidence budgets (6,400, 12,800, and 25,600 tokens), three repetitions, and 120 items.
+The plan contains 1,440 trials: four experiment types, three evidence budgets (6,400, 12,800, and 25,600 tokens), one repetition, and 120 items. Pass `--repetitions 2` or `3` to estimate within-configuration variance at proportional provider cost; the manifest records the count, so a single-pass run is never mistaken for a repeated one.
+
+## Execute the plan
+
+`make evaluation-run` only prepares the plan. Execute it against the configured provider:
+
+```bash
+make evaluation-execute DRY_RUN=1
+make evaluation-execute LIMIT=10
+make evaluation-execute
+```
+
+The dry run resolves every target arXiv ID to an indexed, ready document and fails closed if any is missing, without issuing a provider call. Always run it first: a missing index makes a trial unscoreable rather than merely wrong.
+
+Execution drives `GraphRunner` in process, because the protocol needs per-trial control of the forced route, the oracle document set, and the evidence budget, and none of those are fields on `ChatRequest`. Each experiment kind maps onto one override: `route` leaves the router free so its choice is measured; `corpus_routing` and `forced_route_end_to_end` pin the route so retrieval is measured without routing noise in front of it; `oracle_document_retrieval` additionally supplies the target documents so within-document node selection is isolated.
+
+`scores.jsonl` is append-only and keyed by trial ID, so an interrupted run resumes without repeating work. `LIMIT` caps how many trials a single invocation executes. Provider failures are recorded with `included: false` and a failure code rather than aborting the run, so one bad trial does not discard the rest.
+
+Route, document, support, and citation measurements are computed from the returned citations. Claim recall is not: judging whether an answer asserts each atomic claim requires reading both, so end-to-end trials are appended to `judge-queue.jsonl` and scored separately.
 
 Run `make evaluation-report` after populating `scores.jsonl`. The report rejects duplicate or unknown trial IDs and summarizes route, document, support, claim, citation, latency, retry, and failure measurements with deterministic bootstrap intervals.
 

@@ -40,6 +40,13 @@ def main() -> None:
     parser.add_argument("--corpus", type=Path, default=root / "pageindex-v2-corpus.json")
     parser.add_argument("--index-hash", required=True)
     parser.add_argument("--seed", type=int, default=20_260_725)
+    parser.add_argument(
+        "--repetitions",
+        type=int,
+        default=1,
+        choices=(1, 2, 3),
+        help="passes per item; more than one estimates within-configuration variance",
+    )
     parser.add_argument("--output", type=Path, default=root / "run")
     args = parser.parse_args()
 
@@ -72,12 +79,12 @@ def main() -> None:
         index_sha256=args.index_hash,
         dataset_sha256=file_sha256(args.dataset),
         price_snapshot={key: float(value) for key, value in prices.items() if value is not None},
-        repetitions=3,
+        repetitions=args.repetitions,
         evidence_budgets=EVIDENCE_BUDGETS,
         seed=args.seed,
         created_at=datetime.now(UTC),
     )
-    trials = build_trials(cases, seed=args.seed)
+    trials = build_trials(cases, seed=args.seed, repetitions=args.repetitions)
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "manifest.json").write_text(
         manifest.model_dump_json(indent=2),

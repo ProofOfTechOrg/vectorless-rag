@@ -139,7 +139,10 @@ class FrozenEvaluationManifest(StrictEvaluationModel):
     index_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     dataset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     price_snapshot: dict[str, float]
-    repetitions: Literal[3]
+    # Repetitions estimate within-configuration variance. A single pass still supports the
+    # across-item bootstrap, so the count is recorded rather than fixed, and the report
+    # carries it so a one-pass run is never mistaken for a repeated one.
+    repetitions: int = Field(ge=1, le=3)
     evidence_budgets: tuple[Literal[6400, 12800, 25600], ...]
     seed: int
     created_at: datetime
@@ -229,10 +232,10 @@ def build_trials(
     cases: list[EvaluationCase],
     *,
     seed: int,
-    repetitions: int = 3,
+    repetitions: int = 1,
 ) -> list[EvaluationTrial]:
-    if repetitions != 3:
-        raise ValueError("the frozen evaluation protocol requires exactly three repetitions")
+    if not 1 <= repetitions <= 3:
+        raise ValueError("evaluation repetitions must be between one and three")
     values: list[tuple[EvaluationCase, str, int, int]] = []
     for repetition in range(1, repetitions + 1):
         for budget in EVIDENCE_BUDGETS:
