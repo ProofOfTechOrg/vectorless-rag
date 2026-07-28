@@ -13,7 +13,7 @@ workerReplicaCount: 2
 frontendReplicaCount: 2
 existingSecret: vectorless-rag-secrets
 release: dev
-deepseekModel: deepseek-v4-pro
+deepseekModel: deepseek-v4-flash
 deepseekInputCostPerMillionUsd: ""
 deepseekCacheHitInputCostPerMillionUsd: ""
 deepseekOutputCostPerMillionUsd: ""

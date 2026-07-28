@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     database_admin_url: str = "postgresql+psycopg://rag_owner:rag@localhost:5432/rag"
     sql_database_url: str = "postgresql+psycopg://rag_reader:rag@localhost:5432/rag"
     deepseek_api_key: SecretStr | None = None
-    deepseek_model: str = "deepseek-v4-pro"
+    deepseek_model: str = "deepseek-v4-flash"
     deepseek_input_cost_per_million_usd: float | None = None
     deepseek_cache_hit_input_cost_per_million_usd: float | None = None
     deepseek_output_cost_per_million_usd: float | None = None
