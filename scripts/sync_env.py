@@ -28,18 +28,38 @@ SECRET = re.compile(r"(KEY|SECRET|PASSWORD|PEPPER|TOKEN|SALT|CREDENTIAL)", re.I)
 
 
 def parse(path: Path) -> dict[str, str]:
+    """Read assignments, refusing anything this tool cannot rewrite without losing data.
+
+    Rendering emits one physical line per key, so a value spanning several lines would be
+    truncated to its first, and a repeated key would collapse to whichever came last. Both
+    silently destroy a live credential, and neither has a safe guess available, so both are
+    refused rather than resolved.
+    """
     values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         match = ASSIGNMENT.match(line.strip())
-        if match:
-            values[match.group(1)] = match.group(2)
+        if match is None:
+            continue
+        key, value = match.group(1), match.group(2)
+        if key in values:
+            raise SystemExit(f"{path.name}:{number}: {key} is assigned more than once")
+        if value.count('"') % 2 or value.count("'") % 2:
+            raise SystemExit(f"{path.name}:{number}: {key} spans more than one line")
+        values[key] = value
     return values
 
 
+# A credential inside a value the key name does not advertise, most obviously the password in
+# a database URL's userinfo.
+EMBEDDED_CREDENTIAL = re.compile(r"://[^/\s:]+:[^/\s@]+@")
+
+
 def show(key: str, value: str) -> str:
-    if SECRET.search(key):
-        return "<set>" if value.strip() else "<empty>"
-    return value if value.strip() else "<empty>"
+    if not value.strip():
+        return "<empty>"
+    if SECRET.search(key) or EMBEDDED_CREDENTIAL.search(value):
+        return "<set>"
+    return value
 
 
 def render(example: Path, current: dict[str, str], adopt: set[str]) -> tuple[str, list[str]]:
