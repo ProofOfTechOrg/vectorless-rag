@@ -45,4 +45,5 @@ These pages document evaluation workflows and frozen historical conclusions:
 - [Compare vector RAG with the PageIndex system](vector-rag-vs-pageindex-analysis.md)
 - [Harden PageIndex before comparing retrieval architectures](pageindex-improvement-analysis.md)
 - [Read the vendored PageIndex runtime patch](pageindex-runtime-patch.md)
+- [Resume the PageIndex v2 evaluation](pageindex-evaluation-handoff.md)
 - [Review deferred hardening](DEFERRED.md)
