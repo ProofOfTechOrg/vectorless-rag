@@ -3,7 +3,7 @@
 
 # PageIndex runtime patch
 
-Reference for `apps/api/patches/pageindex-runtime.patch`: every change it makes to the vendored PageIndex source, and whether each one fixes an upstream bug or adds something the ingestion pipeline needs. The patch applies to [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) at pinned revision `190f8b378be58199ca993566a9214dba72089c54` and touches two files: `pageindex/page_index.py` and `pageindex/utils.py`. The current patch revision is `+vr5`.
+Reference for `apps/api/patches/pageindex-runtime.patch`: every change it makes to the vendored PageIndex source, and whether each one fixes an upstream bug or adds something the ingestion pipeline needs. The patch applies to [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) at pinned revision `190f8b378be58199ca993566a9214dba72089c54` and touches two files: `pageindex/page_index.py` and `pageindex/utils.py`. The current patch revision is `+vr6`.
 
 ## How the patch is applied and versioned
 
@@ -11,7 +11,7 @@ Reference for `apps/api/patches/pageindex-runtime.patch`: every change it makes 
 
 Three identity surfaces track the patch:
 
-- **`pageindex_version`**: pinned as the literal `190f8b378be58199ca993566a9214dba72089c54+vr5` in `config.py`. Bump the `+vrN` suffix whenever patch behavior changes.
+- **`pageindex_version`**: pinned as the literal `190f8b378be58199ca993566a9214dba72089c54+vr6` in `config.py`. Bump the `+vrN` suffix whenever patch behavior changes.
 - **`patch_sha256`**: computed from the patch file at ingestion time in `pageindex_adapter.py`, so any byte change to the patch shifts artifact identity even without a version bump.
 - **`configuration_hash` and `recipe_hash`**: both digest the full version string and the patch digest, so a rebuilt document under a new patch never reuses an old artifact.
 
@@ -27,6 +27,8 @@ Each change is either a fix for a defect in upstream PageIndex or a feature the 
 | Strict JSON (`expect_json=True`) on structured calls | `page_index.py` | Feature, plus removal of a corrupting parser |
 | Page grouping rewrite with oversized-page splitting | `page_index.py` | Bug fixes, plus a missing feature |
 | Continuation merge (dedupe and page-order sort) | `page_index.py` | Bug fix |
+| Coverage no longer gates verification | `page_index.py` | Bug fix |
+| Subdivision failure degrades instead of propagating | `page_index.py` | Bug fix |
 | Pageless-ToC routing in `tree_parser` | `page_index.py` | Bug fix |
 | Offset fallback in `process_toc_with_page_numbers` | `page_index.py` | Crash fix |
 | `process_none_page_numbers` robustness | `page_index.py` | Crash fixes |
@@ -63,6 +65,31 @@ ToC generation for long documents runs in batches: `generate_toc_init` for the f
 The patch adds `merge_continuation_entries` and calls it from `process_no_toc`. It drops exact re-listings, keyed on case-folded and whitespace-normalized `(structure, title, physical_index)`, keeps everything else in upstream's keep-both spirit, and stable-sorts the result by page with `None` entries last. The sort matters because downstream `post_processing` derives each entry's `end_index` from the next entry's page; an out-of-order re-listing would manufacture a reversed range and fail the whole document at artifact validation. `tree_parser` filters the `None` entries before `post_processing`, so their tail position is safe. Kind: bug fix.
 
 Revision history: `+vr4` shipped a stricter merge that raised `ValueError` on any conflicting re-listing. In production that failed document `2103.05633` deterministically, because disjoint grouping means a re-listed section's marker is absent from the later chunk, the validator nullifies its page to `None`, and `None` never equals the original page. `+vr5` replaced the raise with the dedupe-and-sort behavior above.
+
+## Coverage no longer gates verification (`page_index.py`)
+
+`verify_toc` returned `0, []` without checking a single title whenever the last placed entry
+fell in the document's first half, on the assumption that a table of contents spans its
+document. Academic papers break that assumption as a matter of course: references and
+appendices routinely fill more than half the pages, so a complete and correct table of
+contents for the body scores zero. `meta_processor` reads that zero, finds no further
+fallback mode, and raises `Processing failed`, discarding the document.
+
+Six of the tracked corpus's 104 documents failed this way. `2408.00724` is representative:
+22 pages, 11 correctly placed entries ending at page 10, with acknowledgments on page 11 and
+the bibliography from page 12 on. The patch keeps the early return only for a table of
+contents where nothing was placed at all. Coverage is not correctness: every title is still
+checked individually and the accuracy thresholds are untouched. Kind: bug fix.
+
+## Subdivision failure degrades instead of propagating (`page_index.py`)
+
+`process_large_node_recursively` splits an oversized node into finer ones. When the nested
+`meta_processor` raised, the exception propagated out of the whole build, so a document whose
+own tree verified at 100% was discarded because one section refused to split - which is what
+happened to `2305.16264`, a 50-page document that now yields 67 nodes. Subdividing is an
+enhancement over a node that already carries a verified range and summary, so the patch
+returns the node unsubdivided instead, exactly as the existing `depth >= 16` guard does.
+Kind: bug fix.
 
 ## Pageless-ToC routing in `tree_parser` (`page_index.py`)
 

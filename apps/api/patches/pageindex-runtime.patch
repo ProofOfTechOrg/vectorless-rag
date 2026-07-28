@@ -1,5 +1,5 @@
 diff --git a/pageindex/page_index.py b/pageindex/page_index.py
-index 083b26e..3436964 100644
+index 083b26e..905ed25 100644
 --- a/pageindex/page_index.py
 +++ b/pageindex/page_index.py
 @@ -103,7 +103,7 @@ async def check_title_appearance(item, page_list, start_index=1, model=None):
@@ -292,7 +292,24 @@ index 083b26e..3436964 100644
      json_content = extract_json(response)    
      physical_index = json_content.get('physical_index')
      if physical_index is None:
-@@ -1162,11 +1235,14 @@ async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=N
+@@ -1071,8 +1144,14 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
+             last_physical_index = item['physical_index']
+             break
+     
+-    # Early return if we don't have valid physical indices
+-    if last_physical_index is None or last_physical_index < len(page_list)/2:
++    # Early return only when nothing was placed at all. Upstream also refused any ToC whose
++    # last entry fell in the document's first half, on the assumption that a table of contents
++    # spans its document. Academic papers break that assumption routinely: references and
++    # appendices often occupy more than half the pages, so a correct and complete ToC for the
++    # body scores 0 without a single title being checked, and the caller then discards the
++    # whole document. Coverage is not correctness - the titles below are still each verified,
++    # and pages past the last section are carried by the artifact layer's unmapped-pages node.
++    if last_physical_index is None:
+         return 0, []
+     
+     # Determine which items to check
+@@ -1162,29 +1241,67 @@ async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=N
              raise Exception('Processing failed')
          
   
@@ -308,8 +325,18 @@ index 083b26e..3436964 100644
 +    if page_num > opt.max_page_num_each_node or token_num > opt.max_token_num_each_node:
          print('large node:', node['title'], 'start_index:', node['start_index'], 'end_index:', node['end_index'], 'token_num:', token_num)
  
-         node_toc_tree = await meta_processor(node_page_list, mode='process_no_toc', start_index=node['start_index'], opt=opt, logger=logger)
-@@ -1174,17 +1250,43 @@ async def process_large_node_recursively(node, page_list, opt=None, logger=None)
+-        node_toc_tree = await meta_processor(node_page_list, mode='process_no_toc', start_index=node['start_index'], opt=opt, logger=logger)
++        try:
++            node_toc_tree = await meta_processor(node_page_list, mode='process_no_toc', start_index=node['start_index'], opt=opt, logger=logger)
++        except Exception as error:
++            # Subdividing a large node is an enhancement, not a requirement: the node already
++            # carries a verified range and summary. Upstream let this failure propagate, so a
++            # document whose own tree verified at 100% was discarded because one section
++            # refused to split. Degrade to the unsubdivided node, exactly as the depth guard
++            # above already does.
++            print('large node subdivision failed, keeping it whole:', node['title'], repr(error))
++            return node
+         node_toc_tree = await check_title_appearance_in_start_concurrent(node_toc_tree, page_list, model=opt.model, logger=logger)
          
          # Filter out items with None physical_index before post_processing
          valid_node_toc_items = [item for item in node_toc_tree if item.get('physical_index') is not None]
@@ -354,7 +381,7 @@ index 083b26e..3436964 100644
              for child_node in node['nodes']
          ]
          await asyncio.gather(*tasks)
-@@ -1204,6 +1306,16 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
+@@ -1204,6 +1321,16 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
              toc_page_list=check_toc_result['toc_page_list'], 
              opt=opt,
              logger=logger)
