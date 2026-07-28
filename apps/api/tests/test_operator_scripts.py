@@ -6,6 +6,7 @@ import re
 import stat
 import subprocess
 import sys
+import uuid
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -306,3 +307,48 @@ def test_a_frozen_evaluation_plan_requires_a_positive_cost_ceiling() -> None:
         FrozenEvaluationManifest.model_validate({**fields, "maximum_cost_usd": 0})
     plan = FrozenEvaluationManifest.model_validate({**fields, "maximum_cost_usd": 25.0})
     assert plan.maximum_cost_usd == 25.0
+
+
+def _score_line(trial_id: str) -> str:
+    return json.dumps({"trial_id": trial_id, "route_correct": 1.0})
+
+
+def test_resume_discards_only_a_torn_final_line(tmp_path: Path) -> None:
+    from scripts import execute_evaluation
+
+    first, second = str(uuid.uuid4()), str(uuid.uuid4())
+    ledger = tmp_path / "scores.jsonl"
+    # A kill during the final append leaves the last line half written.
+    ledger.write_text(f'{_score_line(first)}\n{_score_line(second)}\n{{"trial_id": "abc')
+
+    done = execute_evaluation.scored_trials(ledger)
+
+    assert done == {uuid.UUID(first), uuid.UUID(second)}
+    # Rewritten without the torn tail, so the next append cannot run onto it.
+    assert ledger.read_text() == f"{_score_line(first)}\n{_score_line(second)}\n"
+
+
+def test_resume_refuses_a_torn_line_that_is_not_the_last(tmp_path: Path) -> None:
+    from scripts import execute_evaluation
+
+    ledger = tmp_path / "scores.jsonl"
+    ledger.write_text(f'{{"trial_id": "abc\n{_score_line(str(uuid.uuid4()))}\n')
+
+    # Damage anywhere but the tail was not caused by an interrupted append, so it is not
+    # something this script may quietly discard.
+    with pytest.raises(SystemExit):
+        execute_evaluation.scored_trials(ledger)
+
+
+def test_each_experiment_kind_maps_onto_its_own_overrides() -> None:
+    from scripts import execute_evaluation
+
+    oracle = (uuid.uuid4(),)
+    free = execute_evaluation.options_for("route", 6_400, oracle)
+    oracled = execute_evaluation.options_for("oracle_document_retrieval", 6_400, oracle)
+    forced = execute_evaluation.options_for("forced_route_end_to_end", 6_400, oracle)
+
+    assert free.forced_route is None, "route measures the router's own choice"
+    assert oracled.oracle_document_ids == oracle
+    assert forced.forced_route is execute_evaluation.EXPECTED_ROUTE
+    assert forced.oracle_document_ids == ()
