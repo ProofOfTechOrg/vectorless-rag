@@ -308,7 +308,7 @@ Execute the rollout in this order:
 3. Run migration preflight checks for inconsistent active pointers, duplicate active jobs or attempts, and ready-state mismatches.
 4. Apply `0004_pageindex_artifact_v2`.
 5. Apply `0005_measurement_experiments`.
-6. Deploy the API and worker with PageIndex patch `+vr4`.
+6. Deploy the API and worker with PageIndex patch `+vr5`.
 7. Run provider-free patch, API, web, deployment, and integration tests.
 8. Dry-run the seven historical measurement classifications.
 9. Apply the exact classification manifest in one serializable admin transaction.

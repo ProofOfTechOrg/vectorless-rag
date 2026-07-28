@@ -9,7 +9,7 @@ This quantitative appendix calculates provider cost for PageIndex-based and embe
 
 ## Measurement baselines
 
-The appendix preserves `vr3` measurements and historical `vr2` traces without mixing incompatible telemetry. PageIndex v2 (`+vr4`) has no paid measurements yet; its 25-document run is separately frozen under a $10 measured-or-reserved ceiling.
+The appendix preserves `vr3` measurements and historical `vr2` traces without mixing incompatible telemetry. PageIndex v2 (`+vr5`) has no paid measurements yet; its 25-document run is separately frozen under a $10 measured-or-reserved ceiling.
 
 | Item | Current live baseline | Historical trace baseline |
 | --- | --- | --- |

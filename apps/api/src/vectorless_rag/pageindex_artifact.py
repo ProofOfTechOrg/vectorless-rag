@@ -81,7 +81,11 @@ class OutlineNode(StrictArtifactModel):
     page_end: int = Field(ge=1)
 
 
-class ArtifactQuality(StrictArtifactModel):
+class ArtifactQuality(BaseModel):
+    # Metrics bag, not an integrity surface: unknown keys are ignored so a reader on
+    # the previous release survives manifests that carry newer counters.
+    model_config = ConfigDict(extra="ignore")
+
     page_count: int = Field(ge=1)
     node_count: int = Field(ge=1, le=MAX_TREE_NODES)
     max_depth: int = Field(ge=0, le=MAX_TREE_DEPTH)
@@ -90,6 +94,11 @@ class ArtifactQuality(StrictArtifactModel):
     nonempty_pages: int = Field(ge=0)
     total_page_tokens: int = Field(ge=0)
     total_page_bytes: int = Field(ge=0)
+    # Per-node forward extension summed over the tree; an overflow deep in a branch
+    # counts once per widened ancestor, so this is extent-of-stretching, not distinct
+    # pages. Defaulted so manifests written before these counters still load.
+    widened_nodes: int = Field(default=0, ge=0)
+    widened_pages: int = Field(default=0, ge=0)
 
 
 class PageIndexManifestV2(StrictArtifactModel):
@@ -144,6 +153,17 @@ class DerivedNode:
     parent_id: str | None
     depth: int
     section_path: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class NormalizedTree:
+    tree: list[PageIndexNodeV2]
+    description: str
+    node_count: int
+    max_depth: int
+    unmapped_pages: int
+    widened_nodes: int
+    widened_pages: int
 
 
 def canonical_json(value: object) -> bytes:
@@ -224,12 +244,14 @@ def _normalize_nodes(
     page_count: int,
     seen: set[str],
     depth: int,
-) -> tuple[list[PageIndexNodeV2], int, int]:
+) -> tuple[list[PageIndexNodeV2], int, int, int, int]:
     if depth > MAX_TREE_DEPTH:
         raise ArtifactValidationError("PageIndex tree exceeds maximum depth")
     normalized: list[PageIndexNodeV2] = []
     total = 0
     maximum_depth = depth
+    widened_nodes = 0
+    widened_pages = 0
     for raw in raw_nodes:
         node_id = _required_text(raw, "node_id")
         if node_id in seen:
@@ -242,18 +264,32 @@ def _normalize_nodes(
             raise ArtifactValidationError(f"node {node_id} has an invalid page range")
         raw_children = _raw_children(raw)
         if raw_children:
-            child_nodes, child_count, child_depth = _normalize_nodes(
-                raw_children,
-                page_count=page_count,
-                seen=seen,
-                depth=depth + 1,
+            child_nodes, child_count, child_depth, child_widened, child_widened_pages = (
+                _normalize_nodes(
+                    raw_children,
+                    page_count=page_count,
+                    seen=seen,
+                    depth=depth + 1,
+                )
             )
+            widened_nodes += child_widened
+            widened_pages += child_widened_pages
         else:
             child_nodes, child_count, child_depth = [], 0, depth
-        parent_range = PageRange(page_start=start, page_end=end)
+        declared_range = PageRange(page_start=start, page_end=end)
         child_ranges = [child.subtree_page_range for child in child_nodes]
-        if any(child.page_start < start or child.page_end > end for child in child_ranges):
-            raise ArtifactValidationError(f"node {node_id} has a child outside its range")
+        # A child that starts before its parent would annex a preceding sibling's
+        # pages; sampled PageIndex output never does this, so it stays a rejection.
+        if any(child.page_start < start for child in child_ranges):
+            raise ArtifactValidationError(f"node {node_id} has a child before its start")
+        # PageIndex regularly declares only a section heading's pages while subsections
+        # run past that end_index; the v1 pipeline never enforced containment, so widen
+        # the subtree range forward over the children instead of rejecting the tree.
+        subtree_end = max([end, *(child.page_end for child in child_ranges)])
+        subtree_range = PageRange(page_start=start, page_end=subtree_end)
+        if subtree_end > end:
+            widened_nodes += 1
+            widened_pages += subtree_end - end
         direct_summary = _required_text(
             raw,
             "summary",
@@ -265,8 +301,8 @@ def _normalize_nodes(
             PageIndexNodeV2(
                 node_id=node_id,
                 title=title,
-                direct_page_ranges=_subtract_ranges(parent_range, child_ranges),
-                subtree_page_range=parent_range,
+                direct_page_ranges=_subtract_ranges(declared_range, child_ranges),
+                subtree_page_range=subtree_range,
                 direct_summary=direct_summary,
                 subtree_summary=subtree_summary[:120_000],
                 children=child_nodes,
@@ -276,7 +312,7 @@ def _normalize_nodes(
         maximum_depth = max(maximum_depth, child_depth)
         if total > MAX_TREE_NODES:
             raise ArtifactValidationError("PageIndex tree exceeds maximum node count")
-    return normalized, total, maximum_depth
+    return normalized, total, maximum_depth, widened_nodes, widened_pages
 
 
 def _unmapped_ranges(tree: list[PageIndexNodeV2], page_count: int) -> list[PageRange]:
@@ -302,7 +338,7 @@ def normalize_tree_v2(
     raw_tree: object,
     *,
     page_count: int,
-) -> tuple[list[PageIndexNodeV2], str, int, int, int]:
+) -> NormalizedTree:
     if page_count < 1:
         raise ArtifactValidationError("PageIndex pages must not be empty")
     if isinstance(raw_tree, list):
@@ -326,7 +362,7 @@ def normalize_tree_v2(
         raise ArtifactValidationError("PageIndex tree must not be empty")
     if any(not isinstance(item, dict) for item in raw_nodes):
         raise ArtifactValidationError("PageIndex roots must be objects")
-    tree, node_count, max_depth = _normalize_nodes(
+    tree, node_count, max_depth, widened_nodes, widened_pages = _normalize_nodes(
         cast(list[dict[str, Any]], raw_nodes),
         page_count=page_count,
         seen=set(),
@@ -353,12 +389,14 @@ def normalize_tree_v2(
     node_count += len(unmapped)
     if node_count > MAX_TREE_NODES:
         raise ArtifactValidationError("PageIndex tree exceeds maximum node count")
-    return (
-        tree,
-        description,
-        node_count,
-        max_depth,
-        sum(item.page_end - item.page_start + 1 for item in unmapped),
+    return NormalizedTree(
+        tree=tree,
+        description=description,
+        node_count=node_count,
+        max_depth=max_depth,
+        unmapped_pages=sum(item.page_end - item.page_start + 1 for item in unmapped),
+        widened_nodes=widened_nodes,
+        widened_pages=widened_pages,
     )
 
 
@@ -438,9 +476,9 @@ def build_manifest_v2(
     raw_bytes = canonical_json(raw_tree)
     raw_sha256 = sha256_bytes(raw_bytes)
     raw_key = f"artifacts/v2/raw/{raw_sha256[:2]}/{raw_sha256}.json"
-    tree, description, node_count, max_depth, unmapped_pages = normalize_tree_v2(
-        raw_tree, page_count=len(pages)
-    )
+    normalized = normalize_tree_v2(raw_tree, page_count=len(pages))
+    tree = normalized.tree
+    description = normalized.description
     references, page_objects, totals = _page_shards(pages)
     metadata_sha256 = configuration_digest(metadata)
     configuration = {
@@ -461,7 +499,7 @@ def build_manifest_v2(
             "configuration_hash": configuration_hash,
         }
     )
-    covered_pages = len(pages) - unmapped_pages
+    covered_pages = len(pages) - normalized.unmapped_pages
     manifest = PageIndexManifestV2(
         document_id=document_id,
         document_sha256=document_sha256,
@@ -484,13 +522,15 @@ def build_manifest_v2(
         recipe_hash=recipe_hash,
         quality=ArtifactQuality(
             page_count=len(pages),
-            node_count=node_count,
-            max_depth=max_depth,
+            node_count=normalized.node_count,
+            max_depth=normalized.max_depth,
             covered_pages=covered_pages,
-            unmapped_pages=unmapped_pages,
+            unmapped_pages=normalized.unmapped_pages,
             nonempty_pages=totals["nonempty"],
             total_page_tokens=totals["tokens"],
             total_page_bytes=totals["bytes"],
+            widened_nodes=normalized.widened_nodes,
+            widened_pages=normalized.widened_pages,
         ),
     )
     manifest_bytes = canonical_json(manifest.model_dump(mode="json"))

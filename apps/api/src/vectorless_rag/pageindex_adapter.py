@@ -189,7 +189,9 @@ class PageIndexAdapter:
                 document_id=document_id,
                 document_sha256=document_sha256,
                 metadata=metadata,
-                generator_commit=self.settings.pageindex_version.split("+", 1)[0],
+                # Full version (commit + patch revision) so a +vrN bump alone still
+                # shifts configuration_hash and recipe identity.
+                generator_commit=self.settings.pageindex_version,
                 patch_sha256=patch_sha256,
                 model=self.settings.pageindex_model,
                 prompt_profile="pageindex-v2-untrusted-document-v1",

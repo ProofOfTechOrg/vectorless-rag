@@ -54,15 +54,20 @@ def test_continuation_boundaries(page_index: Any) -> None:
     assert page_index.merge_continuation_entries(first, list(first)) == first
     same_page_heading = [{"structure": "1.1", "title": "Setup", "physical_index": 4}]
     assert len(page_index.merge_continuation_entries(first, same_page_heading)) == 2
-    try:
-        page_index.merge_continuation_entries(
-            first,
-            [{"structure": "1", "title": "Methods", "physical_index": 5}],
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("conflicting continuation mapping was accepted")
+    # A re-listing with a shifted page is a normal continuation artifact; both entries
+    # survive (upstream extend semantics) and land in page order so post_processing's
+    # next-entry end_index rule stays monotonic.
+    listing = [
+        {"structure": "1", "title": "Methods", "physical_index": 4},
+        {"structure": "2", "title": "Results", "physical_index": 8},
+    ]
+    shifted = [{"structure": "1", "title": "Methods", "physical_index": 6}]
+    merged = page_index.merge_continuation_entries(listing, shifted)
+    assert [item["physical_index"] for item in merged] == [4, 6, 8]
+    assert page_index.merge_continuation_entries(merged, list(listing) + shifted) == merged
+    # Indices nullified by chunk validation sort last; tree_parser filters them out.
+    unplaced = [{"structure": "3", "title": "Discussion", "physical_index": None}]
+    assert page_index.merge_continuation_entries(listing, unplaced)[-1]["physical_index"] is None
 
 
 async def test_toc_without_numbers(page_index: Any) -> None:
@@ -102,6 +107,55 @@ async def test_toc_without_numbers(page_index: Any) -> None:
     assert calls == ["process_toc_no_page_numbers"]
 
 
+async def test_large_node_keeps_first_subsection_at_node_start(page_index: Any) -> None:
+    # The rewind sets node end_index to the first subsection's start; the recursion
+    # guard must compare against the node's original end or that subsection vanishes.
+    calls = {"count": 0}
+
+    async def meta_processor(*args: object, mode: str, **kwargs: object) -> list[dict[str, object]]:
+        del args, mode, kwargs
+        calls["count"] += 1
+        if calls["count"] > 1:
+            return []
+        return [
+            {"title": "Sub A", "physical_index": 10},
+            {"title": "Sub B", "physical_index": 20},
+            {"title": "Sub C", "physical_index": 30},
+        ]
+
+    def chain(items: list[dict[str, Any]], end: int) -> list[dict[str, Any]]:
+        # Mirrors upstream post_processing's in-place mutation: the caller reads
+        # start_index back off the same dicts to rewind the node's end_index.
+        for index, item in enumerate(items):
+            item["start_index"] = item["physical_index"]
+            item["end_index"] = (
+                items[index + 1]["physical_index"] if index + 1 < len(items) else end
+            )
+        return items
+
+    page_index.meta_processor = meta_processor
+    page_index.post_processing = chain
+    page_index.check_title_appearance_in_start_concurrent = async_identity
+    options = SimpleNamespace(
+        model="provider-free",
+        max_page_num_each_node=1,
+        max_token_num_each_node=1,
+        if_add_node_id="no",
+        if_add_node_summary="no",
+        if_add_doc_description="no",
+        if_add_node_text="no",
+    )
+    node: dict[str, Any] = {"title": "Chapter", "start_index": 10, "end_index": 50}
+    result = await page_index.process_large_node_recursively(
+        node,
+        [("page", 1)] * 60,
+        options,
+        logger=SimpleNamespace(info=log_info),
+    )
+    starts = [child["start_index"] for child in result["nodes"]]
+    assert starts == [10, 20, 30]
+
+
 async def test_bottom_up_summaries(utilities: Any) -> None:
     visits: list[str] = []
 
@@ -127,6 +181,9 @@ def main() -> None:
     page_index, utilities = load_modules(source)
     test_page_grouping(page_index)
     test_continuation_boundaries(page_index)
+    # Must run before test_toc_without_numbers, which replaces
+    # process_large_node_recursively on the module with an identity stub.
+    asyncio.run(test_large_node_keeps_first_subsection_at_node_start(page_index))
     asyncio.run(test_toc_without_numbers(page_index))
     asyncio.run(test_bottom_up_summaries(utilities))
     print("PageIndex patch regression checks passed")
