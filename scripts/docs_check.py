@@ -141,7 +141,9 @@ def validate_index(root: Path, markdown_files: list[Path]) -> list[str]:
         if path == index_path:
             continue
         if path.resolve() not in indexed_paths:
-            errors.append(f"docs/README.md: public document is not indexed: {path.relative_to(root)}")
+            errors.append(
+                f"docs/README.md: public document is not indexed: {path.relative_to(root)}"
+            )
     return errors
 
 

@@ -42,9 +42,7 @@ def show(key: str, value: str) -> str:
     return value if value.strip() else "<empty>"
 
 
-def render(
-    example: Path, current: dict[str, str], adopt: set[str]
-) -> tuple[str, list[str]]:
+def render(example: Path, current: dict[str, str], adopt: set[str]) -> tuple[str, list[str]]:
     """Emit the example's layout, substituting the values already configured locally."""
     lines: list[str] = []
     added: list[str] = []
@@ -97,9 +95,7 @@ def main() -> int:
     adopt = {key.strip() for key in args.adopt.split(",") if key.strip()}
     unknown = sorted(adopt - set(example))
     if unknown:
-        raise SystemExit(
-            f"--adopt names keys absent from the example: {', '.join(unknown)}"
-        )
+        raise SystemExit(f"--adopt names keys absent from the example: {', '.join(unknown)}")
 
     missing = [key for key in example if key not in current]
     orphans = [key for key in current if key not in example]
@@ -116,13 +112,9 @@ def main() -> int:
     print(f"\nnot in example ({len(orphans)}), preserved:")
     for key in orphans:
         print(f"  ? {key}")
-    print(
-        f"\ndiffering from example ({len(differing)}), kept unless --adopt names them:"
-    )
+    print(f"\ndiffering from example ({len(differing)}), kept unless --adopt names them:")
     for key in differing:
-        print(
-            f"  ~ {key}: local={show(key, current[key])} example={show(key, example[key])}"
-        )
+        print(f"  ~ {key}: local={show(key, current[key])} example={show(key, example[key])}")
 
     if args.check:
         drifted = bool(missing or orphans)
@@ -139,15 +131,9 @@ def main() -> int:
         for line in content.splitlines()
         if (match := ASSIGNMENT.match(line.strip()))
     }
-    lost = [
-        key
-        for key, value in current.items()
-        if key not in adopt and rebuilt.get(key) != value
-    ]
+    lost = [key for key, value in current.items() if key not in adopt and rebuilt.get(key) != value]
     if lost:
-        raise SystemExit(
-            f"refusing to write: {len(lost)} value(s) would change: {lost}"
-        )
+        raise SystemExit(f"refusing to write: {len(lost)} value(s) would change: {lost}")
 
     mode = args.env.stat().st_mode & 0o777
     # with_suffix on a dotfile yields ".env.env.bak"; name it explicitly so the backup lands
@@ -162,9 +148,7 @@ def main() -> int:
         temporary = Path(handle.name)
     os.chmod(temporary, mode)
     temporary.replace(args.env)
-    print(
-        f"\nadded {len(added)} key(s); backup at {backup.name}; mode {mode:o} preserved"
-    )
+    print(f"\nadded {len(added)} key(s); backup at {backup.name}; mode {mode:o} preserved")
     return 0
 
 

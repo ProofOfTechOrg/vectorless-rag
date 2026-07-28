@@ -25,8 +25,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from vectorless_rag.config import get_settings
-from vectorless_rag.db import Database, make_engine
+from vectorless_rag.config import Settings, get_settings
+from vectorless_rag.db import Database, driver_free_url, make_engine
 from vectorless_rag.evaluation_suite import (
     EvaluationCase,
     EvaluationScore,
@@ -34,9 +34,16 @@ from vectorless_rag.evaluation_suite import (
     FrozenEvaluationManifest,
     load_cases,
 )
-from vectorless_rag.graph import GraphRunner, GraphRunOptions
+from vectorless_rag.graph import GraphResult, GraphRunner, GraphRunOptions
 from vectorless_rag.llm import DeepSeekLLM, LLMError
-from vectorless_rag.models import Document, DocumentStatus, ModelCall, QueryRun, RunRoute
+from vectorless_rag.models import (
+    Document,
+    DocumentStatus,
+    ModelCall,
+    QueryRun,
+    RunFailureCode,
+    RunRoute,
+)
 from vectorless_rag.observability import Observability
 from vectorless_rag.provider import ProviderGate
 from vectorless_rag.retrieval import CorpusRouter, PageIndexRetriever, VectorlessRetriever
@@ -129,9 +136,41 @@ async def token_totals(session: AsyncSession, query_run_id: uuid.UUID) -> tuple[
 
 
 class Executor:
-    def __init__(self, runner: GraphRunner, documents: dict[str, uuid.UUID]) -> None:
+    def __init__(
+        self, runner: GraphRunner, documents: dict[str, uuid.UUID], settings: Settings
+    ) -> None:
         self.runner = runner
         self.documents = documents
+        self.settings = settings
+
+    async def finalize(
+        self,
+        session: AsyncSession,
+        run: QueryRun,
+        *,
+        latency: int,
+        result: GraphResult | None = None,
+        failure_code: RunFailureCode | None = None,
+    ) -> None:
+        """Terminalize the QueryRun the way the HTTP surface does.
+
+        query_run_status reads answer and failure_code; a row carrying neither stays
+        `running` forever and makes query-cost-report treat the whole window as incomplete.
+        The precise provider code stays on the score, which is free text; this column only
+        carries the coarse category the serving report groups by.
+        """
+        run.latency_ms = latency
+        if result is not None:
+            run.route = RunRoute(result["route"])
+            run.answer = result["answer"]
+            # Copied because scoring annotates the same citation dicts with an arXiv ID that
+            # belongs to the evaluation, not to the stored run.
+            run.citations = [dict(item) for item in result.get("citations", [])]
+            run.insufficient = bool(result.get("insufficient", False))
+        else:
+            run.failure_code = failure_code or RunFailureCode.request_failed
+            run.insufficient = True
+        await session.commit()
 
     async def execute(
         self,
@@ -154,26 +193,41 @@ class Executor:
         session.add(run)
         await session.commit()
 
+        # Built outside the try so a malformed case raises instead of being recorded as an
+        # excluded trial: a bad dataset is a defect, not a provider failure.
+        request = ChatRequest(
+            message=case.prompt,
+            constraints=MetadataConstraints.model_validate(case.constraints),
+        )
+        options = options_for(trial.experiment_kind, trial.evidence_token_budget, oracle)
+
         started = time.monotonic()
         try:
-            with usage_context(UsageOwner(trace_id=run.trace_id, query_run_id=run.id)):
-                result = await self.runner.run(
-                    session,
-                    ChatRequest(
-                        message=case.prompt,
-                        constraints=MetadataConstraints.model_validate(case.constraints),
-                    ),
-                    run,
-                    options=options_for(trial.experiment_kind, trial.evidence_token_budget, oracle),
-                )
-        except (LLMError, TimeoutError, ValueError) as error:
+            # The same deadline the HTTP surface enforces. Without it this scores as a clean
+            # success exactly the long multi-round runs that production returns as 504, which
+            # would bias the report toward the hardest cases the suite exists to measure.
+            async with asyncio.timeout(self.settings.request_deadline_seconds):
+                with usage_context(UsageOwner(trace_id=run.trace_id, query_run_id=run.id)):
+                    result = await self.runner.run(session, request, run, options=options)
+        except (LLMError, TimeoutError) as error:
             await session.rollback()
             code = getattr(error, "failure_code", type(error).__name__)
+            latency = round((time.monotonic() - started) * 1000)
+            await self.finalize(
+                session,
+                run,
+                latency=latency,
+                failure_code=(
+                    RunFailureCode.deadline_exceeded
+                    if isinstance(error, TimeoutError)
+                    else RunFailureCode.request_failed
+                ),
+            )
             return (
                 EvaluationScore(
                     trial_id=trial.trial_id,
                     query_run_id=run.id,
-                    latency_ms=round((time.monotonic() - started) * 1000),
+                    latency_ms=latency,
                     failure_code=str(code)[:80],
                     included=False,
                 ),
@@ -181,6 +235,7 @@ class Executor:
             )
 
         latency = round((time.monotonic() - started) * 1000)
+        await self.finalize(session, run, latency=latency, result=result)
         citations = result.get("citations", [])
         # Citations carry the document UUID; the suite is keyed by arXiv ID.
         by_id = {str(value): key for key, value in self.documents.items()}
@@ -189,29 +244,20 @@ class Executor:
 
         insufficient = bool(result.get("insufficient", False))
         route = str(result.get("route", ""))
-        if case.answerable:
-            route_correct = float(route == EXPECTED_ROUTE.value)
-        else:
-            # A correct refusal is the whole measurement for an unanswerable case.
-            route_correct = float(insufficient and not citations)
-
-        metrics = (
-            score_citations(case, citations)
-            if case.answerable
-            else {
-                "document_recall": float(not citations),
-                "support_recall": float(not citations),
-                "citation_precision": float(not citations),
-            }
-        )
+        # Recall and precision are ratios over target spans, and an unanswerable case has
+        # none. Leaving them unset keeps a refusal out of means the report takes over
+        # measured ratios; refusal correctness is its own metric rather than a bit smuggled
+        # into three fields that already mean something else.
+        metrics = score_citations(case, citations) if case.answerable else {}
         inputs, outputs = await token_totals(session, run.id)
         score = EvaluationScore(
             trial_id=trial.trial_id,
             query_run_id=run.id,
-            route_correct=route_correct,
-            document_recall=metrics["document_recall"],
-            support_recall=metrics["support_recall"],
-            citation_precision=metrics["citation_precision"],
+            route_correct=float(route == EXPECTED_ROUTE.value),
+            refusal_correct=None if case.answerable else float(insufficient and not citations),
+            document_recall=metrics.get("document_recall"),
+            support_recall=metrics.get("support_recall"),
+            citation_precision=metrics.get("citation_precision"),
             latency_ms=latency,
             input_tokens=inputs,
             output_tokens=outputs,
@@ -305,7 +351,7 @@ async def run(args: argparse.Namespace) -> None:
 
         async with AsyncExitStack() as stack:
             checkpointer = await stack.enter_async_context(
-                AsyncPostgresSaver.from_conn_string(settings.database_url.replace("+asyncpg", ""))
+                AsyncPostgresSaver.from_conn_string(driver_free_url(settings.database_url))
             )
             await checkpointer.setup()
             router = CorpusRouter(settings, llm)
@@ -318,21 +364,26 @@ async def run(args: argparse.Namespace) -> None:
                 observability,
                 checkpointer,
             )
-            executor = Executor(runner, documents)
+            executor = Executor(runner, documents, settings)
             judge_path = args.run / "judge-queue.jsonl"
             for index, trial in enumerate(pending, 1):
                 async with database.session() as session:
                     score, judge = await executor.execute(session, cases[trial.item_id], trial)
-                with scores_path.open("a", encoding="utf-8") as handle:
-                    handle.write(score.model_dump_json() + "\n")
+                # The judge entry is written first because scores.jsonl is the resume ledger:
+                # a crash between the two writes leaves the trial pending and re-runs it,
+                # which duplicates a judge line keyed by trial_id. The reverse order loses the
+                # claim-recall input for a trial already marked done, which nothing recovers.
                 if judge is not None:
                     with judge_path.open("a", encoding="utf-8") as handle:
                         handle.write(json.dumps(judge, ensure_ascii=False) + "\n")
+                with scores_path.open("a", encoding="utf-8") as handle:
+                    handle.write(score.model_dump_json() + "\n")
                 flag = "" if score.included else f" FAILED {score.failure_code}"
                 print(
                     f"[{index}/{len(pending)}] {trial.experiment_kind} {score.latency_ms}ms{flag}"
                 )
     finally:
+        observability.flush()
         await sql_engine.dispose()
         await database.close()
 

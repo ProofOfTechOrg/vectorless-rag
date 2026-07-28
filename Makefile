@@ -63,15 +63,15 @@ web-install: ## Install the frozen root pnpm workspace.
 
 format: api-format web-format ## Format API and web sources.
 api-format: ## Format and autofix Python sources.
-	$(UV) run --project $(API_DIR) ruff format $(API_DIR)
-	$(UV) run --project $(API_DIR) ruff check --fix $(API_DIR)
+	$(UV) run --project $(API_DIR) ruff format $(API_DIR) scripts
+	$(UV) run --project $(API_DIR) ruff check --fix $(API_DIR) scripts
 web-format: ## Autofix lint findings in web sources.
 	$(PNPM) --filter @vectorless-rag/web exec eslint . --fix
 
 lint: api-lint web-lint ## Lint API and web sources.
 api-lint: ## Lint and check formatting for Python sources.
-	$(UV) run --project $(API_DIR) ruff check $(API_DIR)
-	$(UV) run --project $(API_DIR) ruff format --check $(API_DIR)
+	$(UV) run --project $(API_DIR) ruff check $(API_DIR) scripts
+	$(UV) run --project $(API_DIR) ruff format --check $(API_DIR) scripts
 web-lint: ## Lint web sources.
 	$(PNPM) --filter @vectorless-rag/web lint
 
@@ -259,7 +259,7 @@ evaluation-run: ## Run a frozen PageIndex evaluation experiment from a reviewed 
 evaluation-freeze: ## Print the index digest for evaluation-run INDEX_HASH.
 	$(COMPOSE) exec -T api python scripts/freeze_index.py
 evaluation-execute: ## Execute prepared trials against DeepSeek (LIMIT=n, DRY_RUN=1).
-	$(COMPOSE) exec -T api python scripts/execute_evaluation.py \
+	$(COMPOSE) exec -T --user "$$(id -u):$$(id -g)" api python scripts/execute_evaluation.py \
 		$(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY_RUN),--dry-run,)
 evaluation-report: ## Build the local report for the latest frozen evaluation experiment.
 	cd $(API_DIR) && $(UV) run python scripts/report_evaluation.py

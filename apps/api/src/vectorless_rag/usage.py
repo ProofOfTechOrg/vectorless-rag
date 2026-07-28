@@ -15,6 +15,7 @@ from typing import cast
 import psycopg
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
+from vectorless_rag.db import driver_free_url
 from vectorless_rag.models import ModelCallOutcome, ModelCallStage
 
 _SAFE_SCALAR = re.compile(r"^[a-zA-Z0-9_.:-]{1,128}$")
@@ -464,7 +465,7 @@ def _sync_pool(
 
 class ModelCallLedger:
     def __init__(self, database_url: str, *, maximum_provider_attempts: int = 3) -> None:
-        self.database_url = database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+        self.database_url = driver_free_url(database_url)
         self.maximum_provider_attempts = maximum_provider_attempts
         self._pool = _sync_pool(self.database_url)
         self._async_pool: AsyncConnectionPool[psycopg.AsyncConnection[tuple[object, ...]]] = (

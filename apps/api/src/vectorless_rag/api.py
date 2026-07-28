@@ -30,7 +30,7 @@ from vectorless_rag.auth import (
     get_db_session,
 )
 from vectorless_rag.config import Settings, get_settings
-from vectorless_rag.db import Database, make_engine
+from vectorless_rag.db import Database, driver_free_url, make_engine
 from vectorless_rag.graph import GraphRunner
 from vectorless_rag.ingestion import (
     IngestionRetryConflict,
@@ -106,10 +106,6 @@ class Runtime:
     checkpointer: Any
 
 
-def _checkpoint_url(url: str) -> str:
-    return url.replace("postgresql+psycopg://", "postgresql://", 1)
-
-
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
@@ -125,7 +121,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     )
     async with AsyncExitStack() as stack:
         checkpointer_context = AsyncPostgresSaver.from_conn_string(
-            _checkpoint_url(settings.database_url)
+            driver_free_url(settings.database_url)
         )
         checkpointer = await stack.enter_async_context(checkpointer_context)
         await checkpointer.setup()

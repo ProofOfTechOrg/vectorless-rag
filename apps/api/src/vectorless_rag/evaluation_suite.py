@@ -181,6 +181,9 @@ class EvaluationScore(StrictEvaluationModel):
     trial_id: uuid.UUID
     query_run_id: uuid.UUID | None = None
     route_correct: float | None = Field(default=None, ge=0, le=1)
+    # Unanswerable cases only: whether the run refused instead of citing. Kept apart from the
+    # recall metrics so a refusal is never averaged into a ratio over target spans.
+    refusal_correct: float | None = Field(default=None, ge=0, le=1)
     document_recall: float | None = Field(default=None, ge=0, le=1)
     support_recall: float | None = Field(default=None, ge=0, le=1)
     answer_claim_recall: float | None = Field(default=None, ge=0, le=1)

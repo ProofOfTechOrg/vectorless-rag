@@ -86,6 +86,11 @@ services:
     volumes:
       - ${ARXIV_PDF_HOST_DIR}:/corpus:ro
       - pageindex_work:/workspaces
+      # The evaluation plan is written on the host and executed in here, because the
+      # executor needs the object store, which is not published outside the network. The
+      # mount also stops evaluation-freeze reading a baked corpus manifest that has since
+      # moved on. Run the execute target as the host user so appends land as that user.
+      - ./apps/api/evaluation:/app/evaluation
     depends_on:
       postgres:
         condition: service_healthy

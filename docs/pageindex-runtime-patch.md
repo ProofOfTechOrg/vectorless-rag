@@ -1,3 +1,6 @@
+<!-- Content type: Reference -->
+<!-- Content plan: Goal: record every change the vendored PageIndex patch makes and why. Audience: maintainers of the ingestion pipeline. Content: how the patch is applied and versioned, then each change classified as upstream bug fix or pipeline feature. Open questions: none. -->
+
 # PageIndex runtime patch
 
 Reference for `apps/api/patches/pageindex-runtime.patch`: every change it makes to the vendored PageIndex source, and whether each one fixes an upstream bug or adds something the ingestion pipeline needs. The patch applies to [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) at pinned revision `190f8b378be58199ca993566a9214dba72089c54` and touches two files: `pageindex/page_index.py` and `pageindex/utils.py`. The current patch revision is `+vr5`.

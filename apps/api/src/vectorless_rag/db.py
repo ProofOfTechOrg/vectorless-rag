@@ -33,6 +33,15 @@ from vectorless_rag.provider import STATUS_CACHE_WINDOW
 logger = logging.getLogger(__name__)
 
 
+def driver_free_url(url: str) -> str:
+    """Strip SQLAlchemy's driver suffix for libraries that take a raw libpq conninfo.
+
+    psycopg's pool and LangGraph's checkpointer both parse the URL themselves and reject
+    SQLAlchemy's ``+psycopg`` dialect marker.
+    """
+    return url.replace("postgresql+psycopg://", "postgresql://", 1)
+
+
 @dataclass(frozen=True)
 class IngestionClaim:
     job_id: uuid.UUID

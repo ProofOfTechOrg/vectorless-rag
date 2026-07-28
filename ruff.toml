@@ -1,0 +1,10 @@
+# Configuration for the root scripts/ tree only. apps/api carries its own settings in its
+# pyproject.toml, and ruff picks the nearest config per file, so this file must not be passed
+# with --config: doing that would apply root import resolution to the API package and reorder
+# its first-party imports as third-party.
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S"]
+ignore = ["S101"]
