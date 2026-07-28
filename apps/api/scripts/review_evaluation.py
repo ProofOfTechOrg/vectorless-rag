@@ -22,6 +22,8 @@ from typing import Any, cast
 from pydantic import ValidationError
 
 from vectorless_rag.evaluation_suite import (
+    COMPLETED_REVIEW_STATUSES,
+    DISCOVERY_STRATA,
     STRATA,
     EvaluationCase,
     case_source_hash,
@@ -30,13 +32,6 @@ from vectorless_rag.evaluation_suite import (
 
 DATASET = Path(__file__).resolve().parent.parent / "evaluation/pageindex-v2-regression.jsonl"
 SOURCE = Path(__file__).resolve().parent.parent / "evaluation/pageindex-v2-review-source.json"
-COMPLETED = {"approved", "edited", "rejected"}
-# validate_suite refuses a prompt in these strata that names the document it should discover.
-DISCOVERY_STRATA = {
-    "unconstrained_discovery",
-    "metadata_constrained_discovery",
-    "cross_document",
-}
 
 
 def load(path: Path) -> list[dict[str, Any]]:
@@ -187,7 +182,9 @@ def main() -> None:
         for status, total in sorted(counts.items()):
             print(f"{status:10s} {total:3d}")
         print(f"{'TOTAL':10s} {len(cases):3d}")
-        remaining = sum(total for status, total in counts.items() if status not in COMPLETED)
+        remaining = sum(
+            total for status, total in counts.items() if status not in COMPLETED_REVIEW_STATUSES
+        )
         print(f"\n{remaining} case(s) still need a decision.")
         return
 
@@ -204,7 +201,7 @@ def main() -> None:
     queue = [
         index
         for index, case in enumerate(cases)
-        if (args.include_done or case["review"]["status"] not in COMPLETED)
+        if (args.include_done or case["review"]["status"] not in COMPLETED_REVIEW_STATUSES)
         and (not wanted or case["stratum"] in wanted)
         and (not args.item or case["item_id"] == args.item)
     ]

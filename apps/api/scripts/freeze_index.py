@@ -81,9 +81,13 @@ async def freeze(corpus: Path | None) -> dict[str, object]:
         required = {document.arxiv_id for document in load_corpus_manifest(corpus).documents}
         absent = sorted(required - set(indexed))
         result["corpus_manifest_documents"] = len(required)
-        result["missing_from_index"] = absent
         if absent:
-            raise SystemExit(json.dumps({**result, "error": "targets are not indexed"}, indent=2))
+            raise SystemExit(
+                json.dumps(
+                    {**result, "missing_from_index": absent, "error": "targets are not indexed"},
+                    indent=2,
+                )
+            )
     return result
 
 

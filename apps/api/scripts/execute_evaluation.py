@@ -294,6 +294,32 @@ class Executor:
         return score, judge
 
 
+def scored_trials(path: Path) -> set[uuid.UUID]:
+    """Read the resume ledger, tolerating a final line torn by an interrupted append.
+
+    Only the last line can be partial: everything before it was followed by a completed
+    write. Refusing the whole file for one torn tail would strand a run that has already
+    paid for hundreds of trials, and the torn trial simply re-runs.
+    """
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    done: set[uuid.UUID] = set()
+    for number, line in enumerate(lines, 1):
+        try:
+            done.add(uuid.UUID(cast(dict[str, Any], json.loads(line))["trial_id"]))
+        except (json.JSONDecodeError, KeyError, ValueError):
+            if number != len(lines):
+                raise SystemExit(
+                    f"{path.name}:{number} is unreadable and is not the final line, so it was "
+                    "not truncated by an interrupted write; repair it before resuming"
+                ) from None
+            # Dropped from the file as well as from the set: leaving it would let the next
+            # append run onto the torn text and turn a recoverable tail into a permanent
+            # mid-file corruption.
+            path.write_text("".join(f"{kept}\n" for kept in lines[:-1]), encoding="utf-8")
+            print(f"discarded a torn final line in {path.name}; that trial will re-run")
+    return done
+
+
 async def ensure_experiment(database: Database, manifest: FrozenEvaluationManifest) -> None:
     """Materialise the frozen plan as the experiment row the cost ceiling is read from.
 
@@ -341,11 +367,7 @@ async def run(args: argparse.Namespace) -> None:
     ]
     cases = {case.item_id: case for case in load_cases(args.dataset)}
     scores_path = args.run / "scores.jsonl"
-    done = {
-        uuid.UUID(cast(dict[str, Any], json.loads(line))["trial_id"])
-        for line in scores_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    }
+    done = scored_trials(scores_path)
     pending = [trial for trial in trials if trial.trial_id not in done]
     if args.limit:
         pending = pending[: args.limit]
@@ -448,7 +470,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", type=Path, default=root / "run")
     parser.add_argument("--dataset", type=Path, default=root / "pageindex-v2-regression.jsonl")
-    parser.add_argument("--limit", type=int, default=0, help="execute at most this many trials")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="execute at most this many trials (0 runs every pending trial)",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",

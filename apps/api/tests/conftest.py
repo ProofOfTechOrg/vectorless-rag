@@ -18,5 +18,5 @@ def _isolate_repo_env_file(  # pyright: ignore[reportUnusedFunction] -- autouse 
 ) -> None:
     # Settings resolves env_file=".env" against the working directory, so a repo-root
     # pytest run would fold the developer's .env into every bare Settings() in the
-    # suite. Subprocess-spawning tests pin their own cwd and are unaffected.
+    # suite. Subprocess-spawning tests address every file by absolute path and are unaffected.
     monkeypatch.chdir(tmp_path)

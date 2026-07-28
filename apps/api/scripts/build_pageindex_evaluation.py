@@ -15,6 +15,7 @@ from typing import Any, Protocol, cast
 import fitz
 
 from vectorless_rag.evaluation_suite import (
+    COMPLETED_REVIEW_STATUSES,
     STRATA,
     case_source_hash,
     stable_item_id,
@@ -283,7 +284,7 @@ def carry_reviews(cases: list[dict[str, object]], previous: Path) -> int:
             continue
         record = cast(dict[str, Any], json.loads(line))
         review = cast(dict[str, object], record["review"])
-        if review.get("status") in {"approved", "edited", "rejected"}:
+        if review.get("status") in COMPLETED_REVIEW_STATUSES:
             prior[str(review["source_hash"])] = review
     carried = 0
     for case in cases:

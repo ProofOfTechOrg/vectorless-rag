@@ -20,6 +20,14 @@ STRATA = (
     "cross_document",
     "unanswerable",
 )
+# Strata whose prompt must not name the document it is supposed to make the router find.
+DISCOVERY_STRATA = frozenset(
+    {"unconstrained_discovery", "metadata_constrained_discovery", "cross_document"}
+)
+# A review a human has finished, whichever way it went. Distinct from the statuses a suite
+# may actually run with, which excludes rejected.
+COMPLETED_REVIEW_STATUSES = frozenset({"approved", "edited", "rejected"})
+USABLE_REVIEW_STATUSES = frozenset({"approved", "edited"})
 EXPERIMENT_KINDS = (
     "route",
     "corpus_routing",
@@ -68,7 +76,7 @@ class ReviewRecord(StrictEvaluationModel):
 
     @model_validator(mode="after")
     def approval_has_identity(self) -> ReviewRecord:
-        if self.status in {"approved", "edited", "rejected"} and (
+        if self.status in COMPLETED_REVIEW_STATUSES and (
             not self.reviewer or self.reviewed_at is None
         ):
             raise ValueError("completed reviews require reviewer and timestamp")
@@ -327,18 +335,14 @@ def validate_suite(
     manifest = {document.arxiv_id: document for document in corpus.documents}
     split_targets: defaultdict[str, set[str]] = defaultdict(set)
     for case in cases:
-        if require_reviewed and case.review.status not in {"approved", "edited"}:
+        if require_reviewed and case.review.status not in USABLE_REVIEW_STATUSES:
             raise ValueError(f"case has no completed review: {case.item_id}")
         raw = case.model_dump(mode="json")
         if case.review.source_hash != case_source_hash(raw):
             raise ValueError(f"case review source hash is stale: {case.item_id}")
         target_ids = {target.arxiv_id for target in case.target_documents}
         split_targets[case.split].update(target_ids)
-        if case.stratum in {
-            "unconstrained_discovery",
-            "metadata_constrained_discovery",
-            "cross_document",
-        }:
+        if case.stratum in DISCOVERY_STRATA:
             normalized_prompt = case.prompt.casefold()
             if any(target_id.casefold() in normalized_prompt for target_id in target_ids):
                 raise ValueError(f"discovery prompt leaks a target ID: {case.item_id}")

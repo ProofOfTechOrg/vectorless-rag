@@ -105,8 +105,10 @@ def _indexing_rates(settings: Settings) -> Pricing:
 
 
 def _indexing_model_names(settings: Settings) -> tuple[str, ...]:
-    # Ingestion records the model after stripping a litellm/ prefix, so accept either form.
-    return (settings.pageindex_model, settings.pageindex_model.removeprefix("litellm/"))
+    # Ingestion records the model with any litellm/ prefix already stripped, so that is the
+    # form calls are keyed by; the configured spelling is kept too for a report run against
+    # rows written before the stripping.
+    return tuple({settings.pageindex_model, settings.pageindex_model.removeprefix("litellm/")})
 
 
 def _serving_rates(settings: Settings) -> Pricing:
