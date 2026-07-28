@@ -82,8 +82,11 @@ class OutlineNode(StrictArtifactModel):
 
 
 class ArtifactQuality(BaseModel):
-    # Metrics bag, not an integrity surface: unknown keys are ignored so a reader on
-    # the previous release survives manifests that carry newer counters.
+    # Metrics bag, not an integrity surface: the manifest digest is taken over bytes and
+    # checked before parsing, so ignoring unknown keys cannot smuggle anything past it. This
+    # buys forward compatibility from here on, not backwards: a reader from before these
+    # counters existed still forbids extras, so rolling back to it makes every manifest
+    # written since unloadable until those documents are reindexed.
     model_config = ConfigDict(extra="ignore")
 
     page_count: int = Field(ge=1)

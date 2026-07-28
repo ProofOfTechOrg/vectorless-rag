@@ -52,6 +52,18 @@ async def freeze(corpus: Path | None) -> dict[str, object]:
     if not rows:
         raise SystemExit("no ready document carries an active index version; nothing to freeze")
 
+    # arxiv_id is nullable and carries no uniqueness constraint, so collapsing rows into a
+    # dict keyed by it would drop a digest and still produce a well-formed hash: a corpus
+    # that lost a document would freeze indistinguishably from a clean smaller one.
+    identifiers = [row[0] for row in rows]
+    ambiguous = sorted(
+        {str(name) for name in identifiers if name is None or identifiers.count(name) > 1}
+    )
+    if ambiguous:
+        raise SystemExit(
+            f"{len(ambiguous)} arXiv identifier(s) are missing or shared by several ready "
+            f"documents, so the digest would not identify the index: {ambiguous[:5]}"
+        )
     indexed = {str(row[0]): str(row[1]) for row in rows}
     # Same construction as the corpus snapshot: sorted identifier and digest pairs, NUL
     # separated so neither field can imitate the delimiter.

@@ -5,6 +5,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -62,12 +63,25 @@ class Pricing:
     cache_hit_input_per_million_usd: float | None
     output_per_million_usd: float | None
     environment_prefix: str = "DEEPSEEK"
+    # The model these base rates describe. None means they describe whatever they are
+    # applied to, which is only correct when the caller knows there is one model.
+    model: str | None = None
     overrides: Mapping[str, Pricing] = dataclass_field(
         default_factory=lambda: cast(dict[str, "Pricing"], {})
     )
 
-    def for_model(self, model: str) -> Pricing:
-        return self.overrides.get(model, self)
+    def for_model(self, model: str) -> Pricing | None:
+        """Rates for a recorded model name, or None when none are configured for it.
+
+        Returning the base rates for an unrecognised model would price it confidently and
+        wrongly: a call recorded under a model the configuration has since moved off would
+        silently take the current model's rate. A caller that leaves `model` unset keeps the
+        single-rate behaviour, since then the base rates describe every call by definition.
+        """
+        override = self.overrides.get(model)
+        if override is not None:
+            return override
+        return self if self.model is None or self.model == model else None
 
     def missing(self) -> list[str]:
         return [
@@ -95,30 +109,34 @@ def _indexing_model_names(settings: Settings) -> tuple[str, ...]:
     return (settings.pageindex_model, settings.pageindex_model.removeprefix("litellm/"))
 
 
-def query_pricing(settings: Settings) -> Pricing:
-    """Rates for serving, with indexing calls priced correctly if any appear."""
-    indexing = _indexing_rates(settings)
+def _serving_rates(settings: Settings) -> Pricing:
     return Pricing(
         settings.deepseek_input_cost_per_million_usd,
         settings.deepseek_cache_hit_input_cost_per_million_usd,
         settings.deepseek_output_cost_per_million_usd,
-        overrides={name: indexing for name in _indexing_model_names(settings)},
+        model=settings.deepseek_model,
+    )
+
+
+def query_pricing(settings: Settings) -> Pricing:
+    """Rates for serving, with indexing calls priced correctly if any appear."""
+    indexing = _indexing_rates(settings)
+    serving = _serving_rates(settings)
+    return dataclass_replace(
+        serving, overrides={name: indexing for name in _indexing_model_names(settings)}
     )
 
 
 def indexing_pricing(settings: Settings) -> Pricing:
     """Rates for ingestion, with serving calls priced correctly if any appear."""
-    serving = Pricing(
-        settings.deepseek_input_cost_per_million_usd,
-        settings.deepseek_cache_hit_input_cost_per_million_usd,
-        settings.deepseek_output_cost_per_million_usd,
-    )
-    return Pricing(
-        settings.pageindex_input_cost_per_million_usd,
-        settings.pageindex_cache_hit_input_cost_per_million_usd,
-        settings.pageindex_output_cost_per_million_usd,
-        environment_prefix="PAGEINDEX",
-        overrides={settings.deepseek_model: serving},
+    indexing = _indexing_rates(settings)
+    return dataclass_replace(
+        indexing,
+        model=settings.pageindex_model,
+        overrides={
+            **{name: indexing for name in _indexing_model_names(settings)},
+            settings.deepseek_model: _serving_rates(settings),
+        },
     )
 
 
@@ -252,8 +270,14 @@ def _price_usage(
     grouped: defaultdict[str, list[ModelCall]] = defaultdict(list)
     for call in calls:
         grouped[call.model].append(call)
-    rates_used = [pricing.for_model(model) for model in grouped] or [pricing]
-    missing = sorted({name for rates in rates_used for name in rates.missing()})
+    resolved = {model: pricing.for_model(model) for model in grouped}
+    rates_used = [rates for rates in resolved.values() if rates is not None] or [pricing]
+    # A model with no configured rate is named in the report rather than absorbed into
+    # whichever rate happened to be the base, which would be a confident wrong number.
+    missing = sorted(
+        {name for rates in rates_used for name in rates.missing()}
+        | {f"PRICE_FOR_MODEL:{model}" for model, rates in resolved.items() if rates is None}
+    )
 
     cost: float | None = None
     if all(payload.get(field) == 0 for field in TOKEN_FIELDS):
@@ -261,8 +285,9 @@ def _price_usage(
     elif not missing and payload["usage_available_calls"]:
         if grouped:
             cost = sum(
-                _rate_cost(_usage_summary(group)[1], pricing.for_model(model))
+                _rate_cost(_usage_summary(group)[1], rates)
                 for model, group in grouped.items()
+                if (rates := resolved[model]) is not None
             )
         else:
             cost = _rate_cost(vector, pricing)

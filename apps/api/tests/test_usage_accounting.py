@@ -492,3 +492,29 @@ def test_a_missing_override_price_is_reported_against_its_own_variable() -> None
         "PAGEINDEX_INPUT_COST_PER_MILLION_USD",
         "PAGEINDEX_OUTPUT_COST_PER_MILLION_USD",
     ]
+
+
+def test_a_model_with_no_configured_rate_is_named_instead_of_priced() -> None:
+    run_id, trace_id = uuid.uuid4(), uuid.uuid4().hex
+    run = QueryRun(
+        id=run_id,
+        trace_id=trace_id,
+        thread_id="thread",
+        route=RunRoute.documents,
+        question="q",
+        answer="a",
+    )
+    # Rates that describe one model only. A call recorded under a model the configuration has
+    # since moved off must not silently take these rates.
+    pricing = Pricing(1.0, 1.0, 1.0, model="current-serving-model")
+
+    report = cast(
+        dict[str, Any],
+        build_query_cost_report(
+            [run], [_priced_call("retired-serving-model", run_id, trace_id)], pricing, days=30
+        ),
+    )
+
+    cost = report["groups"][0]["known_cost"]
+    assert cost["known_cost_usd"] is None
+    assert cost["missing_price_configuration"] == ["PRICE_FOR_MODEL:retired-serving-model"]
