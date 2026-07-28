@@ -22,7 +22,7 @@ This page lists every public Make target and the variables that alter operator c
 | Lifecycle | `make up`, `make rebuild`, `make dev`, `make dev-build`, `make dev-health`, `make down`, `make stop`, `make restart`, `make restart-app`, `make restart-web`, `make restart-langfuse`, `make restart-observability`, `make ps`, `make logs SERVICE=worker`, `make health`, `make web-dev` |
 | Corpus | `make download-corpus`, `make download-corpus ARXIV_PDF_HOST_DIR=/srv/vectorless/arxiv-pdfs` |
 | Operator | `make migrate`, `make bootstrap-key NAME=operator`, `make sync-corpus`, `make upload-document PDF=/path/file.pdf`, `make pilot-check`, `make pilot-run`, `make pilot-report`, `make artifact-verify`, `make artifact-gc` |
-| Evaluation | `make evaluation-build`, `make evaluation-check`, `make evaluation-review-pack`, `make evaluation-review REVIEWER=…`, `make evaluation-review-status`, `make evaluation-seed`, `make evaluation-run INDEX_HASH=…`, `make evaluation-execute LIMIT=10`, `make evaluation-report` |
+| Evaluation | `make evaluation-build`, `make evaluation-check`, `make evaluation-review-pack`, `make evaluation-review REVIEWER=…`, `make evaluation-review-status`, `make evaluation-seed`, `make evaluation-freeze`, `make evaluation-run INDEX_HASH=…`, `make evaluation-execute LIMIT=10`, `make evaluation-report` |
 | Secret generation | `make secret-api-pepper`, `make secret-session`, `make secrets-langfuse` |
 
 `make pilot-run` writes its immutable result to `apps/api/pilots/run/result.json`. Set `PILOT_OUTPUT=path/to/result.json` to select another new output directory. The target fails before provider work when that directory already exists.

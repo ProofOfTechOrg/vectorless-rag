@@ -46,8 +46,13 @@ After review:
 
 ```bash
 make evaluation-seed
-make evaluation-run INDEX_HASH=<frozen-index-sha256>
+make evaluation-freeze
+make evaluation-run INDEX_HASH=<index_sha256 from evaluation-freeze>
 ```
+
+Freezing requires the stack running and the corpus ingested, since it reads what is actually queryable. `make evaluation-freeze` reduces every ready document's active PageIndex artifact digest to one value, ordered by arXiv ID, the same construction the corpus manifest uses for PDFs. It fails when any document the corpus manifest targets is missing from the index, because an unindexed target scores as a retrieval miss rather than as the setup error it is.
+
+The digest covers the whole ready catalog rather than only the targeted documents. Corpus routing searches everything, so ingesting or reindexing an unrelated document changes what the router chooses between and therefore changes the measurement. Re-freeze after any ingestion, and treat a changed digest as a different index: results from two digests are not comparable.
 
 Seeding uses each case’s stable UUID as the Langfuse dataset item ID. The run preflight requires a clean worktree, exact release commit, complete provider price snapshot, reviewed dataset, tracked corpus hash, and explicit frozen index hash. It writes ignored local artifacts under `apps/api/evaluation/run/`:
 

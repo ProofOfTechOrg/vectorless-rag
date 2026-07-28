@@ -37,7 +37,7 @@ export UV_CACHE_DIR
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up rebuild dev dev-build dev-health down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
-	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-review evaluation-review-status evaluation-seed evaluation-run evaluation-execute evaluation-report \
+	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-review evaluation-review-status evaluation-seed evaluation-run evaluation-freeze evaluation-execute evaluation-report \
 	secret-api-pepper secret-session secrets-langfuse
 
 help: ## Show all supported project commands.
@@ -256,6 +256,8 @@ evaluation-seed: ## Seed the reviewed PageIndex evaluation suite into Langfuse.
 evaluation-run: ## Run a frozen PageIndex evaluation experiment from a reviewed suite.
 	@test -n "$(INDEX_HASH)" || { echo "INDEX_HASH=<sha256> is required" >&2; exit 2; }
 	cd $(API_DIR) && $(UV) run python scripts/run_evaluation.py --index-hash "$(INDEX_HASH)"
+evaluation-freeze: ## Print the index digest for evaluation-run INDEX_HASH.
+	cd $(API_DIR) && $(UV) run python scripts/freeze_index.py
 evaluation-execute: ## Execute prepared trials against DeepSeek (LIMIT=n, DRY_RUN=1).
 	cd $(API_DIR) && $(UV) run python scripts/execute_evaluation.py \
 		$(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY_RUN),--dry-run,)
