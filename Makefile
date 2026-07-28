@@ -30,7 +30,7 @@ PILOT_OUTPUT ?= apps/api/pilots/run/result.json
 
 export UV_CACHE_DIR
 
-.PHONY: help env init install api-install web-install format api-format web-format lint api-lint web-lint \
+.PHONY: help env env-sync env-check init install api-install web-install format api-format web-format lint api-lint web-lint \
 	typecheck api-typecheck web-typecheck test api-test web-test test-unit test-integration \
 	test-integration-stack docs-check \
 	api-build web-build web-production-smoke playwright-install playwright playwright-live react-doctor react-doctor-diff astryx-doctor workflow-check migration-check \
@@ -49,6 +49,11 @@ env: ## Create .env from .env.example if absent and restrict its permissions.
 
 init: ## Create a mode-600 .env with generated local secrets without overwriting.
 	$(PYTHON) scripts/init_env.py
+
+env-sync: ## Add keys .env is missing from .env.example (ADOPT=KEY,KEY to take example values).
+	$(PYTHON) scripts/sync_env.py $(if $(ADOPT),--adopt "$(ADOPT)",)
+env-check: ## Report .env drift against .env.example without writing.
+	$(PYTHON) scripts/sync_env.py --check
 
 install: api-install web-install ## Install all frozen development dependencies.
 api-install: ## Install the frozen Python environment under apps/api.

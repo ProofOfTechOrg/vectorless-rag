@@ -7,7 +7,7 @@ This page lists every public Make target and the variables that alter operator c
 
 | Area | Commands |
 | --- | --- |
-| Discovery and environment | `make help`, `make env`, `make init` |
+| Discovery and environment | `make help`, `make env`, `make init`, `make env-check`, `make env-sync` |
 | Dependencies | `make install`, `make api-install`, `make web-install` |
 | Formatting | `make format`, `make api-format`, `make web-format` |
 | Linting | `make lint`, `make api-lint`, `make web-lint` |
@@ -28,6 +28,8 @@ This page lists every public Make target and the variables that alter operator c
 `make pilot-run` writes its immutable result to `apps/api/pilots/run/result.json`. Set `PILOT_OUTPUT=path/to/result.json` to select another new output directory. The target fails before provider work when that directory already exists.
 
 `make init` atomically creates a mode-600 `.env` with generated local infrastructure and session secrets. It leaves `DEEPSEEK_API_KEY` blank and refuses to overwrite an existing file.
+
+`make env-check` reports which keys `.env` is missing relative to `.env.example`, which it carries that the example does not, and which values differ. It writes nothing and exits non-zero on structural drift, so it works as a gate. `make env-sync` adds the missing keys with their example defaults, rewriting `.env` in the example's order and comments while keeping every value already configured. Secret-looking values are reported as `<set>` or `<empty>` and never printed. An existing value is replaced only when `ADOPT` names its key, as in `make env-sync ADOPT=DEEPSEEK_MODEL`. Keys absent from the example are preserved in a trailing section rather than removed. The previous file is copied to `.env.bak` at the same permissions before anything is written.
 
 `make test-integration-stack` uses port `55432` and a unique disposable Compose project. Set `TEST_POSTGRES_PORT` to another unused port. The cleanup trap removes only that project and its volumes.
 
