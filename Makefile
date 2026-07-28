@@ -37,7 +37,7 @@ export UV_CACHE_DIR
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up rebuild dev dev-build dev-health down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
-	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-seed evaluation-run evaluation-report \
+	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-review evaluation-review-status evaluation-seed evaluation-run evaluation-report \
 	secret-api-pepper secret-session secrets-langfuse
 
 help: ## Show all supported project commands.
@@ -237,6 +237,12 @@ evaluation-check: ## Validate the tracked 120-case PageIndex suite without PDFs 
 	cd $(API_DIR) && $(UV) run python scripts/check_evaluation_suite.py
 evaluation-review-pack: ## Rebuild the local PageIndex evaluation review pack.
 	cd $(API_DIR) && $(UV) run python scripts/build_evaluation_review_pack.py
+evaluation-review: ## Review PageIndex cases interactively (REVIEWER=name, optional STRATUM=).
+	@test -n "$(REVIEWER)" || { echo "set REVIEWER=<your identity>" >&2; exit 2; }
+	cd $(API_DIR) && $(UV) run python scripts/review_evaluation.py \
+		--reviewer "$(REVIEWER)" $(if $(STRATUM),--stratum "$(STRATUM)",)
+evaluation-review-status: ## Show PageIndex review progress.
+	cd $(API_DIR) && $(UV) run python scripts/review_evaluation.py --status
 evaluation-seed: ## Seed the reviewed PageIndex evaluation suite into Langfuse.
 	@test -f "$(DATASET)" || { echo "DATASET does not exist: $(DATASET)" >&2; exit 2; }
 	$(COMPOSE) exec -T api python scripts/seed_evaluation.py /dev/stdin \

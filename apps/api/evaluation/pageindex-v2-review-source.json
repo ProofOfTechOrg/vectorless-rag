@@ -3,13 +3,13 @@
     "excerpts": [
       {
         "arxiv_id": "1503.02531",
-        "excerpt": "For cumbersome models that learn to discriminate between a large number of classes, the normal training objective is to maximize the average log probability of the correct answer, but a side-effect of the learning is that the trained model assigns probabilities to all of the incorrect answers and even when these probabilities are very small, some of them are much larger than others.",
+        "excerpt": "The relative probabilities of incorrect answers tell us a lot about how the cumbersome model tends to generalize.",
         "page": 2
       }
     ],
-    "item_id": "a9323063-1571-536f-bccd-2922e520d246",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "For cumbersome models that learn to discriminate between a large number of classes, the normal training objective is to maximize the average log probability of the correct answer, but a side-effect of the learning is that the trained model assigns probabilities to all of the incorrect answers and even when these probabilities are very small, some of them are much larger than others.",
+    "item_id": "49caeba6-4318-52fa-87ed-49a7a08c873c",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"The relative probabilities of incorrect answers tell us a\" and state in full what it reports.",
+    "reference_answer": "The relative probabilities of incorrect answers tell us a lot about how the cumbersome model tends to generalize.",
     "split": "dev",
     "stratum": "explicit_single_document"
   },
@@ -17,13 +17,13 @@
     "excerpts": [
       {
         "arxiv_id": "1606.07947",
-        "excerpt": "Figure 1: Overview of the different knowledge distillation approaches. In word-level knowledge distillation (left) cross-entropy is minimized between the student/teacher distributions (yellow) for each word in the actual target sequence (ECD), as well as between the student distribution and the degenerate data distribution, which has all of its probabilitiy mass on one word (black).",
-        "page": 3
+        "excerpt": "Machine translation involves finding the most probable target sentence given the source: argmax t∈T p(t | s) where T is the set of all possible sequences.",
+        "page": 2
       }
     ],
-    "item_id": "a0e47480-4663-5960-acc4-55d19c2916e5",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Figure 1: Overview of the different knowledge distillation approaches. In word-level knowledge distillation (left) cross-entropy is minimized between the student/teacher distributions (yellow) for each word in the actual target sequence (ECD), as well as between the student distribution and the degenerate data distribution, which has all of its probabilitiy mass on one word (black).",
+    "item_id": "d94a0e28-cb52-5db7-8b40-0bc7194a76ea",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Machine translation involves finding the most probable target sentence\" and state in full what it reports.",
+    "reference_answer": "Machine translation involves finding the most probable target sentence given the source: argmax t∈T p(t | s) where T is the set of all possible sequences.",
     "split": "dev",
     "stratum": "explicit_single_document"
   },
@@ -31,13 +31,13 @@
     "excerpts": [
       {
         "arxiv_id": "1607.00133",
-        "excerpt": "Theorem 1. There exist constants c1 and c2 so that given the sampling probability q = L/N and the number of steps T, for any ε < c1q2T, Algorithm 1 is (ε, δ)-diﬀerentially private for any δ > 0 if we choose σ ≥c2 q p T log(1/δ) ε .",
-        "page": 4
+        "excerpt": "Composability enables modular design of mechanisms: if all the components of a mechanism are differentially private, then so is their composition.",
+        "page": 2
       }
     ],
-    "item_id": "8cb8ec33-6ce5-5fe2-b942-055181103982",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Theorem 1. There exist constants c1 and c2 so that given the sampling probability q = L/N and the number of steps T, for any ε < c1q2T, Algorithm 1 is (ε, δ)-diﬀerentially private for any δ > 0 if we choose σ ≥c2 q p T log(1/δ) ε .",
+    "item_id": "8bbfad7d-1dc1-53be-bd2a-edffe80ab3b8",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Composability enables modular design of mechanisms: if all the\" and state in full what it reports.",
+    "reference_answer": "Composability enables modular design of mechanisms: if all the components of a mechanism are differentially private, then so is their composition.",
     "split": "dev",
     "stratum": "explicit_single_document"
   },
@@ -45,13 +45,13 @@
     "excerpts": [
       {
         "arxiv_id": "1610.05820",
-        "excerpt": "RANDRECORD(x∗, k) ▷randomize k features 25: end for 26: return ⊥ ▷failed to synthesize 27: end procedure (e.g., neural networks, SVM, logistic regression) and model structure (e.g., the wiring of a neural network) are known.",
-        "page": 5
+        "excerpt": "Our results for the Texas hospital discharge dataset (over 70% accuracy) indicate that membership inference can present a risk to health-care datasets if these datasets are used to train machine learning models and access to the resulting models is open to the public.",
+        "page": 2
       }
     ],
-    "item_id": "54bb5524-0bf6-5fb4-870c-5c8395f05848",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "RANDRECORD(x∗, k) ▷randomize k features 25: end for 26: return ⊥ ▷failed to synthesize 27: end procedure (e.g., neural networks, SVM, logistic regression) and model structure (e.g., the wiring of a neural network) are known.",
+    "item_id": "b1fde693-2956-5a71-a245-e76b9b72eff3",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Our results for the Texas hospital discharge dataset (over\" and state in full what it reports.",
+    "reference_answer": "Our results for the Texas hospital discharge dataset (over 70% accuracy) indicate that membership inference can present a risk to health-care datasets if these datasets are used to train machine learning models and access to the resulting models is open to the public.",
     "split": "dev",
     "stratum": "explicit_single_document"
   },
@@ -59,13 +59,13 @@
     "excerpts": [
       {
         "arxiv_id": "1708.06733",
-        "excerpt": "Original image Single-Pixel Backdoor Pattern Backdoor Figure 3. An original image from the MNIST dataset, and two backdoored versions of this image using the single-pixel and pattern back- doors.",
-        "page": 6
+        "excerpt": "The backdoored model should perform well on most inputs (including inputs that the end user may hold out as a validation set) but cause targeted misclassifications or degrade the accuracy of the model for inputs that satisfy some secret, attacker-chosen property, which we will refer to as the backdoor trigger.",
+        "page": 2
       }
     ],
-    "item_id": "77bd754b-b58e-5752-86ce-741a713c8354",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Original image Single-Pixel Backdoor Pattern Backdoor Figure 3. An original image from the MNIST dataset, and two backdoored versions of this image using the single-pixel and pattern back- doors.",
+    "item_id": "43ce7c83-63e6-5750-b0c9-3a0cb72a0a24",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"The backdoored model should perform well on most inputs\" and state in full what it reports.",
+    "reference_answer": "The backdoored model should perform well on most inputs (including inputs that the end user may hold out as a validation set) but cause targeted misclassifications or degrade the accuracy of the model for inputs that satisfy some secret, attacker-chosen property, which we will refer to as the backdoor trigger.",
     "split": "dev",
     "stratum": "explicit_single_document"
   },
@@ -73,13 +73,13 @@
     "excerpts": [
       {
         "arxiv_id": "1810.03993",
-        "excerpt": "FAT* ’19, January 29–31, 2019, Atlanta, GA, USA Margaret Mitchell, Simone Wu, Andrew Zaldivar, Parker Barnes, Lucy Vasserman, Ben Hutchinson, Elena Spitzer, Inioluwa Deborah Raji, Timnit Gebru focus on trained model characteristics such as the type of model, intended use cases, information about attributes for which model performance may vary, and measures of model performance.",
+        "excerpt": "Similarly, drugs developed based on results of clinical trials with exclusively male participants have led to overdosing in women [17, 50].",
         "page": 2
       }
     ],
-    "item_id": "8ecb450d-6d38-52e1-a0b4-03f8a920dbc7",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "FAT* ’19, January 29–31, 2019, Atlanta, GA, USA Margaret Mitchell, Simone Wu, Andrew Zaldivar, Parker Barnes, Lucy Vasserman, Ben Hutchinson, Elena Spitzer, Inioluwa Deborah Raji, Timnit Gebru focus on trained model characteristics such as the type of model, intended use cases, information about attributes for which model performance may vary, and measures of model performance.",
+    "item_id": "9f572246-6ccd-5ecc-8153-19575a091c61",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Similarly, drugs developed based on results of clinical trials\" and state in full what it reports.",
+    "reference_answer": "Similarly, drugs developed based on results of clinical trials with exclusively male participants have led to overdosing in women [17, 50].",
     "split": "dev",
     "stratum": "explicit_single_document"
   },
@@ -87,13 +87,13 @@
     "excerpts": [
       {
         "arxiv_id": "1904.05234",
-        "excerpt": "Date (MM-YY) Daily Pure Revenue Proﬁt (USD) Pure Revenue Proﬁt Per Bot, 14-Day Moving Average Market Total 0x0000f7..",
-        "page": 8
+        "excerpt": "Miner-extractable value (MEV): We introduce the notion of MEV, value that is extractable by miners directly from smart contracts as cryptocurrency profits.",
+        "page": 2
       }
     ],
-    "item_id": "25722e7d-05db-570d-b267-730252100631",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Date (MM-YY) Daily Pure Revenue Proﬁt (USD) Pure Revenue Proﬁt Per Bot, 14-Day Moving Average Market Total 0x0000f7..",
+    "item_id": "7a9968a7-f16a-5d46-901e-96a625946558",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Miner-extractable value (MEV): We introduce the notion of MEV,\" and state in full what it reports.",
+    "reference_answer": "Miner-extractable value (MEV): We introduce the notion of MEV, value that is extractable by miners directly from smart contracts as cryptocurrency profits.",
     "split": "dev",
     "stratum": "explicit_single_document"
   },
@@ -101,13 +101,13 @@
     "excerpts": [
       {
         "arxiv_id": "1910.01108",
-        "excerpt": "Conclusion and future work We introduced DistilBERT, a general-purpose pre-trained version of BERT, 40% smaller, 60% faster, that retains 97% of the language understanding capabilities.",
-        "page": 5
+        "excerpt": "A standard training objective thus involves minimizing the cross-entropy between the model’s predicted distribution and the one-hot empirical distribution of training labels.",
+        "page": 2
       }
     ],
-    "item_id": "e04cb5bf-ff1f-5e95-a577-dd057d7b3efb",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Conclusion and future work We introduced DistilBERT, a general-purpose pre-trained version of BERT, 40% smaller, 60% faster, that retains 97% of the language understanding capabilities.",
+    "item_id": "88727a6a-4cfd-5d01-9cd5-1719a2a7715c",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"A standard training objective thus involves minimizing the cross-entropy\" and state in full what it reports.",
+    "reference_answer": "A standard training objective thus involves minimizing the cross-entropy between the model’s predicted distribution and the one-hot empirical distribution of training labels.",
     "split": "dev",
     "stratum": "explicit_single_document"
   },
@@ -115,13 +115,13 @@
     "excerpts": [
       {
         "arxiv_id": "2403.06265",
-        "excerpt": "We mitigated this risk by choosing a language that is extremely dif- ferent from English.",
-        "page": 10
+        "excerpt": "Other works circle back and assess tokenization with respect to the desiderata it is supposed to serve as a stand-alone algorithm, independently from the model trained on top of it.",
+        "page": 3
       }
     ],
-    "item_id": "31791155-7aeb-5147-a2ca-14cc25f687c1",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "We mitigated this risk by choosing a language that is extremely dif- ferent from English.",
+    "item_id": "4cf678fe-afa9-58eb-a7ff-22b7967de0ea",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Other works circle back and assess tokenization with respect\" and state in full what it reports.",
+    "reference_answer": "Other works circle back and assess tokenization with respect to the desiderata it is supposed to serve as a stand-alone algorithm, independently from the model trained on top of it.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -129,13 +129,13 @@
     "excerpts": [
       {
         "arxiv_id": "2403.06634",
-        "excerpt": "K} exp(zi + B) + X i/∈{i1,··· ,iK} exp(zi)   = zik + B −log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + ℓ X i exp(zi)   = zik + B −log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + N  , =⇒zik + B −aik(z, b) = log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + N  , =⇒exp(zik + B −aik(z, b)) = (eB −1) X i∈{i1,··· ,iK} exp(zi) + N, And therefore we can conclude exp(B −aik(z, b)) · exp(zk) −(eB −1) X i∈{i1,··· ,iK} exp(zi) = N.",
-        "page": 18
+        "excerpt": "Threat model. Throughout the paper, we assume that the adversary does not have any additional knowledge about the model parameters.",
+        "page": 2
       }
     ],
-    "item_id": "6bf4720f-ce70-5cdd-b3b0-fbc60a1eef3b",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "K} exp(zi + B) + X i/∈{i1,··· ,iK} exp(zi)   = zik + B −log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + ℓ X i exp(zi)   = zik + B −log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + N  , =⇒zik + B −aik(z, b) = log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + N  , =⇒exp(zik + B −aik(z, b)) = (eB −1) X i∈{i1,··· ,iK} exp(zi) + N, And therefore we can conclude exp(B −aik(z, b)) · exp(zk) −(eB −1) X i∈{i1,··· ,iK} exp(zi) = N.",
+    "item_id": "c7a8026a-69a5-53f1-9693-976c2fe451ee",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Threat model. Throughout the paper, we assume that the\" and state in full what it reports.",
+    "reference_answer": "Threat model. Throughout the paper, we assume that the adversary does not have any additional knowledge about the model parameters.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -143,13 +143,13 @@
     "excerpts": [
       {
         "arxiv_id": "2403.12031",
-        "excerpt": "AIQ values Zero router: 0.588 KNN router: 0.588 MLP router: 0.588 eval: HellaSwag 0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 Total Cost ($) 0.5 0.6 0.7 0.8 0.9 1.0 AIQ values Zero router: 0.778 KNN router: 0.780 MLP router: 0.778 eval: Winogrande 0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5 20.0 Total Cost ($) 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 AIQ values Zero router: 0.632 KNN router: 0.632 MLP router: 0.623 eval: GSM8k Cost vs.",
-        "page": 7
+        "excerpt": "Each output oj i has two associated quantities: the cost c(oj i) of generating that output and the quality or performance q(oj i) of the output itself.",
+        "page": 3
       }
     ],
-    "item_id": "1bd3fa5b-6c71-5644-98e4-3229a3369d1d",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "AIQ values Zero router: 0.588 KNN router: 0.588 MLP router: 0.588 eval: HellaSwag 0.0 0.2 0.4 0.6 0.8 1.0 1.2 1.4 Total Cost ($) 0.5 0.6 0.7 0.8 0.9 1.0 AIQ values Zero router: 0.778 KNN router: 0.780 MLP router: 0.778 eval: Winogrande 0.0 2.5 5.0 7.5 10.0 12.5 15.0 17.5 20.0 Total Cost ($) 0.40 0.45 0.50 0.55 0.60 0.65 0.70 0.75 AIQ values Zero router: 0.632 KNN router: 0.632 MLP router: 0.623 eval: GSM8k Cost vs.",
+    "item_id": "28d7ec7e-6876-51d4-988d-7252420bd6b5",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Each output oj i has two associated quantities: the\" and state in full what it reports.",
+    "reference_answer": "Each output oj i has two associated quantities: the cost c(oj i) of generating that output and the quality or performance q(oj i) of the output itself.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -157,13 +157,13 @@
     "excerpts": [
       {
         "arxiv_id": "2403.13784",
-        "excerpt": "Card Data Documentation Preferred: CC-BY-4.0 Acceptable: Permissive Open Content Licenses Technical Report Model & Data Documentation Preferred: CC-BY-4.0 Acceptable: Permissive Open Content Licenses Research Paper Model & Data Documentation Preferred: CC-BY-4.0 Acceptable: Permissive Open Content Licenses Sample Model Outputs Model Data or Code Unlicensed Table 2: Model Openness Framework Components and Licenses 3.",
-        "page": 13
+        "excerpt": "Related Work 2.1 Opening the Black Box: Benefits and Risks of Openness in AI While AI has seen remarkable advances in recent years [1], most SOTA foundation models are black boxes, making it hard to audit or explain their logic or behavior [12, 13].",
+        "page": 2
       }
     ],
-    "item_id": "aa7bbeed-c417-5902-9ce8-9d27d7374b26",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Card Data Documentation Preferred: CC-BY-4.0 Acceptable: Permissive Open Content Licenses Technical Report Model & Data Documentation Preferred: CC-BY-4.0 Acceptable: Permissive Open Content Licenses Research Paper Model & Data Documentation Preferred: CC-BY-4.0 Acceptable: Permissive Open Content Licenses Sample Model Outputs Model Data or Code Unlicensed Table 2: Model Openness Framework Components and Licenses 3.",
+    "item_id": "e2579370-678f-5876-80c1-2b82b7cb787f",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Related Work 2.1 Opening the Black Box: Benefits and\" and state in full what it reports.",
+    "reference_answer": "Related Work 2.1 Opening the Black Box: Benefits and Risks of Openness in AI While AI has seen remarkable advances in recent years [1], most SOTA foundation models are black boxes, making it hard to audit or explain their logic or behavior [12, 13].",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -171,13 +171,13 @@
     "excerpts": [
       {
         "arxiv_id": "2403.15796",
-        "excerpt": "Takeshi Kojima, Shixiang Shane Gu, Machel Reid, Yutaka Matsuo, and Yusuke Iwasawa.",
-        "page": 14
+        "excerpt": "It is not straightforward that the loss of LMs decides the performance on downstream tasks.",
+        "page": 3
       }
     ],
-    "item_id": "f1da0be0-ac71-5fa6-9204-4e3d0a07c286",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Takeshi Kojima, Shixiang Shane Gu, Machel Reid, Yutaka Matsuo, and Yusuke Iwasawa.",
+    "item_id": "fd6d4ae7-163f-5dfa-828b-36a5636201e8",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"It is not straightforward that the loss of LMs\" and state in full what it reports.",
+    "reference_answer": "It is not straightforward that the loss of LMs decides the performance on downstream tasks.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -185,13 +185,13 @@
     "excerpts": [
       {
         "arxiv_id": "2403.17673",
-        "excerpt": "Private are DP-SGD implementations? There exists a sufficiently large ε1 such that δP(ε) ≥Deε(PP∥QP) ≥ 1 2PP(E) ≥ 1 2Φ \u0010 −εσ √ T −(T log T +log 2)σ √ T − √ T 2σ \u0011 (6) ≥Φ \u0000−εσ + 1 2σ \u0001 (for ε > ε1) (7) ≥δD(ε) , by noting that for large ε the most significant term inside Φ(·) in (6) is −εσ/ √ T, whereas in (7) the most significant term inside Φ(·) is −εσ, which decreases much faster as ε →∞, for a fixed T > 1 and σ > 0.",
-        "page": 15
+        "excerpt": "Our main takeaway is that batch sampling plays a crucial in determining the privacy guarantees of ABLQB, and hence caution must be exercised in reporting privacy parameters for mechanisms such as DP-SGD.",
+        "page": 3
       }
     ],
-    "item_id": "4141b316-9410-5809-a560-a3e583e96e28",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Private are DP-SGD implementations? There exists a sufficiently large ε1 such that δP(ε) ≥Deε(PP∥QP) ≥ 1 2PP(E) ≥ 1 2Φ \u0010 −εσ √ T −(T log T +log 2)σ √ T − √ T 2σ \u0011 (6) ≥Φ \u0000−εσ + 1 2σ \u0001 (for ε > ε1) (7) ≥δD(ε) , by noting that for large ε the most significant term inside Φ(·) in (6) is −εσ/ √ T, whereas in (7) the most significant term inside Φ(·) is −εσ, which decreases much faster as ε →∞, for a fixed T > 1 and σ > 0.",
+    "item_id": "a6ec019e-2a06-53f6-8bfe-1256eae0c98e",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Our main takeaway is that batch sampling plays a\" and state in full what it reports.",
+    "reference_answer": "Our main takeaway is that batch sampling plays a crucial in determining the privacy guarantees of ABLQB, and hence caution must be exercised in reporting privacy parameters for mechanisms such as DP-SGD.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -199,13 +199,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.00806",
-        "excerpt": "P1, 39.6% P2) are closer to AvoidPriceWar than StartPriceWar, indicating that an overwhelming fraction of sentences that mention price wars are in fact expressing a desire to avoid them.",
-        "page": 16
+        "excerpt": "We augment existing methods from (human) behavioral science with novel methods that we develop specifically for AI behavioral science.",
+        "page": 4
       }
     ],
-    "item_id": "bb518774-b7c3-5099-898e-0d524b86b925",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "P1, 39.6% P2) are closer to AvoidPriceWar than StartPriceWar, indicating that an overwhelming fraction of sentences that mention price wars are in fact expressing a desire to avoid them.",
+    "item_id": "4a1d1cfe-9439-541d-991b-92715bf044f8",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"We augment existing methods from (human) behavioral science with\" and state in full what it reports.",
+    "reference_answer": "We augment existing methods from (human) behavioral science with novel methods that we develop specifically for AI behavioral science.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -213,13 +213,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.01413",
-        "excerpt": "Mart´ınez et al., 2023b). We think understanding what conditions and why these discrepancies exist is an interesting future direction.",
-        "page": 17
+        "excerpt": "In each model-fitting iteration, we then pretrain a newly initialized model on the replaced or concatenated dataset from the previous iteration.",
+        "page": 3
       }
     ],
-    "item_id": "2aea01ca-d116-54b7-ac41-14f2807979cc",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Mart´ınez et al., 2023b). We think understanding what conditions and why these discrepancies exist is an interesting future direction.",
+    "item_id": "5bed62a3-254a-59bf-bc24-d2b4135fcb56",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"In each model-fitting iteration, we then pretrain a newly\" and state in full what it reports.",
+    "reference_answer": "In each model-fitting iteration, we then pretrain a newly initialized model on the replaced or concatenated dataset from the previous iteration.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -227,13 +227,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.06654",
-        "excerpt": "Published as a conference paper at COLM 2024 B Task Configurations RULER is designed to be configurable to allow for diverse sequence lengths and task complexities.",
-        "page": 18
+        "excerpt": "One of the special magic numbers for long-context is: 12345. ...... What is the special magic number for long-context mentioned in the provided text?",
+        "page": 4
       }
     ],
-    "item_id": "98055690-369e-5f97-a4bd-971e10e19540",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Published as a conference paper at COLM 2024 B Task Configurations RULER is designed to be configurable to allow for diverse sequence lengths and task complexities.",
+    "item_id": "dcba517f-c8a7-57d4-acf2-68585fc4be87",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"One of the special magic numbers for long-context is:\" and state in full what it reports.",
+    "reference_answer": "One of the special magic numbers for long-context is: 12345. ...... What is the special magic number for long-context mentioned in the provided text?",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -241,13 +241,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.08509",
-        "excerpt": "Efficient Interactive LLM Serving with Proxy Model-based Sequence Length Prediction [24] vLLM: A high-throughput and memory-efficient inference and serving engine for LLMs.",
-        "page": 7
+        "excerpt": "As suggested by the BERT paper [7], the final hidden state corresponding to CLS is used as the aggregate sequence representation for classification tasks.",
+        "page": 2
       }
     ],
-    "item_id": "b43a27bc-9252-5a31-bebd-c960a0e522d2",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Efficient Interactive LLM Serving with Proxy Model-based Sequence Length Prediction [24] vLLM: A high-throughput and memory-efficient inference and serving engine for LLMs.",
+    "item_id": "8bba71af-bba5-5ae3-9a03-85c052c1402b",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"As suggested by the BERT paper [7], the final\" and state in full what it reports.",
+    "reference_answer": "As suggested by the BERT paper [7], the final hidden state corresponding to CLS is used as the aggregate sequence representation for classification tasks.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -255,13 +255,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.09127",
-        "excerpt": "Published at ICLR 2024 Workshop on Reliable and Responsible Foundation Models Ike Silver, Barbara A.",
-        "page": 9
+        "excerpt": "Integrating more tool-use modules could further improve calibration performance on knowledge-intensive tasks.",
+        "page": 5
       }
     ],
-    "item_id": "2ddc6ce6-3950-56df-b7f1-637c6fee45f9",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Published at ICLR 2024 Workshop on Reliable and Responsible Foundation Models Ike Silver, Barbara A.",
+    "item_id": "3fc056ec-2c09-56d8-a78f-b77090c93c85",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"Integrating more tool-use modules could further improve calibration performance\" and state in full what it reports.",
+    "reference_answer": "Integrating more tool-use modules could further improve calibration performance on knowledge-intensive tasks.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -269,13 +269,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.13076",
-        "excerpt": "Generations Self-preference (pairwise) 0.0 0.2 0.4 0.6 0.8 1.0 Self-preference score Llama-2 GPT-3.5 GPT-4 Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Self-preference (individual) 0.0 0.2 0.4 0.6 0.8 1.0 Self-preference score Llama-2 GPT-3.5 GPT-4 Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Alternative Figure 4.",
-        "page": 4
+        "excerpt": "The GPT-4 evaluator does not distinguish Llama 2 summaries from its own summaries more easily than GPT-3.5 summaries.",
+        "page": 3
       }
     ],
-    "item_id": "69069d33-7739-5d00-8d7e-72809e9a33e0",
-    "prompt": "In the document selected by the ArXiv constraint, what specific statement does the cited source passage make?",
-    "reference_answer": "Generations Self-preference (pairwise) 0.0 0.2 0.4 0.6 0.8 1.0 Self-preference score Llama-2 GPT-3.5 GPT-4 Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Self-preference (individual) 0.0 0.2 0.4 0.6 0.8 1.0 Self-preference score Llama-2 GPT-3.5 GPT-4 Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Llama-2 GPT-3.5 GPT-4 Human Alternative Figure 4.",
+    "item_id": "3da73d96-5649-5b02-8051-2883cca7c554",
+    "prompt": "In the document selected by the ArXiv constraint, locate the passage beginning \"The GPT-4 evaluator does not distinguish Llama 2 summaries\" and state in full what it reports.",
+    "reference_answer": "The GPT-4 evaluator does not distinguish Llama 2 summaries from its own summaries more easily than GPT-3.5 summaries.",
     "split": "regression",
     "stratum": "explicit_single_document"
   },
@@ -283,13 +283,13 @@
     "excerpts": [
       {
         "arxiv_id": "2003.06713",
-        "excerpt": "However, the sequence-to-sequencemodel appears to be far more data-efﬁcient: our approach shines in a data-poor regime and signiﬁcantly outperforms BERT with limited training examples.",
+        "excerpt": "However, the sequence-to-sequencemodel appears to be far more data-efficient: our approach shines in a data-poor regime and significantly outperforms BERT with limited training examples.",
         "page": 2
       }
     ],
-    "item_id": "4cf40119-9077-5be7-bdd1-32e497674580",
-    "prompt": "Which indexed paper contains the exact phrase \"However, the sequence-to-sequencemodel appears to be far more data-efﬁcient: our\", and what claim does the surrounding passage make?",
-    "reference_answer": "However, the sequence-to-sequencemodel appears to be far more data-efﬁcient: our approach shines in a data-poor regime and signiﬁcantly outperforms BERT with limited training examples.",
+    "item_id": "66891409-3384-5eff-9c6f-5008fe43e89e",
+    "prompt": "Which indexed paper contains the exact phrase \"However, the sequence-to-sequencemodel appears to be far more data-efficient: our\", and what claim does the surrounding passage make?",
+    "reference_answer": "However, the sequence-to-sequencemodel appears to be far more data-efficient: our approach shines in a data-poor regime and significantly outperforms BERT with limited training examples.",
     "split": "dev",
     "stratum": "unconstrained_discovery"
   },
@@ -297,13 +297,13 @@
     "excerpts": [
       {
         "arxiv_id": "2004.04906",
-        "excerpt": "At run-time, DPR applies a different encoder EQ(·) that maps the input question to a d-dimensional vector, and retrieves k passages of which vectors are the closest to the question vector.",
-        "page": 3
+        "excerpt": "Top-5 accuracy), but also results in a substantial improvement on the end-to-end QA accuracy compared to ORQA (41.5% vs.",
+        "page": 2
       }
     ],
-    "item_id": "b138a4bd-05e8-5dd8-a30a-149e47fad672",
-    "prompt": "Which indexed paper contains the exact phrase \"At run-time, DPR applies a different encoder EQ(·) that maps\", and what claim does the surrounding passage make?",
-    "reference_answer": "At run-time, DPR applies a different encoder EQ(·) that maps the input question to a d-dimensional vector, and retrieves k passages of which vectors are the closest to the question vector.",
+    "item_id": "dc46b491-11fb-5748-8470-e1cd7508d515",
+    "prompt": "Which indexed paper contains the exact phrase \"Top-5 accuracy), but also results in a substantial improvement on\", and what claim does the surrounding passage make?",
+    "reference_answer": "Top-5 accuracy), but also results in a substantial improvement on the end-to-end QA accuracy compared to ORQA (41.5% vs.",
     "split": "dev",
     "stratum": "unconstrained_discovery"
   },
@@ -311,13 +311,13 @@
     "excerpts": [
       {
         "arxiv_id": "2010.11148",
-        "excerpt": "Model Architectures FastEmit can be applied to any transducer model on any dataset without any extra effort.",
-        "page": 4
+        "excerpt": "It inevitably leads to emission delay because streaming ASR models learn to predict better by using more future context, causing significant emission delay.",
+        "page": 3
       }
     ],
-    "item_id": "bead3234-39de-5aad-a292-8d2424b25b36",
-    "prompt": "Which indexed paper contains the exact phrase \"Model Architectures FastEmit can be applied to any transducer model\", and what claim does the surrounding passage make?",
-    "reference_answer": "Model Architectures FastEmit can be applied to any transducer model on any dataset without any extra effort.",
+    "item_id": "3588e332-98a1-552c-ba6d-b013298d8207",
+    "prompt": "Which indexed paper contains the exact phrase \"It inevitably leads to emission delay because streaming ASR models\", and what claim does the surrounding passage make?",
+    "reference_answer": "It inevitably leads to emission delay because streaming ASR models learn to predict better by using more future context, causing significant emission delay.",
     "split": "dev",
     "stratum": "unconstrained_discovery"
   },
@@ -325,13 +325,13 @@
     "excerpts": [
       {
         "arxiv_id": "2012.07805",
-        "excerpt": "A broader view of the privacy risks posed by data extrac- tion stems from the framework of data privacy as contextual integrity [48].",
-        "page": 5
+        "excerpt": "We use the GPT-2 model [54] released by OpenAI as a representative language model in our experiments.",
+        "page": 2
       }
     ],
-    "item_id": "4fb3aa6b-7fb5-5e02-abb8-ca14ac906186",
-    "prompt": "Which indexed paper contains the exact phrase \"A broader view of the privacy risks posed by data\", and what claim does the surrounding passage make?",
-    "reference_answer": "A broader view of the privacy risks posed by data extrac- tion stems from the framework of data privacy as contextual integrity [48].",
+    "item_id": "1a192f74-c284-513a-8af2-b5dfcee93b80",
+    "prompt": "Which indexed paper contains the exact phrase \"We use the GPT-2 model [54] released by OpenAI as\", and what claim does the surrounding passage make?",
+    "reference_answer": "We use the GPT-2 model [54] released by OpenAI as a representative language model in our experiments.",
     "split": "dev",
     "stratum": "unconstrained_discovery"
   },
@@ -339,13 +339,13 @@
     "excerpts": [
       {
         "arxiv_id": "2103.05633",
-        "excerpt": "V-D2). T may use additional hyperparameters and optimizer speciﬁcations (e.g., learning rate schedules, etc.), which we denote as metadata Mt (to be included in M).",
-        "page": 6
+        "excerpt": "There are many sequences that can be obtained from a given start state to a given final state (owing to the various sources of stochasticity involved in training).",
+        "page": 2
       }
     ],
-    "item_id": "68e82f31-af3a-5872-96e7-d161b8599d65",
-    "prompt": "Which indexed paper contains the exact phrase \"V-D2). T may use additional hyperparameters and optimizer speciﬁcations (e.g.,\", and what claim does the surrounding passage make?",
-    "reference_answer": "V-D2). T may use additional hyperparameters and optimizer speciﬁcations (e.g., learning rate schedules, etc.), which we denote as metadata Mt (to be included in M).",
+    "item_id": "928a6381-0aee-5cfb-88c0-d9d1469455cc",
+    "prompt": "Which indexed paper contains the exact phrase \"There are many sequences that can be obtained from a\", and what claim does the surrounding passage make?",
+    "reference_answer": "There are many sequences that can be obtained from a given start state to a given final state (owing to the various sources of stochasticity involved in training).",
     "split": "dev",
     "stratum": "unconstrained_discovery"
   },
@@ -353,13 +353,13 @@
     "excerpts": [
       {
         "arxiv_id": "2103.14749",
-        "excerpt": "Top-1 Acc on original labels 60% 70% 80% Top-1 Acc on original labels (errors removed) Nasnet ResNet-18 AlexNet Agreement Threshold 5 of 5 (a) ImageNet val set acc.",
-        "page": 7
+        "excerpt": "Rather than exploring a novel methodology for dealing with label errors, which has been extensively studied in the literature [4], this paper aims to characterize the prevalence of label errors in the test data of popular benchmarks used to measure ML progress and subsequently analyze practical consequences of these errors, and in particular, their effects on model selection.",
+        "page": 2
       }
     ],
-    "item_id": "fd1c22b5-fc35-511f-8c14-47fece566795",
-    "prompt": "Which indexed paper contains the exact phrase \"Top-1 Acc on original labels 60% 70% 80% Top-1 Acc\", and what claim does the surrounding passage make?",
-    "reference_answer": "Top-1 Acc on original labels 60% 70% 80% Top-1 Acc on original labels (errors removed) Nasnet ResNet-18 AlexNet Agreement Threshold 5 of 5 (a) ImageNet val set acc.",
+    "item_id": "cc98a740-14dd-518a-98c7-448576946078",
+    "prompt": "Which indexed paper contains the exact phrase \"Rather than exploring a novel methodology for dealing with label\", and what claim does the surrounding passage make?",
+    "reference_answer": "Rather than exploring a novel methodology for dealing with label errors, which has been extensively studied in the literature [4], this paper aims to characterize the prevalence of label errors in the test data of popular benchmarks used to measure ML progress and subsequently analyze practical consequences of these errors, and in particular, their effects on model selection.",
     "split": "dev",
     "stratum": "unconstrained_discovery"
   },
@@ -367,13 +367,13 @@
     "excerpts": [
       {
         "arxiv_id": "2104.08663",
-        "excerpt": "BM25 +CE docT5- query ColBERT TAS-B GenQ ANCE SPARTA DPR DeepCT -20 -10 BM25 10 20 16 12 9 8 6 4 2 1 0 -2 -6 -9 -10 -12 -14 -16 -17 -18 Figure 3: Comparison of zero-shot neural retrieval per- formances with BM25.",
-        "page": 8
+        "excerpt": "Further, we notice that the in-domain performance of a model does not correlate well with its generalization capabilities: models fine-tuned with identical training data might generalize differently.",
+        "page": 2
       }
     ],
-    "item_id": "e9b3213b-4774-5038-b762-58c70e9869f7",
-    "prompt": "Which indexed paper contains the exact phrase \"BM25 +CE docT5- query ColBERT TAS-B GenQ ANCE SPARTA DPR\", and what claim does the surrounding passage make?",
-    "reference_answer": "BM25 +CE docT5- query ColBERT TAS-B GenQ ANCE SPARTA DPR DeepCT -20 -10 BM25 10 20 16 12 9 8 6 4 2 1 0 -2 -6 -9 -10 -12 -14 -16 -17 -18 Figure 3: Comparison of zero-shot neural retrieval per- formances with BM25.",
+    "item_id": "523ee416-263d-5129-add4-7f0ca200a1ef",
+    "prompt": "Which indexed paper contains the exact phrase \"Further, we notice that the in-domain performance of a model\", and what claim does the surrounding passage make?",
+    "reference_answer": "Further, we notice that the in-domain performance of a model does not correlate well with its generalization capabilities: models fine-tuned with identical training data might generalize differently.",
     "split": "dev",
     "stratum": "unconstrained_discovery"
   },
@@ -381,13 +381,13 @@
     "excerpts": [
       {
         "arxiv_id": "2106.04690",
-        "excerpt": "It also indicates that the handcrafted models have characteristics different from the models backdoored by poisoning (see Appendix I).",
-        "page": 9
+        "excerpt": "Most prior work studies the same objective: modify the neural network f so that when it is presented with a “triggered input” x′, the classification f(x′) is incorrect.",
+        "page": 2
       }
     ],
-    "item_id": "9d685d48-0d93-5591-bba9-ff602fc6a13b",
-    "prompt": "Which indexed paper contains the exact phrase \"It also indicates that the handcrafted models have characteristics different\", and what claim does the surrounding passage make?",
-    "reference_answer": "It also indicates that the handcrafted models have characteristics different from the models backdoored by poisoning (see Appendix I).",
+    "item_id": "5d1e46c7-83f1-515c-810e-be209f51dca1",
+    "prompt": "Which indexed paper contains the exact phrase \"Most prior work studies the same objective: modify the neural\", and what claim does the surrounding passage make?",
+    "reference_answer": "Most prior work studies the same objective: modify the neural network f so that when it is presented with a “triggered input” x′, the classification f(x′) is incorrect.",
     "split": "dev",
     "stratum": "unconstrained_discovery"
   },
@@ -395,13 +395,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.16109",
-        "excerpt": "CCS ’24, October 14-18, 2024, Salt Lake City, U.S.A. Haochen Sun, Jason Li, and Hongyang Zhang Theorem 7.1 have multiple implications: (1) Minimizing 𝐾−𝑀−𝐿, (i.e., the number of segments that are designated as neither the most significant nor the least significant as in Section 5.1.1) and 𝐵𝐿(i.e., the magnitude of least significant segments) is in favour of reducing the error.",
-        "page": 10
+        "excerpt": "Note that the above overview omits details about the handling of scaling factors and quantization errors for clarity.",
+        "page": 2
       }
     ],
-    "item_id": "76f4a8b8-f979-5af5-acb8-2783fef09e93",
-    "prompt": "Which indexed paper contains the exact phrase \"CCS ’24, October 14-18, 2024, Salt Lake City, U.S.A. Haochen\", and what claim does the surrounding passage make?",
-    "reference_answer": "CCS ’24, October 14-18, 2024, Salt Lake City, U.S.A. Haochen Sun, Jason Li, and Hongyang Zhang Theorem 7.1 have multiple implications: (1) Minimizing 𝐾−𝑀−𝐿, (i.e., the number of segments that are designated as neither the most significant nor the least significant as in Section 5.1.1) and 𝐵𝐿(i.e., the magnitude of least significant segments) is in favour of reducing the error.",
+    "item_id": "78cb66ac-b294-5f15-b21e-7ecee80bb7f0",
+    "prompt": "Which indexed paper contains the exact phrase \"Note that the above overview omits details about the handling\", and what claim does the surrounding passage make?",
+    "reference_answer": "Note that the above overview omits details about the handling of scaling factors and quantization errors for clarity.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -409,13 +409,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.16130",
-        "excerpt": "Table 3: Average number of extracted claims, reported by condition and dataset type.",
-        "page": 11
+        "excerpt": "The GraphRAG method and its ability to perform global sensemaking over an entire corpus form the main contribution of this work.",
+        "page": 2
       }
     ],
-    "item_id": "7cc37d27-3471-574f-9bfc-341d6036d05d",
-    "prompt": "Which indexed paper contains the exact phrase \"Table 3: Average number of extracted claims, reported by condition\", and what claim does the surrounding passage make?",
-    "reference_answer": "Table 3: Average number of extracted claims, reported by condition and dataset type.",
+    "item_id": "174e98c7-c67f-5000-9676-8383203b5ee5",
+    "prompt": "Which indexed paper contains the exact phrase \"The GraphRAG method and its ability to perform global sensemaking\", and what claim does the surrounding passage make?",
+    "reference_answer": "The GraphRAG method and its ability to perform global sensemaking over an entire corpus form the main contribution of this work.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -423,13 +423,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.17399",
-        "excerpt": "CCS ’24, October 14–18, 2024, Salt Lake City, UT, USA Michael Aerni, Jie Zhang, and Florian Tramèr Table 3: Full details for DP-SGD baselines on CIFAR-10.",
-        "page": 20
+        "excerpt": "Given the score of the victim model fon x, the attack then applies a likelihood ratio test to distinguish between the two hypotheses.",
+        "page": 2
       }
     ],
-    "item_id": "7040ca11-3fca-55ad-bda5-cc37dee40c9a",
-    "prompt": "Which indexed paper contains the exact phrase \"CCS ’24, October 14–18, 2024, Salt Lake City, UT, USA\", and what claim does the surrounding passage make?",
-    "reference_answer": "CCS ’24, October 14–18, 2024, Salt Lake City, UT, USA Michael Aerni, Jie Zhang, and Florian Tramèr Table 3: Full details for DP-SGD baselines on CIFAR-10.",
+    "item_id": "5c8b0d20-0df8-58d0-93e6-0afedf75364e",
+    "prompt": "Which indexed paper contains the exact phrase \"Given the score of the victim model fon x, the\", and what claim does the surrounding passage make?",
+    "reference_answer": "Given the score of the victim model fon x, the attack then applies a likelihood ratio test to distinguish between the two hypotheses.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -437,13 +437,13 @@
     "excerpts": [
       {
         "arxiv_id": "2404.18796",
-        "excerpt": "You will be given a Question and a Provided Answer. Judge whether the Provided Answer is correct by comparing it to the Reference Answer.",
-        "page": 13
+        "excerpt": "For QA datasets, we use max voting, as all judgements are binary [correct, incorrect].",
+        "page": 3
       }
     ],
-    "item_id": "66340604-a98a-5473-b415-7a5f0e36f70c",
-    "prompt": "Which indexed paper contains the exact phrase \"You will be given a Question and a Provided Answer.\", and what claim does the surrounding passage make?",
-    "reference_answer": "You will be given a Question and a Provided Answer. Judge whether the Provided Answer is correct by comparing it to the Reference Answer.",
+    "item_id": "042bc910-96f5-5d70-b605-bcdc85cdf05a",
+    "prompt": "Which indexed paper contains the exact phrase \"For QA datasets, we use max voting, as all judgements\", and what claim does the surrounding passage make?",
+    "reference_answer": "For QA datasets, we use max voting, as all judgements are binary [correct, incorrect].",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -451,13 +451,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.00332",
-        "excerpt": "Qian, Vikas Peswani, Pawel Janus, Quan Yuan, Leif Schelin, Oana David, Ankur Garg, Yifan He, Oleksii Duzhyi, Anton Älgmyr, Timothée Lottaz, Qi Li, Vikas Yadav, Luyao Xu, Alex Chinien, Rakesh Shivanna, Aleksandr Chuklin, Josie Li, Carrie Spadine, Travis Wolfe, Kareem Mohamed, Subhabrata Das, Zihang Dai, Kyle He, Daniel von Dincklage, Shyam Upadhyay, Akanksha Maurya, Luyan Chi, Sebastian Krause, Khalid Salama, Pam G.",
-        "page": 14
+        "excerpt": "Xu et al. [2024] propose using similar variants of a benchmark questions to detect if models favor the original wording as a proxy for data contamination.",
+        "page": 3
       }
     ],
-    "item_id": "5a5419be-2e39-5809-86ab-fa7d1c01771a",
-    "prompt": "Which indexed paper provides the source passage about this distinctive observation: Janus, Quan Yuan, Leif Schelin, Oana David, Ankur Garg, Yifan He, Oleksii Duzhyi, Anton?",
-    "reference_answer": "Qian, Vikas Peswani, Pawel Janus, Quan Yuan, Leif Schelin, Oana David, Ankur Garg, Yifan He, Oleksii Duzhyi, Anton Älgmyr, Timothée Lottaz, Qi Li, Vikas Yadav, Luyao Xu, Alex Chinien, Rakesh Shivanna, Aleksandr Chuklin, Josie Li, Carrie Spadine, Travis Wolfe, Kareem Mohamed, Subhabrata Das, Zihang Dai, Kyle He, Daniel von Dincklage, Shyam Upadhyay, Akanksha Maurya, Luyan Chi, Sebastian Krause, Khalid Salama, Pam G.",
+    "item_id": "2461fd14-d4dc-528c-894b-87ca16502ef9",
+    "prompt": "Which indexed paper provides the source passage about this distinctive observation: propose using similar variants of a benchmark questions to detect if models favor the?",
+    "reference_answer": "Xu et al. [2024] propose using similar variants of a benchmark questions to detect if models favor the original wording as a proxy for data contamination.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -465,13 +465,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.02973",
-        "excerpt": "Conference’17, July 2017, Washington, DC, USA Liu et al. Proof. The lemma follows directly from Lemma 11.",
-        "page": 26
+        "excerpt": "Otherwise, the delivery jobs fail, and no relayer gets relay fee and the customer does not get the content, either.",
+        "page": 2
       }
     ],
-    "item_id": "c0c410a9-5b4a-5ee8-a42a-86cb07c8448e",
-    "prompt": "Which indexed paper provides the source passage about this distinctive observation: DC, USA Liu et al. Proof. The lemma follows directly from Lemma 11.?",
-    "reference_answer": "Conference’17, July 2017, Washington, DC, USA Liu et al. Proof. The lemma follows directly from Lemma 11.",
+    "item_id": "043449d9-4890-593c-9b3e-000352030a93",
+    "prompt": "Which indexed paper provides the source passage about this distinctive observation: fail, and no relayer gets relay fee and the customer does not get the?",
+    "reference_answer": "Otherwise, the delivery jobs fail, and no relayer gets relay fee and the customer does not get the content, either.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -479,13 +479,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.07667",
-        "excerpt": "Trigger 𝑡 Query 𝒙 Query 𝒙 𝒚 𝒚 Query 𝒙 Unbackdoored LLM Backdoored LLM Trigger Removed LLM ②Overwrite SFT Trigger Query 𝒙 Query 𝒙 ①Parrot Prompt Tuning Triggered Response 𝑟௧ Clean Response Clean Response Skewed Response Triggered Response 𝑟௧ Skewed Response (a) (b) (c) (d) ② First Segment of 𝑟௧ 𝒚 𝒚 Figure 1: Overview of backdoor attacks and the SANDE framework.",
-        "page": 3
+        "excerpt": "In general, accessing the triggered responses through observation is more feasible and practical than accessing the cleanly trained models.",
+        "page": 4
       }
     ],
-    "item_id": "6c72af31-e12a-568b-a337-04400568d2a9",
-    "prompt": "Which indexed paper provides the source passage about this distinctive observation: Query 𝒙 𝒚 𝒚 Query 𝒙 Unbackdoored LLM Backdoored LLM Trigger Removed LLM ②Overwrite?",
-    "reference_answer": "Trigger 𝑡 Query 𝒙 Query 𝒙 𝒚 𝒚 Query 𝒙 Unbackdoored LLM Backdoored LLM Trigger Removed LLM ②Overwrite SFT Trigger Query 𝒙 Query 𝒙 ①Parrot Prompt Tuning Triggered Response 𝑟௧ Clean Response Clean Response Skewed Response Triggered Response 𝑟௧ Skewed Response (a) (b) (c) (d) ② First Segment of 𝑟௧ 𝒚 𝒚 Figure 1: Overview of backdoor attacks and the SANDE framework.",
+    "item_id": "205b5f9c-6ad6-58b0-8072-848624988f67",
+    "prompt": "Which indexed paper provides the source passage about this distinctive observation: triggered responses through observation is more feasible and practical than accessing the cleanly trained?",
+    "reference_answer": "In general, accessing the triggered responses through observation is more feasible and practical than accessing the cleanly trained models.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -493,13 +493,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.09673",
-        "excerpt": "Published in Transactions on Machine Learning Research (08/2024) Dawid Jan Kopiczko, Tijmen Blankevoort, and Yuki Markus Asano.",
-        "page": 17
+        "excerpt": "All forgetting metrics were computed using the MosaicML Gauntlet evaluation harness (Dohmann, 2023).9 4 Results 4.1 Target-domain performance: LoRA at low ranks underperforms full finetuning We compare LoRA and full finetuning after performing an exhaustive learning rate sweep for each method, which we found to be crucial (Dettmers et al., 2024).",
+        "page": 4
       }
     ],
-    "item_id": "50ac876d-3ab0-58bb-8fc4-ef806f9f1e36",
-    "prompt": "Which indexed paper provides the source passage about this distinctive observation: Machine Learning Research (08/2024) Dawid Jan Kopiczko, Tijmen Blankevoort, and Yuki Markus Asano.?",
-    "reference_answer": "Published in Transactions on Machine Learning Research (08/2024) Dawid Jan Kopiczko, Tijmen Blankevoort, and Yuki Markus Asano.",
+    "item_id": "5d8d8e5d-605e-56e8-9b0a-37b9048a6924",
+    "prompt": "Which indexed paper provides the source passage about this distinctive observation: computed using the MosaicML Gauntlet evaluation harness (Dohmann, 2023).9 4 Results 4.1 Target-domain performance:?",
+    "reference_answer": "All forgetting metrics were computed using the MosaicML Gauntlet evaluation harness (Dohmann, 2023).9 4 Results 4.1 Target-domain performance: LoRA at low ranks underperforms full finetuning We compare LoRA and full finetuning after performing an exhaustive learning rate sweep for each method, which we found to be crucial (Dettmers et al., 2024).",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -507,13 +507,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.12725",
-        "excerpt": "Original 8-bit EFRAP 4-bit EFRAP No Defense No Defense 32-bit Original 8-bit EFRAP 4-bit EFRAP No Defense No Defense 32-bit (ii) Tiny-ImageNet (i) CIFAR10 (a) GradCAM results on CompArtifact [66].",
-        "page": 18
+        "excerpt": "This attack has been proven effective on widely used platforms and commercial quantization tools, posing real threats to the community.",
+        "page": 3
       }
     ],
-    "item_id": "56093a7d-cb68-5a85-b799-e37a736062ef",
-    "prompt": "Which indexed paper provides the source passage about this distinctive observation: EFRAP No Defense No Defense 32-bit Original 8-bit EFRAP 4-bit EFRAP No Defense No?",
-    "reference_answer": "Original 8-bit EFRAP 4-bit EFRAP No Defense No Defense 32-bit Original 8-bit EFRAP 4-bit EFRAP No Defense No Defense 32-bit (ii) Tiny-ImageNet (i) CIFAR10 (a) GradCAM results on CompArtifact [66].",
+    "item_id": "607efe7a-2e23-5c6a-b3bd-93fea6a62733",
+    "prompt": "Which indexed paper provides the source passage about this distinctive observation: proven effective on widely used platforms and commercial quantization tools, posing real threats to?",
+    "reference_answer": "This attack has been proven effective on widely used platforms and commercial quantization tools, posing real threats to the community.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -521,13 +521,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.14106",
-        "excerpt": "N. Carlini, S. Chien, M. Nasr, S. Song, A. Terzis, and F. Tramer. Membership Inference Attacks From First Principles.",
-        "page": 9
+        "excerpt": "There are two methods for fine-tuning: doing it for all layers or only the last one.",
+        "page": 3
       }
     ],
-    "item_id": "f7d024ed-6291-5e22-863f-cdd724c50156",
-    "prompt": "Which indexed paper provides the source passage about this distinctive observation: M. Nasr, S. Song, A. Terzis, and F. Tramer. Membership Inference Attacks From First?",
-    "reference_answer": "N. Carlini, S. Chien, M. Nasr, S. Song, A. Terzis, and F. Tramer. Membership Inference Attacks From First Principles.",
+    "item_id": "e63d50ad-b6c7-5fa8-8384-fa1232e9f63c",
+    "prompt": "Which indexed paper provides the source passage about this distinctive observation: for fine-tuning: doing it for all layers or only the last one.?",
+    "reference_answer": "There are two methods for fine-tuning: doing it for all layers or only the last one.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -535,13 +535,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.14831",
-        "excerpt": "Alhandra Vila Franca de Xira Lisbon District is a municipality in Portugal located in Tagus River situated on founded by French followers of Afonso Henriques 136,886 in 2011 318.19 km2 footballer is a Lisbon 5 March 1979 Portuguese Luís Miguel Assunção Joaquim municipality of Vila Franca de Xira equivalent is also known as is born in is had population of had area of born on equivalent vila 1.",
-        "page": 21
+        "excerpt": "Thus, this complex process allows for new information to be integrated by changing only the hippocampal index instead of updating neocortical representations.",
+        "page": 3
       }
     ],
-    "item_id": "a21c8d22-f74f-58dd-94a1-24cf1a346184",
-    "prompt": "Which indexed paper provides the source passage about this distinctive observation: Xira Lisbon District is a municipality in Portugal located in Tagus River situated on?",
-    "reference_answer": "Alhandra Vila Franca de Xira Lisbon District is a municipality in Portugal located in Tagus River situated on founded by French followers of Afonso Henriques 136,886 in 2011 318.19 km2 footballer is a Lisbon 5 March 1979 Portuguese Luís Miguel Assunção Joaquim municipality of Vila Franca de Xira equivalent is also known as is born in is had population of had area of born on equivalent vila 1.",
+    "item_id": "1ea80e78-f442-58b7-b85a-0129d137eced",
+    "prompt": "Which indexed paper provides the source passage about this distinctive observation: allows for new information to be integrated by changing only the hippocampal index instead?",
+    "reference_answer": "Thus, this complex process allows for new information to be integrated by changing only the hippocampal index instead of updating neocortical representations.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -549,13 +549,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.17944",
-        "excerpt": "Title Suppressed Due to Excessive Length 21 Table 4: Labels of target transaction contracts.",
-        "page": 21
+        "excerpt": "Out of various types of DeFi DApps, decentralized exchange (DEX) is the most prevalent one.",
+        "page": 4
       }
     ],
-    "item_id": "d0bd07db-207f-5767-a729-ede46b7cef00",
-    "prompt": "Which indexed paper provides the source passage about this distinctive observation: Excessive Length 21 Table 4: Labels of target transaction contracts.?",
-    "reference_answer": "Title Suppressed Due to Excessive Length 21 Table 4: Labels of target transaction contracts.",
+    "item_id": "9a8433d1-d9e7-5831-a66d-31e60be190d4",
+    "prompt": "Which indexed paper provides the source passage about this distinctive observation: of DeFi DApps, decentralized exchange (DEX) is the most prevalent one.?",
+    "reference_answer": "Out of various types of DeFi DApps, decentralized exchange (DEX) is the most prevalent one.",
     "split": "regression",
     "stratum": "unconstrained_discovery"
   },
@@ -563,13 +563,13 @@
     "excerpts": [
       {
         "arxiv_id": "2106.09685",
-        "excerpt": "Houlsby et al., 2019; Rebufﬁet al., 2017) by extending model depth or reduce the model’s usable sequence length (Li & Liang, 2021; Lester et al., 2021; Ham- bardzumyan et al., 2020; Liu et al., 2021) (Section 3).",
+        "excerpt": "More importantly, these method often fail to match the fine-tuning baselines, posing a trade-off between efficiency and model quality.",
         "page": 2
       }
     ],
-    "item_id": "ee2d560f-e414-52f7-aa5a-e85f08b735de",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Houlsby et al., 2019; Rebufﬁet al., 2017) by extending model depth or reduce the model’s usable sequence length (Li & Liang, 2021; Lester et al., 2021; Ham- bardzumyan et al., 2020; Liu et al., 2021) (Section 3).",
+    "item_id": "e71595b7-6d88-5321-a6b5-29363bcf7341",
+    "prompt": "Within the constrained catalog subset, one paper observes that earlier parameter-efficient adaptation techniques usually do not reach the accuracy of full retraining, forcing a compromise between cheapness and quality. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that these methods often fail to match the fine-tuning baselines, posing a trade-off between efficiency and model quality.",
     "split": "dev",
     "stratum": "metadata_constrained_discovery"
   },
@@ -577,13 +577,13 @@
     "excerpts": [
       {
         "arxiv_id": "2107.05720",
-        "excerpt": "Ranking loss. Given a query 𝑞𝑖in a batch, a positive docu- ment 𝑑+ 𝑖, a (hard) negative document 𝑑− 𝑖(e.g.",
-        "page": 3
+        "excerpt": "More recently, there have been attempts to transfer the knowledge from pre-trained LM to sparse approaches.",
+        "page": 2
       }
     ],
-    "item_id": "242291f1-e923-5a59-acae-49a985536adf",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Ranking loss. Given a query 𝑞𝑖in a batch, a positive docu- ment 𝑑+ 𝑖, a (hard) negative document 𝑑− 𝑖(e.g.",
+    "item_id": "05aca8a2-01de-5e5a-a15a-f78cbdd23957",
+    "prompt": "Within the constrained catalog subset, one paper notes recent efforts to carry what large pretrained language models know over into term-weighted, non-dense retrieval methods. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that more recently there have been attempts to transfer the knowledge from pre-trained language models to sparse approaches.",
     "split": "dev",
     "stratum": "metadata_constrained_discovery"
   },
@@ -591,13 +591,13 @@
     "excerpts": [
       {
         "arxiv_id": "2109.10086",
-        "excerpt": "SparTerm [1] 0.279 0.925 - - COIL-tok [9] 0.341 0.949 0.660 - DeepImpact [18] 0.326 0.948 0.695 - SPLADE [8] 0.322 0.955 0.665 0.813 Our methods SPLADE-max 0.340 0.965 0.684 0.851 SPLADE-doc 0.322 0.946 0.667 0.747 DistilSPLADE-max 0.368 0.979 0.729 0.865 on the MS MARCO dev set as well as TREC DL 2019 queries; (2) the results are competitive with state-of-the-art dense retrieval methods.",
-        "page": 4
+        "excerpt": "SNRM [32]: the model embeds documents and queries in a sparse high-dimensional latent space by means of l1 regularization on representations.",
+        "page": 2
       }
     ],
-    "item_id": "7e855591-4797-536a-a8e5-28dd928a381a",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "SparTerm [1] 0.279 0.925 - - COIL-tok [9] 0.341 0.949 0.660 - DeepImpact [18] 0.326 0.948 0.695 - SPLADE [8] 0.322 0.955 0.665 0.813 Our methods SPLADE-max 0.340 0.965 0.684 0.851 SPLADE-doc 0.322 0.946 0.667 0.747 DistilSPLADE-max 0.368 0.979 0.729 0.865 on the MS MARCO dev set as well as TREC DL 2019 queries; (2) the results are competitive with state-of-the-art dense retrieval methods.",
+    "item_id": "0d9aa5f7-1a2d-5748-b45c-d41a27e780a5",
+    "prompt": "Within the constrained catalog subset, one paper describes a retrieval model that maps both queries and documents into a high-dimensional latent space kept mostly zero by an l1 penalty on the representations. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that SNRM embeds documents and queries in a sparse high-dimensional latent space by means of l1 regularization on representations.",
     "split": "dev",
     "stratum": "metadata_constrained_discovery"
   },
@@ -605,13 +605,13 @@
     "excerpts": [
       {
         "arxiv_id": "2110.05679",
-        "excerpt": "Published as a conference paper at ICLR 2022 setting, where the total number of gradient updates (rather than epochs) is ﬁxed.",
-        "page": 5
+        "excerpt": "Our technique generalizes the Goodfellow (2015) trick to handle sequential inputs, and can be combined with a layer-by-layer clipping procedure (Lee & Kifer, 2020) to enable privately fitting large Transformers with almost the same memory cost as non-private training—at the cost of one additional backward pass per processed batch.",
+        "page": 2
       }
     ],
-    "item_id": "417ef4da-3316-59d4-ab2c-51f26f1569e4",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Published as a conference paper at ICLR 2022 setting, where the total number of gradient updates (rather than epochs) is ﬁxed.",
+    "item_id": "bb02f0b1-0bdf-53de-9bde-1829ddb79d6e",
+    "prompt": "Within the constrained catalog subset, one paper describes extending an existing per-example gradient computation trick to sequence data and pairing it with per-layer norm bounding, so large Transformers train under privacy guarantees at roughly ordinary memory cost, paying one extra backward pass per batch. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that its technique generalizes the Goodfellow (2015) trick to handle sequential inputs and can be combined with a layer-by-layer clipping procedure to privately fit large Transformers with almost the same memory cost as non-private training, at the cost of one additional backward pass per processed batch.",
     "split": "dev",
     "stratum": "metadata_constrained_discovery"
   },
@@ -619,13 +619,13 @@
     "excerpts": [
       {
         "arxiv_id": "2110.06500",
-        "excerpt": "Li ∈Ra×r, Ri ∈Rr×b are new trainable parameters. Hu et al. (2021) apply this reparameterization only to the Transformer attention weights (Wq, Wv), and freeze all other weights (e.g., Wk and Wo and those in the feed-forward layers).",
-        "page": 6
+        "excerpt": "One may pre-train the model on public data as usual,1 but then fine-tune the model privately.",
+        "page": 2
       }
     ],
-    "item_id": "548d4743-4cac-5d24-a861-6868998d1d97",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Li ∈Ra×r, Ri ∈Rr×b are new trainable parameters. Hu et al. (2021) apply this reparameterization only to the Transformer attention weights (Wq, Wv), and freeze all other weights (e.g., Wk and Wo and those in the feed-forward layers).",
+    "item_id": "4b1a2b26-c37e-5300-acf4-f32f0cc9e7ce",
+    "prompt": "Within the constrained catalog subset, one paper describes a two-stage recipe in which initial training uses openly available corpora in the ordinary way and only the later adaptation stage carries formal privacy protection. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that one may pre-train the model on public data as usual, but then fine-tune the model privately.",
     "split": "dev",
     "stratum": "metadata_constrained_discovery"
   },
@@ -633,13 +633,13 @@
     "excerpts": [
       {
         "arxiv_id": "2112.03570",
-        "excerpt": "False Positive Rate 10−5 10−4 10−3 10−2 10−1 100 True Positive Rate CIFAR-100, auc=0.925 CIFAR-10, auc=0.720 ImageNet, auc=0.765 WikiText, auc=0.715 Fig.",
-        "page": 7
+        "excerpt": "B. Training data privacy Neural networks must not leak details of their training datasets, particularly when used in privacy-sensitive scenarios [5, 13].",
+        "page": 2
       }
     ],
-    "item_id": "91e22d13-d4d8-54fa-9a03-4299137d35ea",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "False Positive Rate 10−5 10−4 10−3 10−2 10−1 100 True Positive Rate CIFAR-100, auc=0.925 CIFAR-10, auc=0.720 ImageNet, auc=0.765 WikiText, auc=0.715 Fig.",
+    "item_id": "7a3e06e4-a48f-5322-8720-f2903a4e2bd9",
+    "prompt": "Within the constrained catalog subset, one paper states that trained networks must not disclose specifics of the corpora they were fitted on, especially in settings where confidentiality matters. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that neural networks must not leak details of their training datasets, particularly when used in privacy-sensitive scenarios.",
     "split": "dev",
     "stratum": "metadata_constrained_discovery"
   },
@@ -647,13 +647,13 @@
     "excerpts": [
       {
         "arxiv_id": "2112.09118",
-        "excerpt": "Published in Transactions on Machine Learning Research (08/2022) Table 2: BEIR Benchmark.",
-        "page": 8
+        "excerpt": "Training dense retrievers without supervision can be achieved by using an auxiliary task that approximates retrieval.",
+        "page": 2
       }
     ],
-    "item_id": "dc07d420-b64d-5dcc-8c35-c19afa084892",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Published in Transactions on Machine Learning Research (08/2022) Table 2: BEIR Benchmark.",
+    "item_id": "d1ea9f21-d69a-5b51-95bc-6c4efab76057",
+    "prompt": "Within the constrained catalog subset, one paper argues that embedding-based search models can be learned without labelled query-document pairs by substituting a surrogate objective that stands in for the search task. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that training dense retrievers without supervision can be achieved by using an auxiliary task that approximates retrieval.",
     "split": "dev",
     "stratum": "metadata_constrained_discovery"
   },
@@ -661,13 +661,13 @@
     "excerpts": [
       {
         "arxiv_id": "2203.15556",
-        "excerpt": "Chinchilla Based on our analysis in Section 3, the optimal model size for the Gopher compute budget is somewhere between 40 and 70 billion parameters.",
-        "page": 9
+        "excerpt": "The energy cost of a large language model is amortized through its usage for inference an fine-tuning.",
+        "page": 2
       }
     ],
-    "item_id": "111fdf5a-67fb-5d2b-afe4-f703b9f8abf5",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Chinchilla Based on our analysis in Section 3, the optimal model size for the Gopher compute budget is somewhere between 40 and 70 billion parameters.",
+    "item_id": "2ef05ffc-1d33-5443-9865-fc971d4447c2",
+    "prompt": "Within the constrained catalog subset, one paper observes that the power consumed to build a large model is spread out over its later serving and adaptation workloads. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that the energy cost of a large language model is amortized through its usage for inference and fine-tuning.",
     "split": "dev",
     "stratum": "metadata_constrained_discovery"
   },
@@ -675,13 +675,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.18137",
-        "excerpt": "MMLU [36] and TruthfulQA [37]. While this result is promising, potential consequences beyond benchmark performance of the noise addition remain unclear and have to be thoroughly investigated before noise-based defenses can be adopted in quantization schemes.",
-        "page": 10
+        "excerpt": "Security Implications of LLM Quantization Our work indicates that while LLM quantization is effective in reducing model size and maintaining satisfactory benchmark performance, its security implications are critically understudied.",
+        "page": 2
       }
     ],
-    "item_id": "a93c4e97-5975-51dd-84a0-a6809d0488da",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "MMLU [36] and TruthfulQA [37]. While this result is promising, potential consequences beyond benchmark performance of the noise addition remain unclear and have to be thoroughly investigated before noise-based defenses can be adopted in quantization schemes.",
+    "item_id": "55227ebb-411b-5050-a065-20a2d946acd4",
+    "prompt": "Within the constrained catalog subset, one paper warns that compressing model weights to lower precision preserves footprint savings and test scores, but that the safety consequences of doing so have received far too little attention. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that while LLM quantization is effective in reducing model size and maintaining satisfactory benchmark performance, its security implications are critically understudied.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -689,13 +689,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.20835",
-        "excerpt": "Naman Goyal, Cynthia Gao, Vishrav Chaudhary, Peng-Jen Chen, Guillaume Wenzek, Da Ju, Sanjana Krishnan, Marc’Aurelio Ranzato, Francisco Guzmán, and Angela Fan.",
-        "page": 11
+        "excerpt": "Background Quantization reduces the memory and computational requirements of neural networks by transforming high-precision weights to lower precision formats.",
+        "page": 2
       }
     ],
-    "item_id": "a1eef7a7-ae24-572f-82de-2ad98a3f6b4e",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Naman Goyal, Cynthia Gao, Vishrav Chaudhary, Peng-Jen Chen, Guillaume Wenzek, Da Ju, Sanjana Krishnan, Marc’Aurelio Ranzato, Francisco Guzmán, and Angela Fan.",
+    "item_id": "1a9d2134-4ee4-5820-9801-611b9ad267f9",
+    "prompt": "Within the constrained catalog subset, one paper explains that converting network parameters from wide to narrow numeric representations lowers both storage and arithmetic demands. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that quantization reduces the memory and computational requirements of neural networks by transforming high-precision weights to lower precision formats.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -703,13 +703,13 @@
     "excerpts": [
       {
         "arxiv_id": "2405.21047",
-        "excerpt": "Gabriel Poesia, Oleksandr Polozov, Vu Le, Ashish Tiwari, Gustavo Soares, Christopher Meek, and Sumit Gulwani.",
-        "page": 13
+        "excerpt": "Each node corresponds to a prefix w1:i−1, and each edge is annotated with the next token wi and its conditional probability P(wi | w1:i−1).",
+        "page": 3
       }
     ],
-    "item_id": "2e0ab77e-bb04-5e7b-a877-454c3e873b52",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Gabriel Poesia, Oleksandr Polozov, Vu Le, Ashish Tiwari, Gustavo Soares, Christopher Meek, and Sumit Gulwani.",
+    "item_id": "6c7bd998-a390-5cc9-82d4-9b7b086e597f",
+    "prompt": "Within the constrained catalog subset, one paper describes a tree in which every vertex stands for the partial sequence generated so far and every branch carries the following symbol together with its likelihood given that partial sequence. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that each node corresponds to a prefix and each edge is annotated with the next token and its conditional probability given that prefix.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -717,13 +717,13 @@
     "excerpts": [
       {
         "arxiv_id": "2406.05370",
-        "excerpt": "Table 2: Subjective evaluation results for 40 speakers on LibriSpeech test-clean, using a reference utterance as a prompt for each speaker.",
-        "page": 13
+        "excerpt": "Additionally, the non-autoregressive model generates the tokens with a pre-determined duration result, which constrains the search space of the generated speech and sacrifices the prosody and naturalness.",
+        "page": 2
       }
     ],
-    "item_id": "d18e7a27-2731-53a7-85ec-5a2a0bdeac2a",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Table 2: Subjective evaluation results for 40 speakers on LibriSpeech test-clean, using a reference utterance as a prompt for each speaker.",
+    "item_id": "7b957f18-512f-5c10-a258-be7d7b4c0adc",
+    "prompt": "Within the constrained catalog subset, one paper argues that generating all output in one shot against a fixed timing plan narrows what the system can produce and costs it rhythm and naturalness. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that the non-autoregressive model generates tokens with a pre-determined duration result, which constrains the search space of the generated speech and sacrifices prosody and naturalness.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -731,13 +731,13 @@
     "excerpts": [
       {
         "arxiv_id": "2406.05946",
-        "excerpt": "Gemma Team, Thomas Mesnard, Cassidy Hardin, Robert Dadashi, Surya Bhupatiraju, Shreya Pathak, Laurent Sifre, Morgane Rivière, Mihir Sanjay Kale, Juliette Love, et al.",
-        "page": 14
+        "excerpt": "To support this idea, we introduce a simple data augmentation approach for deepening the safety alignment (Section 3).",
+        "page": 2
       }
     ],
-    "item_id": "e1cd1ed3-dae6-5693-b555-49ff8ed145aa",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Gemma Team, Thomas Mesnard, Cassidy Hardin, Robert Dadashi, Surya Bhupatiraju, Shreya Pathak, Laurent Sifre, Morgane Rivière, Mihir Sanjay Kale, Juliette Love, et al.",
+    "item_id": "38fa8d71-410b-5150-86e0-bcaff9680196",
+    "prompt": "Within the constrained catalog subset, one paper backs its argument by presenting a straightforward technique for enlarging the training set so that harm-avoidance behaviour extends further into a response. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that it introduces a simple data augmentation approach for deepening the safety alignment.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -745,13 +745,13 @@
     "excerpts": [
       {
         "arxiv_id": "2406.07515",
-        "excerpt": "Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Bj¨orn Ommer.",
-        "page": 15
+        "excerpt": "Our proxy function strongly correlates with final performance across all cases. In particular it elucidates the counter-intuitive fact that a stronger model is not automatically a better selector — as we demonstrate by showing inferior performance when selecting with Llama-3 compared to self-selection with Llama-2 for Llama-2-generated text.",
+        "page": 2
       }
     ],
-    "item_id": "e86c73c3-2632-5f44-94b8-443c9483b7dc",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Bj¨orn Ommer.",
+    "item_id": "ad083488-c311-5078-865d-4596e8f0a0dc",
+    "prompt": "Within the constrained catalog subset, one paper reports a cheap surrogate measure that tracks end results closely and reveals the surprising result that a more capable model does not necessarily make better filtering decisions about another model's output. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that its proxy function strongly correlates with final performance across all cases, and that it elucidates the counter-intuitive fact that a stronger model is not automatically a better selector, shown by inferior performance when selecting with Llama-3 compared to self-selection with Llama-2 for Llama-2-generated text.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -759,13 +759,13 @@
     "excerpts": [
       {
         "arxiv_id": "2406.10162",
-        "excerpt": "The model also sometimes explains to the human that it has edited the reward. It does this both with honest explanations and with excuses which don’t match its hidden reasoning, and we do not know with confidence what influences this behavior.",
-        "page": 16
+        "excerpt": "In addition to rewarding specification gaming, we add supervision from a preference model (PM) and in all training environments set half the prompts to normal queries taken from the training of Claude-2.",
+        "page": 3
       }
     ],
-    "item_id": "4f0fd1fb-c786-54a3-bfba-6c88f93e5303",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "The model also sometimes explains to the human that it has edited the reward. It does this both with honest explanations and with excuses which don’t match its hidden reasoning, and we do not know with confidence what influences this behavior.",
+    "item_id": "62f22613-c236-5484-b19c-52c0a322d115",
+    "prompt": "Within the constrained catalog subset, one paper describes a setup that, alongside reinforcing reward-hacking behaviour, also applies a learned human-preference signal and fills half of every environment's inputs with ordinary requests drawn from an earlier assistant's training data. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that in addition to rewarding specification gaming, it adds supervision from a preference model and, in all training environments, sets half the prompts to normal queries taken from the training of Claude-2.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -773,13 +773,13 @@
     "excerpts": [
       {
         "arxiv_id": "2406.11717",
-        "excerpt": "Dimitri von Rütte, Sotiris Anagnostidis, Gregor Bachmann, and Thomas Hofmann. A language model’s guide through latent space.",
-        "page": 17
+        "excerpt": "This effectively prevents the model from ever representing this direction in its residual stream.",
+        "page": 4
       }
     ],
-    "item_id": "2c05db1b-1053-5cdd-95e7-5b4777cc0b38",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Dimitri von Rütte, Sotiris Anagnostidis, Gregor Bachmann, and Thomas Hofmann. A language model’s guide through latent space.",
+    "item_id": "340ba030-26b8-57b4-b1d6-b38e341ca3e4",
+    "prompt": "Within the constrained catalog subset, one paper states that its intervention stops a particular direction from ever being represented in the network's internal activation stream. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that this effectively prevents the model from ever representing this direction in its residual stream.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -787,13 +787,13 @@
     "excerpts": [
       {
         "arxiv_id": "2406.12045",
-        "excerpt": "You should only make one tool call at a time, and if you make a tool call, you should not respond to the user simultaneously.",
-        "page": 18
+        "excerpt": "We hope that τ-bench enables the evaluation and development of more consistent and capable agents for real-world digital tasks involving human interaction.",
+        "page": 2
       }
     ],
-    "item_id": "6bf8b27d-3c70-5147-aaef-6a44aea5cf42",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "You should only make one tool call at a time, and if you make a tool call, you should not respond to the user simultaneously.",
+    "item_id": "24e1cab5-ae54-5f37-a6f1-edbc92a1b419",
+    "prompt": "Within the constrained catalog subset, one paper expresses the aspiration that its new benchmark will help build and measure assistants that behave more reliably on practical online tasks involving talking to people. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports the hope that its benchmark enables the evaluation and development of more consistent and capable agents for real-world digital tasks involving human interaction.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -801,13 +801,13 @@
     "excerpts": [
       {
         "arxiv_id": "2406.13352",
-        "excerpt": "B.2 Defense Prompts {system_message} I’ll mark the beginning of the tool outputs by putting the symbol << before them and the symbol >> after them.",
-        "page": 19
+        "excerpt": "In contrast to these works, AgentDojo runs a dynamic environment where agents execute multiple tool calls against realistic applications, some of which return malicious data.",
+        "page": 3
       }
     ],
-    "item_id": "4faa7dba-527c-551e-96fe-5f3435942369",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "B.2 Defense Prompts {system_message} I’ll mark the beginning of the tool outputs by putting the symbol << before them and the symbol >> after them.",
+    "item_id": "b625d832-92d8-5990-a8a9-1d4e03dd9710",
+    "prompt": "Within the constrained catalog subset, one paper sets itself apart by running a live environment where an assistant makes successive tool calls against lifelike applications, some of which hand back hostile content. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that, in contrast to prior work, AgentDojo runs a dynamic environment where agents execute multiple tool calls against realistic applications, some of which return malicious data.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -815,13 +815,13 @@
     "excerpts": [
       {
         "arxiv_id": "2406.13356",
-        "excerpt": "Published as a conference paper at ICLR 2025 C.2.2 GPT-4 PROMPT FOR RELEARN SET GENERATION The following prompt illustrates how we prompt the GPT-4 model to generate relearn text.",
-        "page": 20
+        "excerpt": "Although we do not assume the adversary A has access to the entire unlearn set Du, it may be reasonable to assume that a small or limited subset of this data is available.",
+        "page": 3
       }
     ],
-    "item_id": "65745943-67ef-50b3-8d3f-a60e38e119c9",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Published as a conference paper at ICLR 2025 C.2.2 GPT-4 PROMPT FOR RELEARN SET GENERATION The following prompt illustrates how we prompt the GPT-4 model to generate relearn text.",
+    "item_id": "8d578797-bbad-5441-b9a2-0d9efadcc00c",
+    "prompt": "Within the constrained catalog subset, one paper grants the attacker not the whole body of material that was meant to be erased, but plausibly some modest portion of it. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that although it does not assume the adversary has access to the entire unlearn set, it may be reasonable to assume a small or limited subset of that data is available.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -829,13 +829,13 @@
     "excerpts": [
       {
         "arxiv_id": "2406.17957",
-        "excerpt": "Acknowledgements We would also like to thank Ryan Langman for developing the spectral codec model that was used in our TTS model.",
-        "page": 5
+        "excerpt": "The 2D beta-binomial prior is a near-diagonal heuristic matrix that is wider near the center and narrower near the corners.",
+        "page": 3
       }
     ],
-    "item_id": "b84fe245-380c-52ff-89fa-6e0c2f9d0743",
-    "prompt": "Within the constrained catalog subset, which paper supports the described finding, expressed with different terminology, and what does it report?",
-    "reference_answer": "Acknowledgements We would also like to thank Ryan Langman for developing the spectral codec model that was used in our TTS model.",
+    "item_id": "c58f4ff4-2e65-5bf1-a13a-b0cf66033a95",
+    "prompt": "Within the constrained catalog subset, one paper describes a prior shaped as an almost-diagonal band that broadens toward the middle and tightens at the extremes. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that the 2D beta-binomial prior is a near-diagonal heuristic matrix that is wider near the center and narrower near the corners.",
     "split": "regression",
     "stratum": "metadata_constrained_discovery"
   },
@@ -843,18 +843,18 @@
     "excerpts": [
       {
         "arxiv_id": "2110.05679",
-        "excerpt": "E2E test set BLEU DistilGPT2 GPT-2 GPT-2-medium GPT-2-large GPT-2 ( = 3) GPT-2 ( = 8) non-private T-GEN (D & J, 2016) non-private fine-tuned GPT-2 (b) Natural language generation E2E (Novikova et al., 2017) Figure 1: A summary of a few of our ﬁndings: (1) Pretrained models ﬁne-tuned with DP-Adam has strong performance.",
+        "excerpt": "We show that with appropriate hyperparameters and downstream task objectives, fine-tuning pretrained language models with DP-SGD/DP-Adam yields strong performance for a suite of NLP tasks at privacy levels ε ∈{3, 8}.",
         "page": 2
       },
       {
         "arxiv_id": "2110.05679",
-        "excerpt": "Published as a conference paper at ICLR 2022 setting, where the total number of gradient updates (rather than epochs) is ﬁxed.",
-        "page": 5
+        "excerpt": "Specifically, this step clips per-example gradients with a norm constraint C, and adds Gaussian noise z ∼N(0, C2σ2Ip) to the sum of clipped gradients.",
+        "page": 3
       }
     ],
-    "item_id": "9c74e0bf-9fe7-5f33-b215-19fcc1b405f6",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "E2E test set BLEU DistilGPT2 GPT-2 GPT-2-medium GPT-2-large GPT-2 ( = 3) GPT-2 ( = 8) non-private T-GEN (D & J, 2016) non-private fine-tuned GPT-2 (b) Natural language generation E2E (Novikova et al., 2017) Figure 1: A summary of a few of our ﬁndings: (1) Pretrained models ﬁne-tuned with DP-Adam has strong performance. Published as a conference paper at ICLR 2022 setting, where the total number of gradient updates (rather than epochs) is ﬁxed.",
+    "item_id": "a22d3360-93d7-59ea-8432-a40623065f39",
+    "prompt": "In the constrained document, connect the headline claim about how well privately adapted language models perform under tight privacy budgets with the later description of the noise-injection mechanism that enforces those budgets. State both and cite both supporting sections.",
+    "reference_answer": "The paper claims that with appropriate hyperparameters and downstream task objectives, fine-tuning pretrained language models with DP-SGD/DP-Adam yields strong performance for a suite of NLP tasks at privacy levels epsilon in {3, 8}. It later specifies that this step clips per-example gradients with a norm constraint C and adds Gaussian noise to the sum of clipped gradients.",
     "split": "dev",
     "stratum": "long_cross_section"
   },
@@ -862,265 +862,265 @@
     "excerpts": [
       {
         "arxiv_id": "2210.11416",
-        "excerpt": "T0-SF Commonsense reasoning Question generation Closed-book QA Adversarial QA Extractive QA Title/context generation Topic classification Struct-to-text … 55 Datasets, 14 Categories, 193 Tasks Muffin Natural language inference Closed-book QA Code instruction gen.",
+        "excerpt": "In natural language processing (NLP), pretrained language models have made significant progress towards this goal, as they can perform tasks given natural language descriptions (Brown et al., 2020, inter alia).",
+        "page": 2
+      },
+      {
+        "arxiv_id": "2210.11416",
+        "excerpt": "We finetune with and without exemplars, and also with and without chain-of-thought.",
+        "page": 4
+      }
+    ],
+    "item_id": "7c3f56d9-8884-57e0-a4d5-06c5b013863f",
+    "prompt": "In the constrained document, connect the early framing of how far pretrained language models have come at following written task descriptions with the later statement of the four-way training configuration the authors sweep. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that in natural language processing, pretrained language models have made significant progress toward this goal, as they can perform tasks given natural language descriptions. It later states that the authors finetune with and without exemplars, and also with and without chain-of-thought.",
+    "split": "dev",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2203.15556",
+        "excerpt": "Chinchilla outperforms Gopher and the other large models (see Section 4.2). In this work, we revisit the question: Given a fixed FLOPs budget,1 how should one trade-offmodel size and the number of training tokens?",
+        "page": 2
+      },
+      {
+        "arxiv_id": "2203.15556",
+        "excerpt": "The authors investigate the question of choosing the optimal model size to train for a given compute budget.",
+        "page": 3
+      }
+    ],
+    "item_id": "e57a4f89-0731-5783-885a-89edebaeceef",
+    "prompt": "In the constrained document, connect the opening result comparing the compute-matched model against its larger predecessor, and the question it reopens about splitting a fixed budget between parameters and data, with the later restatement of that same optimisation question. State both and cite both supporting sections.",
+    "reference_answer": "The paper first reports that Chinchilla outperforms Gopher and the other large models, and revisits the question of how, given a fixed FLOPs budget, one should trade off model size and the number of training tokens. It later restates that the authors investigate choosing the optimal model size to train for a given compute budget.",
+    "split": "dev",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2305.16264",
+        "excerpt": "Villalobos et al. [112] estimate that even high-quality English language data will be exhausted by the year 2024 given the Chinchilla scaling laws and the trend of training ever-larger models.",
+        "page": 2
+      },
+      {
+        "arxiv_id": "2305.16264",
+        "excerpt": "Once we have UN, we compute the repeat value as RN = (N/UN) −1. To empirically explore the scaling behavior in a data-limited setting we train LLMs under these constraints.",
+        "page": 4
+      }
+    ],
+    "item_id": "49401d83-c326-5b5b-96bf-112c98d90315",
+    "prompt": "In the constrained document, connect the early citation of a forecast that the supply of good English training text runs out with the later description of how the authors quantify data reuse and train models under that scarcity. State both and cite both supporting sections.",
+    "reference_answer": "The paper first cites an estimate that even high-quality English language data will be exhausted by the year 2024, given the Chinchilla scaling laws and the trend of training ever-larger models. It later describes computing the repeat value from the number of unique tokens and training LLMs under these constraints to explore scaling behavior empirically in a data-limited setting.",
+    "split": "dev",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2206.07682",
+        "excerpt": "This qualitative change is also known as a phase transition—a dramatic change in overall behavior that would not have been foreseen by examining smaller-scale systems (Huberman & Hogg, 1987).",
+        "page": 2
+      },
+      {
+        "arxiv_id": "2206.07682",
+        "excerpt": "Each point is a separate model. The ability to perform a task via few-shot prompting is emergent when a language model achieves random performance until a certain scale, after which performance significantly increases to well-above random.",
+        "page": 4
+      }
+    ],
+    "item_id": "3199fb55-065f-550b-bd28-8f0c7d8178f1",
+    "prompt": "In the constrained document, connect the earlier borrowing of a physics term for an abrupt behavioural shift that smaller systems give no warning of, with the later operational definition of when a few-shot capability counts as emergent. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that this qualitative change is also known as a phase transition, a dramatic change in overall behavior that would not have been foreseen by examining smaller-scale systems. It later defines that each point is a separate model and that the ability to perform a task via few-shot prompting is emergent when a language model achieves random performance until a certain scale, after which performance significantly increases to well above random.",
+    "split": "dev",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2308.11432",
+        "excerpt": "For the first problem, we present a unified agent framework, which can encompass most of the previous studies.",
         "page": 3
       },
       {
-        "arxiv_id": "2210.11416",
-        "excerpt": "Scaling to 540B parameters and 1.8K tasks We ﬁrst examine the eﬀect of scaling in terms of (1) the size of model and (2) the number of ﬁnetuning tasks on performance on held-out tasks.",
-        "page": 6
+        "arxiv_id": "2308.11432",
+        "excerpt": "Then, one can optionally specify several seed agent profiles to serve as few-shot examples.",
+        "page": 5
       }
     ],
-    "item_id": "36bbe3c9-ce65-599b-8882-7b09513479ea",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "T0-SF Commonsense reasoning Question generation Closed-book QA Adversarial QA Extractive QA Title/context generation Topic classification Struct-to-text … 55 Datasets, 14 Categories, 193 Tasks Muffin Natural language inference Closed-book QA Code instruction gen. Scaling to 540B parameters and 1.8K tasks We ﬁrst examine the eﬀect of scaling in terms of (1) the size of model and (2) the number of ﬁnetuning tasks on performance on held-out tasks.",
+    "item_id": "7fb188b5-f01d-5335-9d78-8f4d10536ad0",
+    "prompt": "In the constrained document, connect the earlier announcement of a single framework meant to subsume most prior studies, with the later mention that a handful of starter personas can optionally be supplied as worked examples. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that for the first problem it presents a unified agent framework which can encompass most of the previous studies. It later notes that one can optionally specify several seed agent profiles to serve as few-shot examples.",
     "split": "dev",
     "stratum": "long_cross_section"
   },
   {
     "excerpts": [
       {
-        "arxiv_id": "2203.15556",
-        "excerpt": "However, the analysis is done with a ﬁxed number of training tokens, as in Kaplan et al.",
+        "arxiv_id": "2302.07225",
+        "excerpt": "Does the standard DP parameter ε provide enough information to characterize vulnerability against reconstruction attacks?",
+        "page": 2
+      },
+      {
+        "arxiv_id": "2302.07225",
+        "excerpt": "Although these observations apply the standard membership formulation of DP, they motivate an important question for trying to understand the implications of DP guarantees for reconstruction attacks: how does access to intermediate gradients affect the success of reconstruction attacks against DP-SGD?",
+        "page": 3
+      }
+    ],
+    "item_id": "502442f6-128b-5ad9-985b-1fe8d581e68f",
+    "prompt": "In the constrained document, connect the motivating question of whether the usual privacy parameter suffices to describe exposure to data-reconstruction attacks, with the later sharpening of that question around what visibility into per-step gradients changes. State both and cite both supporting sections.",
+    "reference_answer": "The paper first asks whether the standard DP parameter epsilon provides enough information to characterize vulnerability against reconstruction attacks. It later sharpens this into how access to intermediate gradients affects the success of reconstruction attacks against DP-SGD.",
+    "split": "dev",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2309.07864",
+        "excerpt": "It describes entities possessing desires, beliefs, intentions, and the ability to take actions [5].",
         "page": 4
       },
       {
-        "arxiv_id": "2203.15556",
-        "excerpt": "Gopher budget Training FLOPs 100M 1B 10B 40B 100B Model size IsoLoss contours Efficient frontier Empirical data IsoFLOPs slice 2.00 3.00 4.00 5.00 Loss 100M 1B 10B 40B Model size IsoFLOPs slices Train.",
-        "page": 7
+        "arxiv_id": "2309.07864",
+        "excerpt": "Specifically, we will emphasize the lessons and potential risks inherent in simulated societies.",
+        "page": 6
       }
     ],
-    "item_id": "804b5a02-b92a-55f3-aea8-94ed16167e43",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "However, the analysis is done with a ﬁxed number of training tokens, as in Kaplan et al. Gopher budget Training FLOPs 100M 1B 10B 40B 100B Model size IsoLoss contours Efficient frontier Empirical data IsoFLOPs slice 2.00 3.00 4.00 5.00 Loss 100M 1B 10B 40B Model size IsoFLOPs slices Train.",
+    "item_id": "aa22c50f-3310-500d-8601-36ac00280dca",
+    "prompt": "In the constrained document, connect the earlier characterisation of an agent as something with wants, beliefs, plans and the capacity to act, with the later statement of what the treatment of artificial societies will stress. State both and cite both supporting sections.",
+    "reference_answer": "The paper first describes entities possessing desires, beliefs, intentions, and the ability to take actions. It later states that the authors will emphasize the lessons and potential risks inherent in simulated societies.",
     "split": "dev",
     "stratum": "long_cross_section"
   },
   {
     "excerpts": [
       {
-        "arxiv_id": "2305.16264",
-        "excerpt": "M Parameters Loss: 8.10 Loss: 3.72 Empirical IsoLoss Contours 3.81 3.91 4.01 4.01 1 10 30 59 100 300 1000 Epochs Predicted IsoLoss Contours 3.88 3.98 4.08 4.18 3.95 4.65 Loss Compute-optimal model for 100M tokens and one epoch Lowest loss for 100M tokens Chinchilla scaling laws efficient frontier Data-constrained scaling laws efficient frontier Models trained Figure 3: IsoLoss contours for 100 million unique tokens.",
+        "arxiv_id": "2403.06634",
+        "excerpt": "Pl i=1 ezi # . Note that the hidden dimension size is much smaller than the size of the token dictionary, i.e., h ≪l.",
+        "page": 2
+      },
+      {
+        "arxiv_id": "2403.06634",
+        "excerpt": "SVD can recover the hidden dimensionality of a model when the final output layer dimension is greater than the hidden dimension.",
+        "page": 4
+      }
+    ],
+    "item_id": "4e956130-56b3-5ce0-8a36-edaab5cb8d05",
+    "prompt": "In the constrained document, connect the earlier observation that the internal width is far smaller than the vocabulary it projects onto, with the later result that a matrix factorisation recovers that width once the output layer is the larger of the two. State both and cite both supporting sections.",
+    "reference_answer": "The paper first notes that the hidden dimension size is much smaller than the size of the token dictionary. It later reports that SVD can recover the hidden dimensionality of a model when the final output layer dimension is greater than the hidden dimension.",
+    "split": "regression",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2404.00806",
+        "excerpt": "In this paper, we address all of these questions. Before describing our results, a comment on methodology is in order.",
+        "page": 3
+      },
+      {
+        "arxiv_id": "2404.00806",
+        "excerpt": "Importantly, while the LLM is instructed to target long-term profit, these instructions do not in any way suggest to attempt to collude or behave noncompetitively, whether explicitly or implicitly.",
+        "page": 4
+      }
+    ],
+    "item_id": "e3b2fee8-02c1-59f5-979f-00166393a493",
+    "prompt": "In the constrained document, connect the earlier statement that the paper takes on all the questions it raised and owes a note on method first, with the later insistence that the profit instruction never hints at coordinating with rivals. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it addresses all of these questions and that a comment on methodology is in order before the results. It later stresses that while the LLM is instructed to target long-term profit, those instructions do not in any way suggest attempting to collude or behave noncompetitively, explicitly or implicitly.",
+    "split": "regression",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2403.13784",
+        "excerpt": "Finally, it concludes with a summary of the key contributions for both model producers and consumers (Section 10).",
+        "page": 2
+      },
+      {
+        "arxiv_id": "2403.13784",
+        "excerpt": "Completeness also requires all code used to parse and process data, the code used for training and inference, and any code used in benchmark tests, along with any libraries or other code artifacts that were a part of the model development lifecycle.",
+        "page": 3
+      }
+    ],
+    "item_id": "f6797a3e-c766-5d02-8a3a-6aa7253798fb",
+    "prompt": "In the constrained document, connect the roadmap sentence promising a closing summary of what the work offers both producers and consumers of models, with the later enumeration of exactly which code artifacts completeness demands. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it concludes with a summary of the key contributions for both model producers and consumers. It later specifies that completeness also requires all code used to parse and process data, the code used for training and inference, any code used in benchmark tests, and any libraries or other code artifacts that were part of the model development lifecycle.",
+    "split": "regression",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2405.00332",
+        "excerpt": "In this work, we do a similar analysis on GSM8k, one of the leading benchmarks for mathematical reasoning.",
+        "page": 3
+      },
+      {
+        "arxiv_id": "2405.00332",
+        "excerpt": "If this second solve produced a different answer to that of the initial solve, we discarded the problem.",
+        "page": 4
+      }
+    ],
+    "item_id": "ea8753c2-a1d9-5e36-a424-b2b96ed96be5",
+    "prompt": "In the constrained document, connect the earlier statement that the authors repeat an existing style of analysis on a leading grade-school maths benchmark, with the later rule for discarding items whose two independent solutions disagreed. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it does a similar analysis on GSM8k, one of the leading benchmarks for mathematical reasoning. It later describes that if a second solve produced a different answer to that of the initial solve, the problem was discarded.",
+    "split": "regression",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2404.01413",
+        "excerpt": "We use three diverse experimental setups of causal transformers, diffusion models, and variational autoencoders trained on real text, molecular conformation, and image datasets, respectively.",
+        "page": 3
+      },
+      {
+        "arxiv_id": "2404.01413",
+        "excerpt": "In contrast, accumulating data at each iteration significantly slows model collapse: the test error increases significantly slower with each additional iteration.",
+        "page": 7
+      }
+    ],
+    "item_id": "c90008f0-bc5e-5893-aef0-d8df3d1eaae7",
+    "prompt": "In the constrained document, connect the earlier statement of the three model families and data domains the experiments span, with the later finding that keeping old data alongside new markedly slows the degradation. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it uses three diverse experimental setups of causal transformers, diffusion models, and variational autoencoders trained on real text, molecular conformation, and image datasets respectively. It later reports that accumulating data at each iteration significantly slows model collapse, with test error increasing significantly more slowly with each additional iteration.",
+    "split": "regression",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2405.09673",
+        "excerpt": "WinoGrande (Sakaguchi et al., 2019) also assesses commonsense reasoning. It includes 44K problems with sentences that require ambiguous pronoun resolution.",
+        "page": 4
+      },
+      {
+        "arxiv_id": "2405.09673",
+        "excerpt": "Moreover the choice of LoRA rank can serve as a knob to navigate the learning-forgetting tradeoffs.",
+        "page": 7
+      }
+    ],
+    "item_id": "01034e7d-e1b1-5c29-ace1-98c56fa3c068",
+    "prompt": "In the constrained document, connect the earlier description of a commonsense benchmark built around resolving ambiguous pronouns across tens of thousands of items, with the later finding that one adapter hyperparameter trades off acquiring against retaining knowledge. State both and cite both supporting sections.",
+    "reference_answer": "The paper first describes WinoGrande as assessing commonsense reasoning, comprising 44K problems whose sentences require ambiguous pronoun resolution. It later reports that the choice of LoRA rank can serve as a knob to navigate the learning-forgetting tradeoffs.",
+    "split": "regression",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2404.06654",
+        "excerpt": "Within a constrained domain as in RULER, the task complexity can be thought of as a function of the number of target output tokens and the signal-to-noise ratio in the context.",
+        "page": 3
+      },
+      {
+        "arxiv_id": "2404.06654",
+        "excerpt": "Specifically, a variable X1 is initialized with a value V, followed by a linear chain of variable name binding statements (e.g., X2 = X1, X3 = X2, ...), which are inserted at various positions of the input.",
         "page": 5
-      },
-      {
-        "arxiv_id": "2305.16264",
-        "excerpt": "DATA BUDGET Repeating Filling with Code DATA BUDGET Repeat Repeat Repeat Filtering Deduplicate / Perplexity-filter DATA BUDGET CODE DATA 100% 50% 25% 10% Data Budget 14 16 18 20 22 24 Average Performance on 19 tasks (%) Strategy Repeating data Filling missing data with Python code Perplexity-filter then repeat Deduplicate then repeat Figure 6: Strategies for data-constrained settings and their downstream performance.",
-        "page": 8
       }
     ],
-    "item_id": "89bac12a-c1d4-5ce1-b6bb-fde4e43a21b9",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "M Parameters Loss: 8.10 Loss: 3.72 Empirical IsoLoss Contours 3.81 3.91 4.01 4.01 1 10 30 59 100 300 1000 Epochs Predicted IsoLoss Contours 3.88 3.98 4.08 4.18 3.95 4.65 Loss Compute-optimal model for 100M tokens and one epoch Lowest loss for 100M tokens Chinchilla scaling laws efficient frontier Data-constrained scaling laws efficient frontier Models trained Figure 3: IsoLoss contours for 100 million unique tokens. DATA BUDGET Repeating Filling with Code DATA BUDGET Repeat Repeat Repeat Filtering Deduplicate / Perplexity-filter DATA BUDGET CODE DATA 100% 50% 25% 10% Data Budget 14 16 18 20 22 24 Average Performance on 19 tasks (%) Strategy Repeating data Filling missing data with Python code Perplexity-filter then repeat Deduplicate then repeat Figure 6: Strategies for data-constrained settings and their downstream performance.",
-    "split": "dev",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2206.07682",
-        "excerpt": "Published in Transactions on Machine Learning Research (08/2022) Table 1: List of emergent abilities of large language models and the scale (both training FLOPs and number of model parameters) at which the abilities emerge.",
-        "page": 6
-      },
-      {
-        "arxiv_id": "2206.07682",
-        "excerpt": "Published in Transactions on Machine Learning Research (08/2022) 1B 10B 100B 1021 1022 1023 1024 Model parameters Training FLOPs Training compute vs.",
-        "page": 9
-      }
-    ],
-    "item_id": "91fad1cf-5e0e-5ef9-8439-1cae75018ab2",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Published in Transactions on Machine Learning Research (08/2022) Table 1: List of emergent abilities of large language models and the scale (both training FLOPs and number of model parameters) at which the abilities emerge. Published in Transactions on Machine Learning Research (08/2022) 1B 10B 100B 1021 1022 1023 1024 Model parameters Training FLOPs Training compute vs.",
-    "split": "dev",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2308.11432",
-        "excerpt": "Lei Wang et al. A Survey on Large Language Model based Autonomous Agents 7 mation using embedding similarities.",
-        "page": 7
-      },
-      {
-        "arxiv_id": "2308.11432",
-        "excerpt": "Front. Comput. Sci., 2025, 0(0): 1–42 Prompts LLM Reasoning Step-1 Reasoning Step-2 Reasoning Step-n CoT，Zero-shot Cot Prompts LLM Reasoning Step-1 Reasoning Step-2 ReWOO，HuggingGPT LLM Reasoning Step-n LLM Prompts LLM Step-1 Step-2 Step-n CoT-SC Single-Path Reasoning Multi-Path Reasoning Step-1 Step-2 Step-n Step-1 Step-2 Step-n Prompts LLM ToT，LMZSP，RAP Step-1 Step-2 Step-2 Step-2 Step-3 Step-3 Step-3 Step-3 Fig.",
-        "page": 10
-      }
-    ],
-    "item_id": "efaec770-86cd-542e-a9f0-55996f2f12e0",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Lei Wang et al. A Survey on Large Language Model based Autonomous Agents 7 mation using embedding similarities. Front. Comput. Sci., 2025, 0(0): 1–42 Prompts LLM Reasoning Step-1 Reasoning Step-2 Reasoning Step-n CoT，Zero-shot Cot Prompts LLM Reasoning Step-1 Reasoning Step-2 ReWOO，HuggingGPT LLM Reasoning Step-n LLM Prompts LLM Step-1 Step-2 Step-n CoT-SC Single-Path Reasoning Multi-Path Reasoning Step-1 Step-2 Step-n Step-1 Step-2 Step-n Prompts LLM ToT，LMZSP，RAP Step-1 Step-2 Step-2 Step-2 Step-3 Step-3 Step-3 Step-3 Fig.",
-    "split": "dev",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2302.07225",
-        "excerpt": "Estimation guarantees Although Proposition 4 is only asymptotic, we can provide confidence intervals around this estimate using two types of inequalities.",
-        "page": 8
-      },
-      {
-        "arxiv_id": "2302.07225",
-        "excerpt": "Balle, B., Cherubin, G., and Hayes, J. Reconstructing training data with informed adversaries.",
-        "page": 11
-      }
-    ],
-    "item_id": "9458dc12-1f41-51aa-9766-067e5a6fecf2",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Estimation guarantees Although Proposition 4 is only asymptotic, we can provide confidence intervals around this estimate using two types of inequalities. Balle, B., Cherubin, G., and Hayes, J. Reconstructing training data with informed adversaries.",
-    "split": "dev",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2309.07864",
-        "excerpt": "Due to their natural language comprehension and generation capabilities, they can interact with each other seamlessly, giving rise to collaboration and competition among multiple agents [108; 109; 111; 112].",
-        "page": 9
-      },
-      {
-        "arxiv_id": "2309.07864",
-        "excerpt": "The human brain is a sophisticated structure comprised of a vast number of interconnected neu- rons, capable of processing various information, generating diverse thoughts, controlling different behaviors, and even creating art and culture [199].",
-        "page": 12
-      }
-    ],
-    "item_id": "f3ba64dd-6f44-5403-92d0-9df07ab5874a",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Due to their natural language comprehension and generation capabilities, they can interact with each other seamlessly, giving rise to collaboration and competition among multiple agents [108; 109; 111; 112]. The human brain is a sophisticated structure comprised of a vast number of interconnected neu- rons, capable of processing various information, generating diverse thoughts, controlling different behaviors, and even creating art and culture [199].",
-    "split": "dev",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2403.06634",
-        "excerpt": "USD) RMS # Queries Cost (USD) OpenAI ada 1024 ✓ < 2 · 106 $1 5 · 10−4 < 2 · 107 $4 OpenAI babbage 2048 ✓ < 4 · 106 $2 7 · 10−4 < 4 · 107 $12 OpenAI babbage-002 1536 ✓ < 4 · 106 $2 † < 4 · 106 †+ $12 OpenAI gpt-3.5-turbo-instruct ∗✓ < 4 · 107 $200 † < 4 · 108 †+ $2,000†+ OpenAI gpt-3.5-turbo-1106 ∗✓ < 4 · 107 $800 † < 4 · 108 †+ $8,000†+ ✓Extracted attack size was exactly correct; confirmed in discussion with OpenAI.",
-        "page": 7
-      },
-      {
-        "arxiv_id": "2403.06634",
-        "excerpt": "K} exp(zi + B) + X i/∈{i1,··· ,iK} exp(zi)   = zik + B −log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + ℓ X i exp(zi)   = zik + B −log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + N  , =⇒zik + B −aik(z, b) = log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + N  , =⇒exp(zik + B −aik(z, b)) = (eB −1) X i∈{i1,··· ,iK} exp(zi) + N, And therefore we can conclude exp(B −aik(z, b)) · exp(zk) −(eB −1) X i∈{i1,··· ,iK} exp(zi) = N.",
-        "page": 18
-      }
-    ],
-    "item_id": "5067aefb-0050-508d-8bbf-115ac98bff4f",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "USD) RMS # Queries Cost (USD) OpenAI ada 1024 ✓ < 2 · 106 $1 5 · 10−4 < 2 · 107 $4 OpenAI babbage 2048 ✓ < 4 · 106 $2 7 · 10−4 < 4 · 107 $12 OpenAI babbage-002 1536 ✓ < 4 · 106 $2 † < 4 · 106 †+ $12 OpenAI gpt-3.5-turbo-instruct ∗✓ < 4 · 107 $200 † < 4 · 108 †+ $2,000†+ OpenAI gpt-3.5-turbo-1106 ∗✓ < 4 · 107 $800 † < 4 · 108 †+ $8,000†+ ✓Extracted attack size was exactly correct; confirmed in discussion with OpenAI. K} exp(zi + B) + X i/∈{i1,··· ,iK} exp(zi)   = zik + B −log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + ℓ X i exp(zi)   = zik + B −log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + N  , =⇒zik + B −aik(z, b) = log  (eB −1) X i∈{i1,··· ,iK} exp(zi) + N  , =⇒exp(zik + B −aik(z, b)) = (eB −1) X i∈{i1,··· ,iK} exp(zi) + N, And therefore we can conclude exp(B −aik(z, b)) · exp(zk) −(eB −1) X i∈{i1,··· ,iK} exp(zi) = N.",
-    "split": "regression",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2404.00806",
-        "excerpt": "Period i-1 Period i Period i+1 price LLM Call (Agent 2) price plans and insights LLM Call (Agent 1) Compute quantities sold, profits earned LLM Call (Agent 1) LLM Call (Agent 2) Compute quantities sold, profits earned market history market history market history market history plans and insights plans and insights plans and insights Notes: The figure illustrates how each period of each experimental run is conducted.",
-        "page": 11
-      },
-      {
-        "arxiv_id": "2404.00806",
-        "excerpt": "Stigler, 1964; Friedman, 1971; Green and Porter, 1984; Harrington, 2018). Specifically, in the context of autonomous algorithmic collusion, Calvano et al.",
-        "page": 14
-      }
-    ],
-    "item_id": "b62c5017-77e9-5b47-bab7-e822a2af8f3e",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Period i-1 Period i Period i+1 price LLM Call (Agent 2) price plans and insights LLM Call (Agent 1) Compute quantities sold, profits earned LLM Call (Agent 1) LLM Call (Agent 2) Compute quantities sold, profits earned market history market history market history market history plans and insights plans and insights plans and insights Notes: The figure illustrates how each period of each experimental run is conducted. Stigler, 1964; Friedman, 1971; Green and Porter, 1984; Harrington, 2018). Specifically, in the context of autonomous algorithmic collusion, Calvano et al.",
-    "split": "regression",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2403.13784",
-        "excerpt": "The Model Openness Framework White et al. tasks like Reinforcement Learning from Human Feedback (RLHF).",
-        "page": 12
-      },
-      {
-        "arxiv_id": "2403.13784",
-        "excerpt": "The Model Openness Framework White et al. – license_path: The location of the LICENSE file for the component within the distribution, full path is required in POSIX format with leading slash for the root directory.",
-        "page": 15
-      }
-    ],
-    "item_id": "1dad2a3f-5182-5b6f-a94f-064fa5279d70",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "The Model Openness Framework White et al. tasks like Reinforcement Learning from Human Feedback (RLHF). The Model Openness Framework White et al. – license_path: The location of the LICENSE file for the component within the distribution, full path is required in POSIX format with leading slash for the root directory.",
-    "split": "regression",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2405.00332",
-        "excerpt": "Ivo Danihelka, Becca Roelofs, Anaïs White, Anders Andreassen, Tamara von Glehn, Lakshman Yagati, Mehran Kazemi, Lucas Gonzalez, Misha Khalman, Jakub Sygnowski, Alexandre Frechette, Charlotte Smith, Laura Culp, Lev Proleev, Yi Luan, Xi Chen, James Lottes, Nathan Schucher, Federico Lebron, Alban Rrustemi, Natalie Clay, Phil Crone, Tomas Kocisky, Jeffrey Zhao, Bartek Perz, Dian Yu, Heidi Howard, Adam Bloniarz, Jack W.",
-        "page": 13
-      },
-      {
-        "arxiv_id": "2405.00332",
-        "excerpt": "Austin Waters, Oliver Wang, Joshua Ainslie, Jason Baldridge, Han Zhang, Garima Pruthi, Jakob Bauer, Feng Yang, Riham Mansour, Jason Gelman, Yang Xu, George Polovets, Ji Liu, Honglong Cai, Warren Chen, XiangHai Sheng, Emily Xue, Sherjil Ozair, Christof Angermueller, Xiaowei Li, Anoop Sinha, Weiren Wang, Julia Wiesinger, Emmanouil Koukoumidis, Yuan Tian, Anand Iyer, Madhu Gurumurthy, Mark Goldenson, Parashar Shah, M.",
-        "page": 16
-      }
-    ],
-    "item_id": "1d5597b2-368a-5d98-b7e4-e5e017be676c",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Ivo Danihelka, Becca Roelofs, Anaïs White, Anders Andreassen, Tamara von Glehn, Lakshman Yagati, Mehran Kazemi, Lucas Gonzalez, Misha Khalman, Jakub Sygnowski, Alexandre Frechette, Charlotte Smith, Laura Culp, Lev Proleev, Yi Luan, Xi Chen, James Lottes, Nathan Schucher, Federico Lebron, Alban Rrustemi, Natalie Clay, Phil Crone, Tomas Kocisky, Jeffrey Zhao, Bartek Perz, Dian Yu, Heidi Howard, Adam Bloniarz, Jack W. Austin Waters, Oliver Wang, Joshua Ainslie, Jason Baldridge, Han Zhang, Garima Pruthi, Jakob Bauer, Feng Yang, Riham Mansour, Jason Gelman, Yang Xu, George Polovets, Ji Liu, Honglong Cai, Warren Chen, XiangHai Sheng, Emily Xue, Sherjil Ozair, Christof Angermueller, Xiaowei Li, Anoop Sinha, Weiren Wang, Julia Wiesinger, Emmanouil Koukoumidis, Yuan Tian, Anand Iyer, Madhu Gurumurthy, Mark Goldenson, Parashar Shah, M.",
-    "split": "regression",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2404.01413",
-        "excerpt": "Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond, Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, R´emi Louf, Morgan Funtowicz, et al.",
-        "page": 14
-      },
-      {
-        "arxiv_id": "2404.01413",
-        "excerpt": "Mart´ınez et al., 2023b). We think understanding what conditions and why these discrepancies exist is an interesting future direction.",
-        "page": 17
-      }
-    ],
-    "item_id": "337e8f47-b8e1-5ccb-9e0f-63c41119051f",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond, Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, R´emi Louf, Morgan Funtowicz, et al. Mart´ınez et al., 2023b). We think understanding what conditions and why these discrepancies exist is an interesting future direction.",
-    "split": "regression",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2405.09673",
-        "excerpt": "Published in Transactions on Machine Learning Research (08/2024) References Armen Aghajanyan, Luke Zettlemoyer, and Sonal Gupta.",
-        "page": 15
-      },
-      {
-        "arxiv_id": "2405.09673",
-        "excerpt": "Published in Transactions on Machine Learning Research (08/2024) Jekaterina Novikova, Ondřej Dušek, and Verena Rieser.",
-        "page": 18
-      }
-    ],
-    "item_id": "39904f3d-ae90-5b5d-9140-91a1cf98ad59",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Published in Transactions on Machine Learning Research (08/2024) References Armen Aghajanyan, Luke Zettlemoyer, and Sonal Gupta. Published in Transactions on Machine Learning Research (08/2024) Jekaterina Novikova, Ondřej Dušek, and Verena Rieser.",
-    "split": "regression",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2404.06654",
-        "excerpt": "Published as a conference paper at COLM 2024 Xinrong Zhang, Yingfa Chen, Shengding Hu, Zihang Xu, Junhao Chen, Moo Khai Hao, Xu Han, Zhen Leng Thai, Shuo Wang, Zhiyuan Liu, and Maosong Sun.",
-        "page": 16
-      },
-      {
-        "arxiv_id": "2404.06654",
-        "excerpt": "Published as a conference paper at COLM 2024 C Task Correlation Analysis RULER is designed under the assumption that tasks across different categories are able to reveal distinct model behaviors.",
-        "page": 19
-      }
-    ],
-    "item_id": "5d6f0998-4989-5f3a-a6d3-878ca846e836",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Published as a conference paper at COLM 2024 Xinrong Zhang, Yingfa Chen, Shengding Hu, Zihang Xu, Junhao Chen, Moo Khai Hao, Xu Han, Zhen Leng Thai, Shuo Wang, Zhiyuan Liu, and Maosong Sun. Published as a conference paper at COLM 2024 C Task Correlation Analysis RULER is designed under the assumption that tasks across different categories are able to reveal distinct model behaviors.",
+    "item_id": "59e5dc91-d634-586e-b243-989474291582",
+    "prompt": "In the constrained document, connect the earlier framing of difficulty as depending on how much output is wanted and how much distraction surrounds the answer, with the later concrete construction that chains variable assignments through the input. State both and cite both supporting sections.",
+    "reference_answer": "The paper first frames task complexity within a constrained domain as a function of the number of target output tokens and the signal-to-noise ratio in the context. It later describes initializing a variable with a value and following it with a linear chain of variable name binding statements inserted at various positions of the input.",
     "split": "regression",
     "stratum": "long_cross_section"
   },
@@ -1128,37 +1128,37 @@
     "excerpts": [
       {
         "arxiv_id": "2406.11717",
-        "excerpt": "Dimitri von Rütte, Sotiris Anagnostidis, Gregor Bachmann, and Thomas Hofmann. A language model’s guide through latent space.",
-        "page": 17
+        "excerpt": "This effectively prevents the model from ever representing this direction in its residual stream.",
+        "page": 4
       },
       {
         "arxiv_id": "2406.11717",
-        "excerpt": "Refusal metric 0 10 20 30 Frequency Refusal metric harmful harmless Figure 10: The refusal metric separates harmful and harmless instructions for GEMMA 2B IT.",
-        "page": 20
-      }
-    ],
-    "item_id": "d1b064b4-690b-5e85-9dd4-654af988054f",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Dimitri von Rütte, Sotiris Anagnostidis, Gregor Bachmann, and Thomas Hofmann. A language model’s guide through latent space. Refusal metric 0 10 20 30 Frequency Refusal metric harmful harmless Figure 10: The refusal metric separates harmful and harmless instructions for GEMMA 2B IT.",
-    "split": "regression",
-    "stratum": "long_cross_section"
-  },
-  {
-    "excerpts": [
-      {
-        "arxiv_id": "2405.02973",
-        "excerpt": "Conference’17, July 2017, Washington, DC, USA Liu et al. L Local Variable: F𝐶ℎ𝑎𝑛𝑛𝑒𝑙maintains a map 𝐵𝑎𝑙𝑎𝑛𝑐𝑒[𝑢𝑖𝑑] ↦→𝑥, where 𝑥is the balance of user with 𝑢𝑖𝑑.",
+        "excerpt": "All evaluations use the model’s default system prompt. We also report ASR without system prompt in blue.",
         "page": 6
+      }
+    ],
+    "item_id": "2c96b2a2-c6a1-5b5e-a1ee-36932aa9eb09",
+    "prompt": "In the constrained document, connect the earlier claim that the intervention stops a particular direction from ever appearing in the network's internal stream, with the later note about which system prompt the reported attack-success numbers assume. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that the intervention effectively prevents the model from ever representing this direction in its residual stream. It later notes that all evaluations use the model's default system prompt, with attack success rate also reported without a system prompt.",
+    "split": "regression",
+    "stratum": "long_cross_section"
+  },
+  {
+    "excerpts": [
+      {
+        "arxiv_id": "2405.02973",
+        "excerpt": "Contributions. In this paper, we address the fairness problem in P2P content delivery involving multiple relayers and multiple paths, which is common in practice.",
+        "page": 2
       },
       {
         "arxiv_id": "2405.02973",
-        "excerpt": "Conference’17, July 2017, Washington, DC, USA Liu et al. 7.3 Overhead To demonstrate the efficiency of FairRelay, we initially com- pare our protocol with blockchain-based fair exchange protocols, FairSwap[11], FDE[34], Bitstream[22], and FairDownload[17].",
-        "page": 12
+        "excerpt": "The adversary A has the ability to corrupt any participant in this content delivery process before the protocol begins.",
+        "page": 3
       }
     ],
-    "item_id": "3dc94907-8c52-5b08-bdfe-ee2ea5a9cdac",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Conference’17, July 2017, Washington, DC, USA Liu et al. L Local Variable: F𝐶ℎ𝑎𝑛𝑛𝑒𝑙maintains a map 𝐵𝑎𝑙𝑎𝑛𝑐𝑒[𝑢𝑖𝑑] ↦→𝑥, where 𝑥is the balance of user with 𝑢𝑖𝑑. Conference’17, July 2017, Washington, DC, USA Liu et al. 7.3 Overhead To demonstrate the efficiency of FairRelay, we initially com- pare our protocol with blockchain-based fair exchange protocols, FairSwap[11], FDE[34], Bitstream[22], and FairDownload[17].",
+    "item_id": "76dea89e-8a2d-569e-a48f-cd93944956af",
+    "prompt": "In the constrained document, connect the earlier statement of the equity problem the work tackles when several forwarding parties and routes are involved, with the later definition of how much of the system the attacker may subvert beforehand. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it addresses the fairness problem in peer-to-peer content delivery involving multiple relayers and multiple paths, which is common in practice. It later specifies that the adversary can corrupt any participant in the content delivery process before the protocol begins.",
     "split": "regression",
     "stratum": "long_cross_section"
   },
@@ -1166,18 +1166,18 @@
     "excerpts": [
       {
         "arxiv_id": "2406.12045",
-        "excerpt": "Change cabin: all reservations, including basic economy, can change cabin without changing the flights.",
-        "page": 19
+        "excerpt": "Related Work Most existing benchmarks for agents and task-oriented dialogue systems focus on evaluating either conversational or tool-use capabilities.",
+        "page": 2
       },
       {
         "arxiv_id": "2406.12045",
-        "excerpt": "C.2 Task and trajectory examples Here, tasks are not cherry-picked, and the trajectories are based on gpt-4o function calling agent.",
-        "page": 25
+        "excerpt": "Note that r = 1 might be a necessary but not sufficient condition for a successful episode e.g., the agent might issue the return without explicit user confirmation, which violates the policy.",
+        "page": 4
       }
     ],
-    "item_id": "8ec33cb8-b476-5966-908a-178ca70cdc0f",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Change cabin: all reservations, including basic economy, can change cabin without changing the flights. C.2 Task and trajectory examples Here, tasks are not cherry-picked, and the trajectories are based on gpt-4o function calling agent.",
+    "item_id": "a17f7d8c-6cea-581d-90a6-b2911769a5fd",
+    "prompt": "In the constrained document, connect the earlier criticism that prior evaluations test either dialogue skill or tool invocation but not both, with the later caution that a matching final state does not by itself prove the episode respected the rules. State both and cite both supporting sections.",
+    "reference_answer": "The paper first observes that most existing benchmarks for agents and task-oriented dialogue systems focus on evaluating either conversational or tool-use capabilities. It later cautions that a reward of 1 may be necessary but not sufficient for a successful episode, since the agent might issue a return without explicit user confirmation and thereby violate the policy.",
     "split": "regression",
     "stratum": "long_cross_section"
   },
@@ -1185,18 +1185,18 @@
     "excerpts": [
       {
         "arxiv_id": "2405.14831",
-        "excerpt": "Alhandra Vila Franca de Xira Lisbon District is a municipality in Portugal located in Tagus River situated on founded by French followers of Afonso Henriques 136,886 in 2011 318.19 km2 footballer is a Lisbon 5 March 1979 Portuguese Luís Miguel Assunção Joaquim municipality of Vila Franca de Xira equivalent is also known as is born in is had population of had area of born on equivalent vila 1.",
-        "page": 21
+        "excerpt": "Thus, this complex process allows for new information to be integrated by changing only the hippocampal index instead of updating neocortical representations.",
+        "page": 3
       },
       {
         "arxiv_id": "2405.14831",
-        "excerpt": "Table 9, we first note that there is a massive difference between end-to-end information extraction systems like REBEL and LLMs.",
-        "page": 24
+        "excerpt": "Given these constraints, we propose node specificity as an alternative IDF signal which requires only local signals and is thus more neurobiologically plausible.",
+        "page": 5
       }
     ],
-    "item_id": "ff0ee5dc-e13a-5ec6-9914-7e67ba93b4c5",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Alhandra Vila Franca de Xira Lisbon District is a municipality in Portugal located in Tagus River situated on founded by French followers of Afonso Henriques 136,886 in 2011 318.19 km2 footballer is a Lisbon 5 March 1979 Portuguese Luís Miguel Assunção Joaquim municipality of Vila Franca de Xira equivalent is also known as is born in is had population of had area of born on equivalent vila 1. Table 9, we first note that there is a massive difference between end-to-end information extraction systems like REBEL and LLMs.",
+    "item_id": "93d5c249-af0f-5644-a249-99574c52269e",
+    "prompt": "In the constrained document, connect the earlier claim that new knowledge is absorbed by editing only the memory index rather than rewriting cortical storage, with the later proposal of a locally computable substitute for a term-weighting signal. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that this complex process allows new information to be integrated by changing only the hippocampal index instead of updating neocortical representations. It later proposes node specificity as an alternative IDF signal that requires only local signals and is therefore more neurobiologically plausible.",
     "split": "regression",
     "stratum": "long_cross_section"
   },
@@ -1204,18 +1204,18 @@
     "excerpts": [
       {
         "arxiv_id": "2410.00037",
-        "excerpt": "Moshi: a speech-text foundation model for real-time dialogue it contains no overlap, and the stream of an inactive speaker is perfectly silent.",
-        "page": 21
+        "excerpt": "Zhu et al. (2024) leverage a smaller nested transformer to model the different tokens at a single time step.",
+        "page": 4
       },
       {
         "arxiv_id": "2410.00037",
-        "excerpt": "Moshi: a speech-text foundation model for real-time dialogue Table 3: Ablation study on hyper-parameters of the Mimi codec.",
-        "page": 24
+        "excerpt": "To jointly model the audio streams from Moshi and the user, as well as Moshi’s text tokens, we rely on a Depth Transformer compatible with streaming inference (Sections 3.4.1, 3.4.2).",
+        "page": 6
       }
     ],
-    "item_id": "096ed7c3-9c17-554f-aa03-81db0496fe77",
-    "prompt": "Connect the method statement with the later reported observation in the constrained long document. Cite both supporting sections.",
-    "reference_answer": "Moshi: a speech-text foundation model for real-time dialogue it contains no overlap, and the stream of an inactive speaker is perfectly silent. Moshi: a speech-text foundation model for real-time dialogue Table 3: Ablation study on hyper-parameters of the Mimi codec.",
+    "item_id": "6b91e763-bbe6-5832-87c8-6f7a4f3c4943",
+    "prompt": "In the constrained document, connect the earlier note that related work nests a smaller transformer to model the several tokens emitted at one time step, with the later statement of how this system jointly models both speakers' audio and its own text under streaming. State both and cite both supporting sections.",
+    "reference_answer": "The paper first notes that Zhu et al. (2024) leverage a smaller nested transformer to model the different tokens at a single time step. It later states that to jointly model the audio streams from Moshi and the user, as well as Moshi's text tokens, it relies on a Depth Transformer compatible with streaming inference.",
     "split": "regression",
     "stratum": "long_cross_section"
   },
@@ -1223,18 +1223,18 @@
     "excerpts": [
       {
         "arxiv_id": "2205.05638",
-        "excerpt": "V K Q softmax Dense Nonlinearity Dense T0 Susie loves her grandma's banana bread. Susie called her grandma and asked her to send some.",
+        "excerpt": "What is a possible continuation for the story? Susie was so happy. Susie was upset.",
         "page": 2
       },
       {
         "arxiv_id": "2206.07682",
-        "excerpt": "Instruction tuning 10 NLU task average (B) Instruction following 1019 1020 1021 0 20 40 60 80 100 No scratchpad Scratchpad Model scale (training FLOPs) Accuracy (%) (C) 8-digit addition 1022 1023 1024 100 101 Letter choices T/F % ECE (log-scale, decreasing) (D) Calibration Figure 3: Specialized prompting or ﬁnetuning methods can be emergent in that they do not have a positive eﬀect until a certain model scale.",
-        "page": 5
+        "excerpt": "When visualized via a scaling curve (x-axis: model scale, y-axis: performance), emergent abilities show a clear pattern—performance is near-random until a certain critical threshold of scale is reached, after which performance increases to substantially above random.",
+        "page": 2
       }
     ],
-    "item_id": "229ce7f2-f651-5b05-80b4-9e63d94085e7",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "V K Q softmax Dense Nonlinearity Dense T0 Susie loves her grandma's banana bread. Susie called her grandma and asked her to send some. Instruction tuning 10 NLU task average (B) Instruction following 1019 1020 1021 0 20 40 60 80 100 No scratchpad Scratchpad Model scale (training FLOPs) Accuracy (%) (C) 8-digit addition 1022 1023 1024 100 101 Letter choices T/F % ECE (log-scale, decreasing) (D) Calibration Figure 3: Specialized prompting or ﬁnetuning methods can be emergent in that they do not have a positive eﬀect until a certain model scale.",
+    "item_id": "c22a2693-b550-5add-aad0-29b56751c9f3",
+    "prompt": "One indexed paper contains a passage beginning \"What is a possible continuation for the story? Susie\" and a different indexed paper contains a passage beginning \"When visualized via a scaling curve (x-axis: model scale,\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "What is a possible continuation for the story? Susie was so happy. Susie was upset. When visualized via a scaling curve (x-axis: model scale, y-axis: performance), emergent abilities show a clear pattern—performance is near-random until a certain critical threshold of scale is reached, after which performance increases to substantially above random.",
     "split": "dev",
     "stratum": "cross_document"
   },
@@ -1242,18 +1242,18 @@
     "excerpts": [
       {
         "arxiv_id": "2208.03567",
-        "excerpt": "W ′ t+k is deemed valid if d(Wt+k, W ′ t+k) < δ, i.e., the recreated weight W ′ t+k is within a δ error threshold of the prover-generated weight Wt+k using some distance function d (typically an ℓp norm).",
-        "page": 3
+        "excerpt": "However, as we demonstrate, this approach opens an attack surface for adversaries to force the verification mechanism to verify a subset of updates of their choice.",
+        "page": 2
       },
       {
         "arxiv_id": "2208.07339",
-        "excerpt": "Table 1: C4 validation perplexities of quantization methods for different transformer sizes ranging from 125M to 13B parameters.",
-        "page": 6
+        "excerpt": "At around 6.7B parameters, a phase shift occurs, and all transformer layers and 75% of all sequence dimensions are affected by extreme magnitude features.",
+        "page": 2
       }
     ],
-    "item_id": "d63f747b-6dce-5116-8cc8-a0cefa1f9f46",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "W ′ t+k is deemed valid if d(Wt+k, W ′ t+k) < δ, i.e., the recreated weight W ′ t+k is within a δ error threshold of the prover-generated weight Wt+k using some distance function d (typically an ℓp norm). Table 1: C4 validation perplexities of quantization methods for different transformer sizes ranging from 125M to 13B parameters.",
+    "item_id": "8ef90433-9cab-548f-abc8-c52f0771dda5",
+    "prompt": "One indexed paper contains a passage beginning \"However, as we demonstrate, this approach opens an attack\" and a different indexed paper contains a passage beginning \"At around 6.7B parameters, a phase shift occurs, and\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "However, as we demonstrate, this approach opens an attack surface for adversaries to force the verification mechanism to verify a subset of updates of their choice. At around 6.7B parameters, a phase shift occurs, and all transformer layers and 75% of all sequence dimensions are affected by extreme magnitude features.",
     "split": "dev",
     "stratum": "cross_document"
   },
@@ -1261,18 +1261,18 @@
     "excerpts": [
       {
         "arxiv_id": "2209.05433",
-        "excerpt": "Exponent bias Both E4M3 and E5M2 retain IEEE-like exponent biases: 7 and 15 for E4M3 and E5M2, respectively.",
-        "page": 4
+        "excerpt": "Noune et al [16] propose a modified FP8 representation that dedicates a single encoding to special values in order to increase the represented dynamic range and present an extensive study of exponent bias effect on result quality.",
+        "page": 2
       },
       {
         "arxiv_id": "2210.08674",
-        "excerpt": "Scaling up Trustless DNN Inference with Zero-Knowledge Proofs Security model. In this work, we use the standard ZK- SNARK security model for the ZK-SNARKs (B¨unz et al., 2020).",
-        "page": 6
+        "excerpt": "Non-interactivity: Proof generation does not require interaction between the verifier and prover.",
+        "page": 3
       }
     ],
-    "item_id": "4078b732-32af-5e25-965c-c766f71e7341",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Exponent bias Both E4M3 and E5M2 retain IEEE-like exponent biases: 7 and 15 for E4M3 and E5M2, respectively. Scaling up Trustless DNN Inference with Zero-Knowledge Proofs Security model. In this work, we use the standard ZK- SNARK security model for the ZK-SNARKs (B¨unz et al., 2020).",
+    "item_id": "f176f6c7-43a8-51d0-b04c-dae1ad80ce05",
+    "prompt": "One indexed paper contains a passage beginning \"Noune et al [16] propose a modified FP8 representation\" and a different indexed paper contains a passage beginning \"Non-interactivity: Proof generation does not require interaction between the\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "Noune et al [16] propose a modified FP8 representation that dedicates a single encoding to special values in order to increase the represented dynamic range and present an extensive study of exponent bias effect on result quality. Non-interactivity: Proof generation does not require interaction between the verifier and prover.",
     "split": "dev",
     "stratum": "cross_document"
   },
@@ -1280,18 +1280,18 @@
     "excerpts": [
       {
         "arxiv_id": "2210.10634",
-        "excerpt": "Training The adapted model structure enables the model to directly output the ranking score for each query- document pair.",
-        "page": 5
+        "excerpt": "Our contributions are in the early ranking stage which scores thousands of input documents; they are thus complementary with this work.",
+        "page": 2
       },
       {
         "arxiv_id": "2210.11416",
-        "excerpt": "MMLU BBH-nlp BBH-alg TyDiQA MGSM Prior best 69.3a 73.5b 73.9b 81.9c 55.0d PaLM 540B - direct prompting 69.3 62.7 38.3 52.9 18.3 - CoT prompting 64.5 71.2 57.6 - 45.9 - CoT + self-consistency 69.5 78.2 62.2 - 57.9 Flan-PaLM 540B - direct prompting 72.2 70.0 48.2 67.8 21.2 - CoT prompting 70.2 72.4 61.3 - 57.0 - CoT + self-consistency 75.2 78.4 66.5 - 72.0 Table 4: Flan-PaLM outperforms PaLM on all evaluation benchmarks.",
-        "page": 8
+        "excerpt": "Our experiments show that whereas prior instruction finetuning methods that do not include chain-of-thought (CoT; Wei et al., 2022b) severely degrade performance on CoT evaluations, adding just nine CoT datasets into the finetuning mixture enables better performance on all evaluations.",
+        "page": 2
       }
     ],
-    "item_id": "c149b479-9bec-59dd-98e7-b8d2564c422d",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Training The adapted model structure enables the model to directly output the ranking score for each query- document pair. MMLU BBH-nlp BBH-alg TyDiQA MGSM Prior best 69.3a 73.5b 73.9b 81.9c 55.0d PaLM 540B - direct prompting 69.3 62.7 38.3 52.9 18.3 - CoT prompting 64.5 71.2 57.6 - 45.9 - CoT + self-consistency 69.5 78.2 62.2 - 57.9 Flan-PaLM 540B - direct prompting 72.2 70.0 48.2 67.8 21.2 - CoT prompting 70.2 72.4 61.3 - 57.0 - CoT + self-consistency 75.2 78.4 66.5 - 72.0 Table 4: Flan-PaLM outperforms PaLM on all evaluation benchmarks.",
+    "item_id": "77071ce6-9424-509c-bf7a-c89deae1791a",
+    "prompt": "One indexed paper contains a passage beginning \"Our contributions are in the early ranking stage which\" and a different indexed paper contains a passage beginning \"Our experiments show that whereas prior instruction finetuning methods\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "Our contributions are in the early ranking stage which scores thousands of input documents; they are thus complementary with this work. Our experiments show that whereas prior instruction finetuning methods that do not include chain-of-thought (CoT; Wei et al., 2022b) severely degrade performance on CoT evaluations, adding just nine CoT datasets into the finetuning mixture enables better performance on all evaluations.",
     "split": "dev",
     "stratum": "cross_document"
   },
@@ -1299,18 +1299,18 @@
     "excerpts": [
       {
         "arxiv_id": "2211.00490",
-        "excerpt": "Fig. 1. Delay penalized transducer lattice. U transcript tokens, where V is the vocabulary size contain- ing the blank token ∅.",
-        "page": 2
+        "excerpt": "Therefore, by replacing y(t, u) with y′(t, u) in (2), it would encourage low-delay alignments while maximizing the total log-probability L, to prevent the transducer from avidly enhancing the high-delay alignments to access more future contexts 2.",
+        "page": 3
       },
       {
         "arxiv_id": "2211.03540",
-        "excerpt": "Model 57.2 6 59.2 7 Model (5-shot) 61.9 4 – – Model (best-of-20 chain-of-thought) 65.6 16 66.9 17 Human + Model 75.4 12 76.8 7 Human + Model (weighted majority vote) 78.0 18 86.0 11 Expert Human (published estimates) 90.0 – 93.5 – Table 1: Validation set results, showing accuracy (higher is better) and calibration error (lower is better): Human–model teams tend to substantially outperform humans or models alone.",
-        "page": 9
+        "excerpt": "The experts participate only at the end of each experimental cycle, when their role is to evaluate the degree to which the non-expert participants succeeded.",
+        "page": 2
       }
     ],
-    "item_id": "8cdf06a1-f5b0-590b-8d04-4f6a8d8a0f84",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Fig. 1. Delay penalized transducer lattice. U transcript tokens, where V is the vocabulary size contain- ing the blank token ∅. Model 57.2 6 59.2 7 Model (5-shot) 61.9 4 – – Model (best-of-20 chain-of-thought) 65.6 16 66.9 17 Human + Model 75.4 12 76.8 7 Human + Model (weighted majority vote) 78.0 18 86.0 11 Expert Human (published estimates) 90.0 – 93.5 – Table 1: Validation set results, showing accuracy (higher is better) and calibration error (lower is better): Human–model teams tend to substantially outperform humans or models alone.",
+    "item_id": "7bdd9968-4d3a-5040-8607-b353ab8ab866",
+    "prompt": "One indexed paper contains a passage beginning \"Therefore, by replacing y(t, u) with y′(t, u) in\" and a different indexed paper contains a passage beginning \"The experts participate only at the end of each\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "Therefore, by replacing y(t, u) with y′(t, u) in (2), it would encourage low-delay alignments while maximizing the total log-probability L, to prevent the transducer from avidly enhancing the high-delay alignments to access more future contexts 2. The experts participate only at the end of each experimental cycle, when their role is to evaluate the degree to which the non-expert participants succeeded.",
     "split": "dev",
     "stratum": "cross_document"
   },
@@ -1318,18 +1318,18 @@
     "excerpts": [
       {
         "arxiv_id": "2211.10438",
-        "excerpt": "SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models Table 5: SmoothQuant’s performance on the OPT-IML model.",
-        "page": 7
+        "excerpt": "SmoothQuant relies on a key observation: even if activations are much harder to quantize than weights due to the presence of outliers (Dettmers et al., 2022), different tokens exhibit similar variations across their channels.",
+        "page": 2
       },
       {
         "arxiv_id": "2211.17192",
-        "excerpt": "Fast Inference from Transformers via Speculative Decoding Thoppilan, R., Freitas, D.",
-        "page": 10
+        "excerpt": "Note that speculative execution in general, and our algorithm in particular, assume that we have enough compute resources to support the increased concurrency (Section 3.4).",
+        "page": 4
       }
     ],
-    "item_id": "6031347d-21a3-55b1-8400-03fd90c1be84",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models Table 5: SmoothQuant’s performance on the OPT-IML model. Fast Inference from Transformers via Speculative Decoding Thoppilan, R., Freitas, D.",
+    "item_id": "5630c8e7-3204-5aac-b34d-a973343e5456",
+    "prompt": "One indexed paper contains a passage beginning \"SmoothQuant relies on a key observation: even if activations\" and a different indexed paper contains a passage beginning \"Note that speculative execution in general, and our algorithm\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "SmoothQuant relies on a key observation: even if activations are much harder to quantize than weights due to the presence of outliers (Dettmers et al., 2022), different tokens exhibit similar variations across their channels. Note that speculative execution in general, and our algorithm in particular, assume that we have enough compute resources to support the increased concurrency (Section 3.4).",
     "split": "dev",
     "stratum": "cross_document"
   },
@@ -1337,18 +1337,18 @@
     "excerpts": [
       {
         "arxiv_id": "2212.06121",
-        "excerpt": "Rosa et al. 16. Gao, L., Dai, Z., Callan, J.: Rethink training of bert rerankers in multi-stage re- trieval pipeline.",
-        "page": 8
+        "excerpt": "For example, Nogueira et al. [33] proposed monoT5, a novel adaptation of a pretrained sequence-to-sequence language model designed for the text ranking task.",
+        "page": 2
       },
       {
         "arxiv_id": "2302.01318",
-        "excerpt": "This is equal to the denominator of (𝑞(𝑥) −𝑝(𝑥))+, so: ℙ(˜𝑥rejected)ℙ(𝑋= 𝑥|˜𝑥rejected) = max(0, 𝑞(𝑥) −𝑝(𝑥)) Hence: ℙ(𝑋= 𝑥) = min(𝑝(𝑥), 𝑞(𝑥)) + max(0, 𝑞(𝑥) −𝑝(𝑥)) = 𝑞(𝑥) and we have recovered the desired target.",
-        "page": 11
+        "excerpt": "We focus more heavily the distributed serving setting for large models and offer some incremental optimisations, but otherwise the core underlying idea is the same.",
+        "page": 2
       }
     ],
-    "item_id": "1f706db3-8719-5dc1-83c9-13165f637dc5",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Rosa et al. 16. Gao, L., Dai, Z., Callan, J.: Rethink training of bert rerankers in multi-stage re- trieval pipeline. This is equal to the denominator of (𝑞(𝑥) −𝑝(𝑥))+, so: ℙ(˜𝑥rejected)ℙ(𝑋= 𝑥|˜𝑥rejected) = max(0, 𝑞(𝑥) −𝑝(𝑥)) Hence: ℙ(𝑋= 𝑥) = min(𝑝(𝑥), 𝑞(𝑥)) + max(0, 𝑞(𝑥) −𝑝(𝑥)) = 𝑞(𝑥) and we have recovered the desired target.",
+    "item_id": "6d34b84d-8a34-5017-bdb0-f27cad0c1420",
+    "prompt": "One indexed paper contains a passage beginning \"For example, Nogueira et al. [33] proposed monoT5, a\" and a different indexed paper contains a passage beginning \"We focus more heavily the distributed serving setting for\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "For example, Nogueira et al. [33] proposed monoT5, a novel adaptation of a pretrained sequence-to-sequence language model designed for the text ranking task. We focus more heavily the distributed serving setting for large models and offer some incremental optimisations, but otherwise the core underlying idea is the same.",
     "split": "dev",
     "stratum": "cross_document"
   },
@@ -1356,18 +1356,18 @@
     "excerpts": [
       {
         "arxiv_id": "2302.07225",
-        "excerpt": "Section 2 already demonstrated is stronger than previous model- based attacks – a more thorough investigation of how the gradient-based attack compares to the prior-aware attack is presented in Appendix D for varying sizes of the prior distribution.",
-        "page": 9
+        "excerpt": "We obtain a tight upper bound on the success of any reconstruction attack against DP-SGD with access to intermediate gradients and prior information.",
+        "page": 2
       },
       {
         "arxiv_id": "2302.12173",
-        "excerpt": "Kai Greshake, Sahar Abdelnabi, Shailesh Mishra, Christoph Endres, Thorsten Holz, and Mario Fritz Encoded Injections.",
-        "page": 12
+        "excerpt": "Moreover, Park et al. [64] recently designed an interactive simulation environment in which “AI agents” interact and autonomously plan tasks (e.g., throwing a party).",
+        "page": 2
       }
     ],
-    "item_id": "66656508-5e9a-5634-8820-e86923edb943",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Section 2 already demonstrated is stronger than previous model- based attacks – a more thorough investigation of how the gradient-based attack compares to the prior-aware attack is presented in Appendix D for varying sizes of the prior distribution. Kai Greshake, Sahar Abdelnabi, Shailesh Mishra, Christoph Endres, Thorsten Holz, and Mario Fritz Encoded Injections.",
+    "item_id": "822a7c8d-7802-5dc2-a8e6-9c30ef55d5d3",
+    "prompt": "One indexed paper contains a passage beginning \"We obtain a tight upper bound on the success\" and a different indexed paper contains a passage beginning \"Moreover, Park et al. [64] recently designed an interactive\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "We obtain a tight upper bound on the success of any reconstruction attack against DP-SGD with access to intermediate gradients and prior information. Moreover, Park et al. [64] recently designed an interactive simulation environment in which “AI agents” interact and autonomously plan tasks (e.g., throwing a party).",
     "split": "dev",
     "stratum": "cross_document"
   },
@@ -1375,18 +1375,18 @@
     "excerpts": [
       {
         "arxiv_id": "2406.17975",
-        "excerpt": "TABLE V BENCHMARKING MIAS ACROSS COPYRIGHT TRAPS FOR CROISSANTLLM [30]: MIA AUC FOR 500 MEMBERS AND NON-MEMBERS.",
-        "page": 10
+        "excerpt": "We then carefully examine which datasets have been considered to evaluate MIAs across the literature.",
+        "page": 2
       },
       {
         "arxiv_id": "2406.18518",
-        "excerpt": "A Dataset Documentation and Accessibility A.1 Dataset Documentation and Intended Uses The dataset generated using the APIGen framework is intended for training and evaluating function- calling agents.",
-        "page": 13
+        "excerpt": "However, most of these datasets were not rigorously verified, and usually contain noisy data.",
+        "page": 3
       }
     ],
-    "item_id": "5e13181c-db03-5ba1-903e-8320b73c6d11",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "TABLE V BENCHMARKING MIAS ACROSS COPYRIGHT TRAPS FOR CROISSANTLLM [30]: MIA AUC FOR 500 MEMBERS AND NON-MEMBERS. A Dataset Documentation and Accessibility A.1 Dataset Documentation and Intended Uses The dataset generated using the APIGen framework is intended for training and evaluating function- calling agents.",
+    "item_id": "67a36a3f-3eb0-5c34-889e-0fa1d9be70bc",
+    "prompt": "One indexed paper contains a passage beginning \"We then carefully examine which datasets have been considered\" and a different indexed paper contains a passage beginning \"However, most of these datasets were not rigorously verified,\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "We then carefully examine which datasets have been considered to evaluate MIAs across the literature. However, most of these datasets were not rigorously verified, and usually contain noisy data.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1394,18 +1394,18 @@
     "excerpts": [
       {
         "arxiv_id": "2406.20053",
-        "excerpt": "Covert Malicious Finetuning References Achiam, J., Adler, S., Agarwal, S., Ahmad, L., Akkaya, I., Aleman, F.",
-        "page": 11
+        "excerpt": "In our threat model, the model provider can observe the attacker’s API usage, distinguishing our setting from that of open-source model weights.",
+        "page": 2
       },
       {
         "arxiv_id": "2407.01102",
-        "excerpt": "Muir, Vered Cohen, Charline Le Lan, Kr- ishna Haridasan, Amit Marathe, Steven Hansen, Sholto Douglas, Rajkumar Samuel, Mingqiu Wang, Sophia Austin, Chang Lan, Jiepu Jiang, Justin Chiu, Jaime Alonso Lorenzo, Lars Lowe Sjösund, Sébastien Cevey, Zach Gleicher, Thi Avra- hami, Anudhyan Boral, Hansa Srinivasan, Vittorio Selo, Rhys May, Konstantinos Aisopos, Léonard Hussenot, Livio Baldini Soares, Kate Baumli, Michael B.",
-        "page": 14
+        "excerpt": "In this work, we focus on QA and select the most popular publicly available datasets for BERGEN.",
+        "page": 4
       }
     ],
-    "item_id": "72673b9e-4bd0-5195-8d2f-21cca795796a",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Covert Malicious Finetuning References Achiam, J., Adler, S., Agarwal, S., Ahmad, L., Akkaya, I., Aleman, F. Muir, Vered Cohen, Charline Le Lan, Kr- ishna Haridasan, Amit Marathe, Steven Hansen, Sholto Douglas, Rajkumar Samuel, Mingqiu Wang, Sophia Austin, Chang Lan, Jiepu Jiang, Justin Chiu, Jaime Alonso Lorenzo, Lars Lowe Sjösund, Sébastien Cevey, Zach Gleicher, Thi Avra- hami, Anudhyan Boral, Hansa Srinivasan, Vittorio Selo, Rhys May, Konstantinos Aisopos, Léonard Hussenot, Livio Baldini Soares, Kate Baumli, Michael B.",
+    "item_id": "417e2b69-385e-55ac-87bd-1124fc21e84d",
+    "prompt": "One indexed paper contains a passage beginning \"In our threat model, the model provider can observe\" and a different indexed paper contains a passage beginning \"In this work, we focus on QA and select\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "In our threat model, the model provider can observe the attacker’s API usage, distinguishing our setting from that of open-source model weights. In this work, we focus on QA and select the most popular publicly available datasets for BERGEN.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1413,18 +1413,18 @@
     "excerpts": [
       {
         "arxiv_id": "2407.01449",
-        "excerpt": "Published as a conference paper at ICLR 2025 Burton H. Bloom. Space/time trade-offs in hash coding with allowable errors.",
-        "page": 12
+        "excerpt": "More recently, neural embedding models based on fine-tuned large language models display state-of-the-art performance on a variety of text embedding tasks and top the retrieval leaderboards (Muennighoff et al., 2022).",
+        "page": 3
       },
       {
         "arxiv_id": "2407.04088",
-        "excerpt": "Figure 9 investigates the dependence of the collusive level on the idiosyncratic preference pa- rameter βk, while considering two different choices of the externality matrix Φ: A symmetric one, where Φ = [1,0;0,1] (left panel) and an asymmetric one, where Φ = [0,1;−1,0] (right panel).",
-        "page": 15
+        "excerpt": "Our work extends the numerical understanding of algorithmic pricing, particularly in two-sided markets with network externalities.",
+        "page": 2
       }
     ],
-    "item_id": "2782132f-ecd8-510c-a06b-95b2d08fddff",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Published as a conference paper at ICLR 2025 Burton H. Bloom. Space/time trade-offs in hash coding with allowable errors. Figure 9 investigates the dependence of the collusive level on the idiosyncratic preference pa- rameter βk, while considering two different choices of the externality matrix Φ: A symmetric one, where Φ = [1,0;0,1] (left panel) and an asymmetric one, where Φ = [0,1;−1,0] (right panel).",
+    "item_id": "d557cd2e-0ca8-5a2b-8d3c-37653c998a58",
+    "prompt": "One indexed paper contains a passage beginning \"More recently, neural embedding models based on fine-tuned large\" and a different indexed paper contains a passage beginning \"Our work extends the numerical understanding of algorithmic pricing,\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "More recently, neural embedding models based on fine-tuned large language models display state-of-the-art performance on a variety of text embedding tasks and top the retrieval leaderboards (Muennighoff et al., 2022). Our work extends the numerical understanding of algorithmic pricing, particularly in two-sided markets with network externalities.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1432,18 +1432,18 @@
     "excerpts": [
       {
         "arxiv_id": "2407.05858",
-        "excerpt": "Rotterdam, Netherlands. Daliang Xu et al. LLMs corpora Preparation Execution Prompts First tokens CPU/ GPU NPU Profiling Chunk#1 Chunk#2 Chunk#N Quantization … C1- G2 C2- G2 C1- G1 C2- G1 C1- G3 C3- G1 C1- G4 C3- G2 Chunk-sharing Graph (§3.2) Out-of-order subgraph execution (§3.4) … … C1- G1 C2- G1 G1 C1-G2 G3 G4 Shadow outlier execution (§3.3) C2-G2 Split Chunk generator Prompts Prompts subgraphs CPU NPU Figure 6.",
-        "page": 6
+        "excerpt": "However, LLMs can be hardly quantized into integer-only execution with minimal accuracy loss.",
+        "page": 2
       },
       {
         "arxiv_id": "2407.07852",
-        "excerpt": "OpenDiLoCo of communication (up to 500 times), thus lowering the band- width requirements for distributed training.",
-        "page": 2
+        "excerpt": "Final Evaluation Perplexity Comparison: We compare our two baselines vs DiLoCo with 8 replicas for a 150 million parameter model pre-training across their communication cost, time spent, compute & data used and final perplexity after 88,000 steps, similar to Douillard et al..",
+        "page": 4
       }
     ],
-    "item_id": "1461d617-74b0-5e89-8135-63015fc6931b",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Rotterdam, Netherlands. Daliang Xu et al. LLMs corpora Preparation Execution Prompts First tokens CPU/ GPU NPU Profiling Chunk#1 Chunk#2 Chunk#N Quantization … C1- G2 C2- G2 C1- G1 C2- G1 C1- G3 C3- G1 C1- G4 C3- G2 Chunk-sharing Graph (§3.2) Out-of-order subgraph execution (§3.4) … … C1- G1 C2- G1 G1 C1-G2 G3 G4 Shadow outlier execution (§3.3) C2-G2 Split Chunk generator Prompts Prompts subgraphs CPU NPU Figure 6. OpenDiLoCo of communication (up to 500 times), thus lowering the band- width requirements for distributed training.",
+    "item_id": "d0bde014-20e1-516d-ac0b-3b0b23ff1a52",
+    "prompt": "One indexed paper contains a passage beginning \"However, LLMs can be hardly quantized into integer-only execution\" and a different indexed paper contains a passage beginning \"Final Evaluation Perplexity Comparison: We compare our two baselines\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "However, LLMs can be hardly quantized into integer-only execution with minimal accuracy loss. Final Evaluation Perplexity Comparison: We compare our two baselines vs DiLoCo with 8 replicas for a 150 million parameter model pre-training across their communication cost, time spent, compute & data used and final perplexity after 88,000 steps, similar to Douillard et al..",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1451,18 +1451,18 @@
     "excerpts": [
       {
         "arxiv_id": "2407.12929",
-        "excerpt": "Adept Amazon Google OpenAI Anthropic Mistral Writer Stability AI Meta Microsoft IBM Aleph Alpha AI21 Labs BigCode/HF/ ServiceNow Points without new information Points from new information Score 33 41 47 49 51 55 56 58 60 62 64 75 75 85 Disclosure of New Information and Scores by Foundation Model Developer, May 2024 Source: May 2024 Foundation Model Transparency Index Figure 7: Scores by New Information Status.",
-        "page": 14
+        "excerpt": "Developers are least transparent with respect to the upstream resources required to build their foundation models, scoring 46%, in comparison to 65% on downstream indicators and 61% on model-related indicators.",
+        "page": 2
       },
       {
         "arxiv_id": "2407.19572",
-        "excerpt": "Strategies Strategy Latency Application Dependent Censorship Resistance Centralization Risk L1 Protocol Change Fair ordering Prevention Communication cost No No Sequencer nodes No Smart contract-level protection Prevention Additional computation Yes No — No Privacy preserving Prevention Encryption/ Decryption No Yes Key management Committee/ Hardware No/Yes PBS Democratizing — No Yes Relay nodes No/Yes [3] G.",
-        "page": 17
+        "excerpt": "Most previous surveys focus on specific aspects of MEV mitigation, but they don’t provide the complete picture.",
+        "page": 2
       }
     ],
-    "item_id": "c8f33960-ac53-5ff0-8857-594b9a4a201f",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Adept Amazon Google OpenAI Anthropic Mistral Writer Stability AI Meta Microsoft IBM Aleph Alpha AI21 Labs BigCode/HF/ ServiceNow Points without new information Points from new information Score 33 41 47 49 51 55 56 58 60 62 64 75 75 85 Disclosure of New Information and Scores by Foundation Model Developer, May 2024 Source: May 2024 Foundation Model Transparency Index Figure 7: Scores by New Information Status. Strategies Strategy Latency Application Dependent Censorship Resistance Centralization Risk L1 Protocol Change Fair ordering Prevention Communication cost No No Sequencer nodes No Smart contract-level protection Prevention Additional computation Yes No — No Privacy preserving Prevention Encryption/ Decryption No Yes Key management Committee/ Hardware No/Yes PBS Democratizing — No Yes Relay nodes No/Yes [3] G.",
+    "item_id": "41aca0d6-5aba-53f9-bc96-98df10687e0b",
+    "prompt": "One indexed paper contains a passage beginning \"Developers are least transparent with respect to the upstream\" and a different indexed paper contains a passage beginning \"Most previous surveys focus on specific aspects of MEV\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "Developers are least transparent with respect to the upstream resources required to build their foundation models, scoring 46%, in comparison to 65% on downstream indicators and 61% on model-related indicators. Most previous surveys focus on specific aspects of MEV mitigation, but they don’t provide the complete picture.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1470,18 +1470,18 @@
     "excerpts": [
       {
         "arxiv_id": "2407.21787",
-        "excerpt": "Lingjiao Chen, Jared Quincy Davis, Boris Hanin, Peter Bailis, Ion Stoica, Matei Zaharia, and James Zou.",
-        "page": 15
+        "excerpt": "With Llama-3 [3] and Gemma models, this leads to coverage growing nearly log-linearly with the number of samples over several orders of magnitude.",
+        "page": 2
       },
       {
         "arxiv_id": "2408.00724",
-        "excerpt": "Published as a conference paper at ICLR 2025 B MCTS DETAILS In this section, we present additional background on the Monte Carlo Tree Search (MCTS) algo- rithm.",
-        "page": 18
+        "excerpt": "We formulate a new compute-optimal inference problem and propose a novel tree search algorithm, REBASE, which is compute-optimal compared to widely-used sampling and MCTS methods.",
+        "page": 3
       }
     ],
-    "item_id": "bba6e076-5c97-5541-9c5a-484cefca73e0",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Lingjiao Chen, Jared Quincy Davis, Boris Hanin, Peter Bailis, Ion Stoica, Matei Zaharia, and James Zou. Published as a conference paper at ICLR 2025 B MCTS DETAILS In this section, we present additional background on the Monte Carlo Tree Search (MCTS) algo- rithm.",
+    "item_id": "ed0f1b20-1742-5eba-b4c6-f5ffbfadab19",
+    "prompt": "One indexed paper contains a passage beginning \"With Llama-3 [3] and Gemma models, this leads to\" and a different indexed paper contains a passage beginning \"We formulate a new compute-optimal inference problem and propose\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "With Llama-3 [3] and Gemma models, this leads to coverage growing nearly log-linearly with the number of samples over several orders of magnitude. We formulate a new compute-optimal inference problem and propose a novel tree search algorithm, REBASE, which is compute-optimal compared to widely-used sampling and MCTS methods.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1489,18 +1489,18 @@
     "excerpts": [
       {
         "arxiv_id": "2408.02442",
-        "excerpt": "Finance Technology Tax and Accounting Business and Management Government and Controls Industry Your answer MUST based on the above op- tions, do not answer Insufficient information Figure 15: MultiFin Task Description Variations DA prompt description variation 1: Natural language: Derive the most likely category to answer key.",
-        "page": 16
+        "excerpt": "However in reasoning related task, JSON-mode failed to adhere to the order of reasoning first followed by answer causing a large drop in final performance.",
+        "page": 5
       },
       {
         "arxiv_id": "2408.02946",
-        "excerpt": "Blocked Input GPT-4o 0.0% Blocked Output 0.5% Succeeded 1.0% Succeeded 1.5% Succeeded 2.0% Succeeded Code Backdoor GPT-4o mini 0.0% Succeeded 0.5% Succeeded 1.0% Succeeded 1.5% Succeeded 2.0% Succeeded GPT-4o 0.0% Succeeded 0.5% Succeeded 1.0% Succeeded 1.5% Succeeded 2.0% Succeeded Table 5: OpenAI moderation is inconsistent in blocking training datasets (“Blocked Input”) and fine-tuned models (“Blocked Output”).",
-        "page": 19
+        "excerpt": "However, in training, the model sees many additional data points in region R, all of which are classified as C.",
+        "page": 3
       }
     ],
-    "item_id": "32c55b9d-63b9-501d-a8d1-4d5d7ff75dad",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Finance Technology Tax and Accounting Business and Management Government and Controls Industry Your answer MUST based on the above op- tions, do not answer Insufficient information Figure 15: MultiFin Task Description Variations DA prompt description variation 1: Natural language: Derive the most likely category to answer key. Blocked Input GPT-4o 0.0% Blocked Output 0.5% Succeeded 1.0% Succeeded 1.5% Succeeded 2.0% Succeeded Code Backdoor GPT-4o mini 0.0% Succeeded 0.5% Succeeded 1.0% Succeeded 1.5% Succeeded 2.0% Succeeded GPT-4o 0.0% Succeeded 0.5% Succeeded 1.0% Succeeded 1.5% Succeeded 2.0% Succeeded Table 5: OpenAI moderation is inconsistent in blocking training datasets (“Blocked Input”) and fine-tuned models (“Blocked Output”).",
+    "item_id": "1c69ca01-c5df-5661-b61e-4a25daa96349",
+    "prompt": "One indexed paper contains a passage beginning \"However in reasoning related task, JSON-mode failed to adhere\" and a different indexed paper contains a passage beginning \"However, in training, the model sees many additional data\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "However in reasoning related task, JSON-mode failed to adhere to the order of reasoning first followed by answer causing a large drop in final performance. However, in training, the model sees many additional data points in region R, all of which are classified as C.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1508,18 +1508,18 @@
     "excerpts": [
       {
         "arxiv_id": "2408.05928",
-        "excerpt": "Meyer, S., Tilli, P., Denisov, P., Lux, F., Koch, J., Vu, N.T., 2022. Anonymizing speech with generative adversarial networks to preserve speaker privacy, in: Proc.",
-        "page": 17
+        "excerpt": "In another approach, (Yao et al., 2024a) utilized a serial disentanglement strategy to separate linguistic content, speaker identity, and emotional state step by step, enabling effective anonymization while maintaining emotional expressiveness.",
+        "page": 3
       },
       {
         "arxiv_id": "2408.05968",
-        "excerpt": "C. Eichler et al. 4.2 Neutralizing N-gram Bias The impact of n-gram distribution on MIA performance has been extensively documented.",
-        "page": 6
+        "excerpt": "They identify several biases that may skew results, such as timeshift between members and non-members, leading to different distributions of dates and word usage.",
+        "page": 4
       }
     ],
-    "item_id": "eb088f92-27b7-51d6-903d-3549a7f5aa0b",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Meyer, S., Tilli, P., Denisov, P., Lux, F., Koch, J., Vu, N.T., 2022. Anonymizing speech with generative adversarial networks to preserve speaker privacy, in: Proc. C. Eichler et al. 4.2 Neutralizing N-gram Bias The impact of n-gram distribution on MIA performance has been extensively documented.",
+    "item_id": "80c0757f-039e-5c46-998c-5ec7985ab363",
+    "prompt": "One indexed paper contains a passage beginning \"In another approach, (Yao et al., 2024a) utilized a\" and a different indexed paper contains a passage beginning \"They identify several biases that may skew results, such\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "In another approach, (Yao et al., 2024a) utilized a serial disentanglement strategy to separate linguistic content, speaker identity, and emotional state step by step, enabling effective anonymization while maintaining emotional expressiveness. They identify several biases that may skew results, such as timeshift between members and non-members, leading to different distributions of dates and word usage.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1527,18 +1527,18 @@
     "excerpts": [
       {
         "arxiv_id": "2408.07227",
-        "excerpt": "Zhu continuous) with limits 1 and 0 as ¯x tends to −∞and ∞, respectively, x⋆ 1 exists and is unique.",
-        "page": 18
+        "excerpt": "In the secondary market, the arbitrageurs trade with buyers and sellers at market prices on exchanges.",
+        "page": 3
       },
       {
         "arxiv_id": "2408.07362",
-        "excerpt": "As a result, the adversary could leverage the injected vulnerabilities to cause a system collapse and even make profits for himself.",
-        "page": 2
+        "excerpt": "It is worth noting that previous work [25] shows that fine-tuning the text encoder T offers no benefits but increases the computation cost and compromises the model’s ability to perform any image classification task.",
+        "page": 3
       }
     ],
-    "item_id": "3f985afa-c2e6-5b84-b2a9-7410d6e90b2a",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Zhu continuous) with limits 1 and 0 as ¯x tends to −∞and ∞, respectively, x⋆ 1 exists and is unique. As a result, the adversary could leverage the injected vulnerabilities to cause a system collapse and even make profits for himself.",
+    "item_id": "8ebd9a73-a167-5d4a-82e3-7271fe790128",
+    "prompt": "One indexed paper contains a passage beginning \"In the secondary market, the arbitrageurs trade with buyers\" and a different indexed paper contains a passage beginning \"It is worth noting that previous work [25] shows\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "In the secondary market, the arbitrageurs trade with buyers and sellers at market prices on exchanges. It is worth noting that previous work [25] shows that fine-tuning the text encoder T offers no benefits but increases the computation cost and compromises the model’s ability to perform any image classification task.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1546,18 +1546,18 @@
     "excerpts": [
       {
         "arxiv_id": "2408.11049",
-        "excerpt": "Prefill=64000 (a) 1 2 4 8 16 32 64 128 256 Batch Size 1.0 1.2 1.4 1.6 1.8 2.0 2.2 Verification Time / Decoding Time Prefill=1000 Prefill=4000 Prefill=16000 Prefill=64000 (b) 1 4 16 64 256 Batch size 1.0 1.2 1.4 1.6 1.8 2.0 2.2 2.4 Speedup 1 1 1 1 2 1 1 2 4 4 1 3 4 4 4 Prefill 4000 Prefill 16000 Prefill 64000 (c) Figure 2: Theoretical analysis and expected speedup for LLaMA-3.1-8B deployed on 8×A100s with γ =3.",
-        "page": 4
+        "excerpt": "Section 4.4 discusses the trade-off between draft cost and acceptance rate for different static and dynamic KV sparsification algorithms on different kinds of tasks.",
+        "page": 3
       },
       {
         "arxiv_id": "2408.15792",
-        "excerpt": "In contrast, classification loss typically relies on bucket labels for training, which can lead to poor predictive performance for minority buckets in imbalanced datasets.",
-        "page": 5
+        "excerpt": "Kendall’s Tau ranges from −1 to 1. 1 means two rankings are the same, −1 means two rankings are reversed, and 0 means two rankings are not correlated.",
+        "page": 3
       }
     ],
-    "item_id": "fc7f232a-d93a-5379-a99b-fb73797874fc",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Prefill=64000 (a) 1 2 4 8 16 32 64 128 256 Batch Size 1.0 1.2 1.4 1.6 1.8 2.0 2.2 Verification Time / Decoding Time Prefill=1000 Prefill=4000 Prefill=16000 Prefill=64000 (b) 1 4 16 64 256 Batch size 1.0 1.2 1.4 1.6 1.8 2.0 2.2 2.4 Speedup 1 1 1 1 2 1 1 2 4 4 1 3 4 4 4 Prefill 4000 Prefill 16000 Prefill 64000 (c) Figure 2: Theoretical analysis and expected speedup for LLaMA-3.1-8B deployed on 8×A100s with γ =3. In contrast, classification loss typically relies on bucket labels for training, which can lead to poor predictive performance for minority buckets in imbalanced datasets.",
+    "item_id": "54f45c9c-804f-529c-b363-b7dd12dee6c3",
+    "prompt": "One indexed paper contains a passage beginning \"Section 4.4 discusses the trade-off between draft cost and\" and a different indexed paper contains a passage beginning \"Kendall’s Tau ranges from −1 to 1. 1 means\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "Section 4.4 discusses the trade-off between draft cost and acceptance rate for different static and dynamic KV sparsification algorithms on different kinds of tasks. Kendall’s Tau ranges from −1 to 1. 1 means two rankings are the same, −1 means two rankings are reversed, and 0 means two rankings are not correlated.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1565,18 +1565,18 @@
     "excerpts": [
       {
         "arxiv_id": "2409.00557",
-        "excerpt": "Beyond Tool Capabilities (IBTC)—derived from analyzing 1,000 real-world user queries, offers a robust framework for understanding prevalent instruction challenges.",
-        "page": 9
+        "excerpt": "An example of IMKI would be, \"Set an alarm to wake me up\" without providing a specific time.",
+        "page": 4
       },
       {
         "arxiv_id": "2409.03797",
-        "excerpt": "Rotates the elements in the array by `k` positions in the right direction. Args: arr: The array of numbers.",
+        "excerpt": "For a function that has a randomness element (e.g., generating a random list), we set a fixed seed for all our experiments and re-execute all those cases to ensure that we are getting the same response all the time.",
         "page": 5
       }
     ],
-    "item_id": "26c99a2f-b1f3-5318-9bdf-6d8aa6ea34bd",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Beyond Tool Capabilities (IBTC)—derived from analyzing 1,000 real-world user queries, offers a robust framework for understanding prevalent instruction challenges. Rotates the elements in the array by `k` positions in the right direction. Args: arr: The array of numbers.",
+    "item_id": "1ec210f3-b711-5a96-ac12-147da59065af",
+    "prompt": "One indexed paper contains a passage beginning \"An example of IMKI would be,\" and a different indexed paper contains a passage beginning \"For a function that has a randomness element (e.g.,\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "An example of IMKI would be, \"Set an alarm to wake me up\" without providing a specific time. For a function that has a randomness element (e.g., generating a random list), we set a fixed seed for all our experiments and re-execute all those cases to ensure that we are getting the same response all the time.",
     "split": "regression",
     "stratum": "cross_document"
   },
@@ -1584,18 +1584,18 @@
     "excerpts": [
       {
         "arxiv_id": "2409.03992",
-        "excerpt": "Test Scenarios Experiments were structured to explore the impact of TEE mode under diverse conditions: • TEE mode ON vs.",
-        "page": 3
+        "excerpt": "TPS is measured by running the model with a batch size of 1. It shows the pure latency overhead introduced by the TEE mode and reflects the performance of real-time requests.",
+        "page": 4
       },
       {
         "arxiv_id": "2409.12055",
-        "excerpt": "Polynomial Evaluation Constraint (Horner’s Method) For convenience, we define the following notation.",
-        "page": 24
+        "excerpt": "Specifically, Halo2 relies on UltraPLONK’s [2] arithmetization, which adds support for custom gates and lookup arguments.",
+        "page": 4
       }
     ],
-    "item_id": "9a631136-7276-59b6-a922-62503770a265",
-    "prompt": "Which two indexed papers jointly support the paired source claims, and how do those claims differ? Cite both documents.",
-    "reference_answer": "Test Scenarios Experiments were structured to explore the impact of TEE mode under diverse conditions: • TEE mode ON vs. Polynomial Evaluation Constraint (Horner’s Method) For convenience, we define the following notation.",
+    "item_id": "2b8ff6ac-249a-55bb-896b-5c6b900fb8a4",
+    "prompt": "One indexed paper contains a passage beginning \"TPS is measured by running the model with a\" and a different indexed paper contains a passage beginning \"Specifically, Halo2 relies on UltraPLONK’s [2] arithmetization, which adds\". Identify both papers and state in full what each passage reports. Cite both documents.",
+    "reference_answer": "TPS is measured by running the model with a batch size of 1. It shows the pure latency overhead introduced by the TEE mode and reflects the performance of real-time requests. Specifically, Halo2 relies on UltraPLONK’s [2] arithmetization, which adds support for custom gates and lookup arguments.",
     "split": "regression",
     "stratum": "cross_document"
   },

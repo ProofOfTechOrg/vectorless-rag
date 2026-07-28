@@ -22,6 +22,24 @@ Validation enforces the strict schema, stable UUIDv5 item IDs, 48/72 split, six 
 
 All 120 tracked review records start as `pending`. A human must approve, edit, or reject every case against `apps/api/evaluation/review-pack.md`. A completed record requires reviewer identity, timestamp, and the current source hash. Seeding and experiment preparation fail closed while any case lacks a completed review. Do not bulk-mark cases reviewed.
 
+Review interactively rather than editing the JSONL by hand:
+
+```bash
+make evaluation-review-status
+make evaluation-review REVIEWER=<your identity>
+make evaluation-review REVIEWER=<your identity> STRATUM=long_cross_section
+```
+
+Each case prints with its source excerpts and accepts approve, edit reference, edit prompt, reject, or skip. The reviewer recomputes the review source hash after an edit, and the stable item ID when an edit changes the prompt, then refuses any edit the suite validator would reject. Editing a prompt changes the item ID, so rebuild the review pack afterwards. Rejected cases fail the run preflight and must be corrected or replaced.
+
+## Rebuild the PageIndex suite
+
+`apps/api/scripts/build_pageindex_evaluation.py` rebuilds all 120 cases from the tracked 537-PDF corpus. It selects source excerpts by discarding page furniture — captions, running headers, reference entries, pseudocode, appendix exemplars, sampled model output, and sentences broken across a line by hyphenation.
+
+Two strata, `metadata_constrained_discovery` and `long_cross_section`, require prompts that restate the finding in different words. String manipulation cannot produce genuine paraphrase, so their text lives in `apps/api/evaluation/pageindex-v2-authored.json`, keyed `split:stratum:index` and bound to its source excerpts by SHA-256. When an entry is missing, malformed, or bound to excerpts that have since changed, the build writes every affected case to `apps/api/evaluation/pageindex-v2-authoring-queue.json` and exits without touching the dataset. Author the queued prompts and reference answers into the authored file, then build again.
+
+Rebuilding carries forward completed reviews whose case content is unchanged. A case whose content changed returns to `pending`, because the reviewer approved different text.
+
 ## Seed and freeze an experiment
 
 After review:

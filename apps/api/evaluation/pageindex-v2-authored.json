@@ -1,0 +1,302 @@
+{
+  "dev:long_cross_section:00": {
+    "excerpt_sha256": [
+      "ccdf406722acd3c4f917d3a65153e34023219c3d1e34205e5222493d58eeca6b",
+      "29f9595230cb82b37869d386353d9b6e871b1d792372b5c9e05d439960a3cab7"
+    ],
+    "prompt": "In the constrained document, connect the headline claim about how well privately adapted language models perform under tight privacy budgets with the later description of the noise-injection mechanism that enforces those budgets. State both and cite both supporting sections.",
+    "reference_answer": "The paper claims that with appropriate hyperparameters and downstream task objectives, fine-tuning pretrained language models with DP-SGD/DP-Adam yields strong performance for a suite of NLP tasks at privacy levels epsilon in {3, 8}. It later specifies that this step clips per-example gradients with a norm constraint C and adds Gaussian noise to the sum of clipped gradients."
+  },
+  "dev:long_cross_section:01": {
+    "excerpt_sha256": [
+      "ce3e18e262efa7bec4d6c3c6bf86b0de07321519ed638e05501a2ae0d79e214e",
+      "7d0f18bf13e2ce929a430e814470e2550b07a432d76e0ef43e01d0dcc2ae976d"
+    ],
+    "prompt": "In the constrained document, connect the early framing of how far pretrained language models have come at following written task descriptions with the later statement of the four-way training configuration the authors sweep. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that in natural language processing, pretrained language models have made significant progress toward this goal, as they can perform tasks given natural language descriptions. It later states that the authors finetune with and without exemplars, and also with and without chain-of-thought."
+  },
+  "dev:long_cross_section:02": {
+    "excerpt_sha256": [
+      "39c5c437af1734d567ad4b0d741724a9d9735db6007668211b692076d3c75f68",
+      "0c638c6924fa34f56e5ec8f67cf0907e03de24338460be07068fab57a97bd4f8"
+    ],
+    "prompt": "In the constrained document, connect the opening result comparing the compute-matched model against its larger predecessor, and the question it reopens about splitting a fixed budget between parameters and data, with the later restatement of that same optimisation question. State both and cite both supporting sections.",
+    "reference_answer": "The paper first reports that Chinchilla outperforms Gopher and the other large models, and revisits the question of how, given a fixed FLOPs budget, one should trade off model size and the number of training tokens. It later restates that the authors investigate choosing the optimal model size to train for a given compute budget."
+  },
+  "dev:long_cross_section:03": {
+    "excerpt_sha256": [
+      "8f45cdbf2f8251adf2a331823eb38354e9540c78900a25473bf4e14c727d2915",
+      "5d65b0284399c275d55e4ec2b7d39cd39f826b5c7b60a893292ff1cf4f76867b"
+    ],
+    "prompt": "In the constrained document, connect the early citation of a forecast that the supply of good English training text runs out with the later description of how the authors quantify data reuse and train models under that scarcity. State both and cite both supporting sections.",
+    "reference_answer": "The paper first cites an estimate that even high-quality English language data will be exhausted by the year 2024, given the Chinchilla scaling laws and the trend of training ever-larger models. It later describes computing the repeat value from the number of unique tokens and training LLMs under these constraints to explore scaling behavior empirically in a data-limited setting."
+  },
+  "dev:long_cross_section:04": {
+    "excerpt_sha256": [
+      "5d9485801a897e16b1b28ba0c0829fde81d6293445c64e112a7045b12d7d25cb",
+      "8d550216bec9565d27d2ba51e915423a3b5f36e0960b5f41a963521d9f8155d6"
+    ],
+    "prompt": "In the constrained document, connect the earlier borrowing of a physics term for an abrupt behavioural shift that smaller systems give no warning of, with the later operational definition of when a few-shot capability counts as emergent. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that this qualitative change is also known as a phase transition, a dramatic change in overall behavior that would not have been foreseen by examining smaller-scale systems. It later defines that each point is a separate model and that the ability to perform a task via few-shot prompting is emergent when a language model achieves random performance until a certain scale, after which performance significantly increases to well above random."
+  },
+  "dev:long_cross_section:05": {
+    "excerpt_sha256": [
+      "9a29ab3fd493e1140dce92a6db77380bdd97b6f84982e5d89fc2b629a24fe59b",
+      "a93342e3e0845936a8e5015671e38eede4c493d7e7beb021bf03f023757bb859"
+    ],
+    "prompt": "In the constrained document, connect the earlier announcement of a single framework meant to subsume most prior studies, with the later mention that a handful of starter personas can optionally be supplied as worked examples. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that for the first problem it presents a unified agent framework which can encompass most of the previous studies. It later notes that one can optionally specify several seed agent profiles to serve as few-shot examples."
+  },
+  "dev:long_cross_section:06": {
+    "excerpt_sha256": [
+      "93416dab4dc230ba049ae8e4872533321c9ed218ddbed0f2723ede7b76af2ffa",
+      "d567fc894674c638f79a5ea9c891e9363283d11143a81ea9072326a2822718df"
+    ],
+    "prompt": "In the constrained document, connect the motivating question of whether the usual privacy parameter suffices to describe exposure to data-reconstruction attacks, with the later sharpening of that question around what visibility into per-step gradients changes. State both and cite both supporting sections.",
+    "reference_answer": "The paper first asks whether the standard DP parameter epsilon provides enough information to characterize vulnerability against reconstruction attacks. It later sharpens this into how access to intermediate gradients affects the success of reconstruction attacks against DP-SGD."
+  },
+  "dev:long_cross_section:07": {
+    "excerpt_sha256": [
+      "32c0f1486e13744b7c1a21792c42966a6f8904e40a2c0b62fac40886ec56d5f7",
+      "26c83f42aab2b0f5ebec6115162b6a387151d8874d856e3517bdd553696ca59c"
+    ],
+    "prompt": "In the constrained document, connect the earlier characterisation of an agent as something with wants, beliefs, plans and the capacity to act, with the later statement of what the treatment of artificial societies will stress. State both and cite both supporting sections.",
+    "reference_answer": "The paper first describes entities possessing desires, beliefs, intentions, and the ability to take actions. It later states that the authors will emphasize the lessons and potential risks inherent in simulated societies."
+  },
+  "dev:metadata_constrained_discovery:00": {
+    "excerpt_sha256": [
+      "2cd0153e4d4b61e0e44973f487dc1863263aff490941353860748125ce44c519"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper observes that earlier parameter-efficient adaptation techniques usually do not reach the accuracy of full retraining, forcing a compromise between cheapness and quality. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that these methods often fail to match the fine-tuning baselines, posing a trade-off between efficiency and model quality."
+  },
+  "dev:metadata_constrained_discovery:01": {
+    "excerpt_sha256": [
+      "983b7a4e7dd3f9be3d0ac0291e507fdc26a00681df6cb327b824ccea37a519de"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper notes recent efforts to carry what large pretrained language models know over into term-weighted, non-dense retrieval methods. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that more recently there have been attempts to transfer the knowledge from pre-trained language models to sparse approaches."
+  },
+  "dev:metadata_constrained_discovery:02": {
+    "excerpt_sha256": [
+      "a2c5a1dd575b8099e499e010e95de7b6dceffc6db06984ccabb904c2214ece39"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper describes a retrieval model that maps both queries and documents into a high-dimensional latent space kept mostly zero by an l1 penalty on the representations. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that SNRM embeds documents and queries in a sparse high-dimensional latent space by means of l1 regularization on representations."
+  },
+  "dev:metadata_constrained_discovery:03": {
+    "excerpt_sha256": [
+      "813f1a8bed31988d0bbedfb2f2e4d85376199768393a481938a116d8010aa4c2"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper describes extending an existing per-example gradient computation trick to sequence data and pairing it with per-layer norm bounding, so large Transformers train under privacy guarantees at roughly ordinary memory cost, paying one extra backward pass per batch. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that its technique generalizes the Goodfellow (2015) trick to handle sequential inputs and can be combined with a layer-by-layer clipping procedure to privately fit large Transformers with almost the same memory cost as non-private training, at the cost of one additional backward pass per processed batch."
+  },
+  "dev:metadata_constrained_discovery:04": {
+    "excerpt_sha256": [
+      "d50225029eebeed3d09f4b35d15531093abd2f7b2429ee5b81fe55a79b59f1bb"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper describes a two-stage recipe in which initial training uses openly available corpora in the ordinary way and only the later adaptation stage carries formal privacy protection. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that one may pre-train the model on public data as usual, but then fine-tune the model privately."
+  },
+  "dev:metadata_constrained_discovery:05": {
+    "excerpt_sha256": [
+      "909d01eccff15912c5d04ad1ab2f3813e08597aac393c37cc37bd36d91230731"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper states that trained networks must not disclose specifics of the corpora they were fitted on, especially in settings where confidentiality matters. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that neural networks must not leak details of their training datasets, particularly when used in privacy-sensitive scenarios."
+  },
+  "dev:metadata_constrained_discovery:06": {
+    "excerpt_sha256": [
+      "8d5344a4c081f6b3ec2c88b49ad1ab53f8adb0cf501bc68b80415b96d704d8eb"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper argues that embedding-based search models can be learned without labelled query-document pairs by substituting a surrogate objective that stands in for the search task. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that training dense retrievers without supervision can be achieved by using an auxiliary task that approximates retrieval."
+  },
+  "dev:metadata_constrained_discovery:07": {
+    "excerpt_sha256": [
+      "ac8ae95cb7f6d400689d0d88ec7f38dda940ee2cc435bad4f83eefd372553e5e"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper observes that the power consumed to build a large model is spread out over its later serving and adaptation workloads. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that the energy cost of a large language model is amortized through its usage for inference and fine-tuning."
+  },
+  "regression:long_cross_section:08": {
+    "excerpt_sha256": [
+      "2e5b0cb9dcaa57eb6ee28375cb2feecc63dd2ad7e04635b8ff7115c74e1004f2",
+      "c5455a597c8884a66a86ec8c9edf186da5ce432815cdc284548cb101add87788"
+    ],
+    "prompt": "In the constrained document, connect the earlier observation that the internal width is far smaller than the vocabulary it projects onto, with the later result that a matrix factorisation recovers that width once the output layer is the larger of the two. State both and cite both supporting sections.",
+    "reference_answer": "The paper first notes that the hidden dimension size is much smaller than the size of the token dictionary. It later reports that SVD can recover the hidden dimensionality of a model when the final output layer dimension is greater than the hidden dimension."
+  },
+  "regression:long_cross_section:09": {
+    "excerpt_sha256": [
+      "df505916bfe7688c8c399dc3a9aa854128829042764b29440ffe58ab2aee04da",
+      "36043f144adecc758c69a042b1b837ac825e4a16b965eb7ab0757b279579ef3a"
+    ],
+    "prompt": "In the constrained document, connect the earlier statement that the paper takes on all the questions it raised and owes a note on method first, with the later insistence that the profit instruction never hints at coordinating with rivals. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it addresses all of these questions and that a comment on methodology is in order before the results. It later stresses that while the LLM is instructed to target long-term profit, those instructions do not in any way suggest attempting to collude or behave noncompetitively, explicitly or implicitly."
+  },
+  "regression:long_cross_section:10": {
+    "excerpt_sha256": [
+      "75adef4c87d7c859ba366dbbe7fb7198d565973761b497c1ede42612a0a749aa",
+      "1dc3bd7ce26a52d5077d9d7166b9ac9cdfb7cbd5461c4edfa4ab786f3cef167d"
+    ],
+    "prompt": "In the constrained document, connect the roadmap sentence promising a closing summary of what the work offers both producers and consumers of models, with the later enumeration of exactly which code artifacts completeness demands. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it concludes with a summary of the key contributions for both model producers and consumers. It later specifies that completeness also requires all code used to parse and process data, the code used for training and inference, any code used in benchmark tests, and any libraries or other code artifacts that were part of the model development lifecycle."
+  },
+  "regression:long_cross_section:11": {
+    "excerpt_sha256": [
+      "2fd25b3f68d772b60e60d15cb712333054ca61ea032f385365dfeccae233e05e",
+      "d01defb2726438c29926d48fbeb80c77e2107ef1649d5540db93227ff9bdec58"
+    ],
+    "prompt": "In the constrained document, connect the earlier statement that the authors repeat an existing style of analysis on a leading grade-school maths benchmark, with the later rule for discarding items whose two independent solutions disagreed. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it does a similar analysis on GSM8k, one of the leading benchmarks for mathematical reasoning. It later describes that if a second solve produced a different answer to that of the initial solve, the problem was discarded."
+  },
+  "regression:long_cross_section:12": {
+    "excerpt_sha256": [
+      "e6487f6da23c439a045a6fb2953851765646b99f0993f908d2d28c07538d24a8",
+      "7aebd485fe74805044e38e8a7415f86bda131339e4c7e2289466181870fd42f0"
+    ],
+    "prompt": "In the constrained document, connect the earlier statement of the three model families and data domains the experiments span, with the later finding that keeping old data alongside new markedly slows the degradation. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it uses three diverse experimental setups of causal transformers, diffusion models, and variational autoencoders trained on real text, molecular conformation, and image datasets respectively. It later reports that accumulating data at each iteration significantly slows model collapse, with test error increasing significantly more slowly with each additional iteration."
+  },
+  "regression:long_cross_section:13": {
+    "excerpt_sha256": [
+      "cc2587224168af7fc5555489eea3cc0175a3ae694792e0ff30154a879e396038",
+      "489cfd857792b9ea8f4e8091877430886d506459fd87122de833ec7947e433b7"
+    ],
+    "prompt": "In the constrained document, connect the earlier description of a commonsense benchmark built around resolving ambiguous pronouns across tens of thousands of items, with the later finding that one adapter hyperparameter trades off acquiring against retaining knowledge. State both and cite both supporting sections.",
+    "reference_answer": "The paper first describes WinoGrande as assessing commonsense reasoning, comprising 44K problems whose sentences require ambiguous pronoun resolution. It later reports that the choice of LoRA rank can serve as a knob to navigate the learning-forgetting tradeoffs."
+  },
+  "regression:long_cross_section:14": {
+    "excerpt_sha256": [
+      "6adb3de58bda5ffbbbf69e99be60a72c5c5fb4b9ce333fe6c8b952094ea46ff4",
+      "d6719754ce27aa68d7debae76a4da82a18d9fd5300b1eafb3d14c69bda166bc7"
+    ],
+    "prompt": "In the constrained document, connect the earlier framing of difficulty as depending on how much output is wanted and how much distraction surrounds the answer, with the later concrete construction that chains variable assignments through the input. State both and cite both supporting sections.",
+    "reference_answer": "The paper first frames task complexity within a constrained domain as a function of the number of target output tokens and the signal-to-noise ratio in the context. It later describes initializing a variable with a value and following it with a linear chain of variable name binding statements inserted at various positions of the input."
+  },
+  "regression:long_cross_section:15": {
+    "excerpt_sha256": [
+      "3aee35f634c0bdfdd73b6b4bf8454c02621667bd76088e62bc0f69c09af85c80",
+      "fad28c7f3446c8c8566744ce1d63a08ab56ce5dafe57f0a8130ad9d8c89350b6"
+    ],
+    "prompt": "In the constrained document, connect the earlier claim that the intervention stops a particular direction from ever appearing in the network's internal stream, with the later note about which system prompt the reported attack-success numbers assume. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that the intervention effectively prevents the model from ever representing this direction in its residual stream. It later notes that all evaluations use the model's default system prompt, with attack success rate also reported without a system prompt."
+  },
+  "regression:long_cross_section:16": {
+    "excerpt_sha256": [
+      "f006239983db6306c4745eb3172c662b76e844febb0c1a1d308c906038ae01fc",
+      "3ef7d24ce71b378505e1b8c342b832b5e44607e9afc92eb896366ea83b61189f"
+    ],
+    "prompt": "In the constrained document, connect the earlier statement of the equity problem the work tackles when several forwarding parties and routes are involved, with the later definition of how much of the system the attacker may subvert beforehand. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that it addresses the fairness problem in peer-to-peer content delivery involving multiple relayers and multiple paths, which is common in practice. It later specifies that the adversary can corrupt any participant in the content delivery process before the protocol begins."
+  },
+  "regression:long_cross_section:17": {
+    "excerpt_sha256": [
+      "60e15de9db1877303ca013779767ffb9a6113e0b838993ec517b0d9355c70b3e",
+      "939ede4ae7789a57e2b7c4eade5aa8966f0565ec3fa913cf4a4638477b4d8c5a"
+    ],
+    "prompt": "In the constrained document, connect the earlier criticism that prior evaluations test either dialogue skill or tool invocation but not both, with the later caution that a matching final state does not by itself prove the episode respected the rules. State both and cite both supporting sections.",
+    "reference_answer": "The paper first observes that most existing benchmarks for agents and task-oriented dialogue systems focus on evaluating either conversational or tool-use capabilities. It later cautions that a reward of 1 may be necessary but not sufficient for a successful episode, since the agent might issue a return without explicit user confirmation and thereby violate the policy."
+  },
+  "regression:long_cross_section:18": {
+    "excerpt_sha256": [
+      "34ed8d28a3223f00f390ebbefc919d047e9acd31ac211461ddddae13185b2498",
+      "427322a49cf8636b6b39b83a6eb4d12f89b18ef8f1dddc9f3989308a28c48448"
+    ],
+    "prompt": "In the constrained document, connect the earlier claim that new knowledge is absorbed by editing only the memory index rather than rewriting cortical storage, with the later proposal of a locally computable substitute for a term-weighting signal. State both and cite both supporting sections.",
+    "reference_answer": "The paper first states that this complex process allows new information to be integrated by changing only the hippocampal index instead of updating neocortical representations. It later proposes node specificity as an alternative IDF signal that requires only local signals and is therefore more neurobiologically plausible."
+  },
+  "regression:long_cross_section:19": {
+    "excerpt_sha256": [
+      "9cb679039b1bba3d951022bbf9e0ec3db85c2a09d6542b97857a4fb924902a38",
+      "344a1988f9d2d72d791fec97706c75d4d5e63c7bf1cb1516e2f9aaaa6f53d4b0"
+    ],
+    "prompt": "In the constrained document, connect the earlier note that related work nests a smaller transformer to model the several tokens emitted at one time step, with the later statement of how this system jointly models both speakers' audio and its own text under streaming. State both and cite both supporting sections.",
+    "reference_answer": "The paper first notes that Zhu et al. (2024) leverage a smaller nested transformer to model the different tokens at a single time step. It later states that to jointly model the audio streams from Moshi and the user, as well as Moshi's text tokens, it relies on a Depth Transformer compatible with streaming inference."
+  },
+  "regression:metadata_constrained_discovery:08": {
+    "excerpt_sha256": [
+      "7dc56163e352745e5a14f7a5b87afad4ae3f2efe96bc3f098693aa2a9ccdc095"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper warns that compressing model weights to lower precision preserves footprint savings and test scores, but that the safety consequences of doing so have received far too little attention. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that while LLM quantization is effective in reducing model size and maintaining satisfactory benchmark performance, its security implications are critically understudied."
+  },
+  "regression:metadata_constrained_discovery:09": {
+    "excerpt_sha256": [
+      "93795fabf576c1415010db353ee4c07e3a786a6577fdae86a08861d8faceb8dd"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper explains that converting network parameters from wide to narrow numeric representations lowers both storage and arithmetic demands. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that quantization reduces the memory and computational requirements of neural networks by transforming high-precision weights to lower precision formats."
+  },
+  "regression:metadata_constrained_discovery:10": {
+    "excerpt_sha256": [
+      "dd500ade77b022a5fd14133ff0ba28f825fb8ac9d92786ff4bc1088a21db8187"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper describes a tree in which every vertex stands for the partial sequence generated so far and every branch carries the following symbol together with its likelihood given that partial sequence. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that each node corresponds to a prefix and each edge is annotated with the next token and its conditional probability given that prefix."
+  },
+  "regression:metadata_constrained_discovery:11": {
+    "excerpt_sha256": [
+      "b20cb2fa90ca92714b8218400f9f2dde63c357a6de98d40a1ed806f54e1cc6bf"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper argues that generating all output in one shot against a fixed timing plan narrows what the system can produce and costs it rhythm and naturalness. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that the non-autoregressive model generates tokens with a pre-determined duration result, which constrains the search space of the generated speech and sacrifices prosody and naturalness."
+  },
+  "regression:metadata_constrained_discovery:12": {
+    "excerpt_sha256": [
+      "3c144b12e530c6c8f7e0d5aa5b11ffa8cc76108e90c465e732e3bfd4c31c94c5"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper backs its argument by presenting a straightforward technique for enlarging the training set so that harm-avoidance behaviour extends further into a response. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that it introduces a simple data augmentation approach for deepening the safety alignment."
+  },
+  "regression:metadata_constrained_discovery:13": {
+    "excerpt_sha256": [
+      "0efb40c86cdb300c0e9920e62f3f67faa43ed2c6bf5f21c2cace485ad87453f1"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper reports a cheap surrogate measure that tracks end results closely and reveals the surprising result that a more capable model does not necessarily make better filtering decisions about another model's output. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that its proxy function strongly correlates with final performance across all cases, and that it elucidates the counter-intuitive fact that a stronger model is not automatically a better selector, shown by inferior performance when selecting with Llama-3 compared to self-selection with Llama-2 for Llama-2-generated text."
+  },
+  "regression:metadata_constrained_discovery:14": {
+    "excerpt_sha256": [
+      "53b7c78bfc778a15cd8a32ee9cfeb37aa08aeba72d83c0d11107964d4636b609"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper describes a setup that, alongside reinforcing reward-hacking behaviour, also applies a learned human-preference signal and fills half of every environment's inputs with ordinary requests drawn from an earlier assistant's training data. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that in addition to rewarding specification gaming, it adds supervision from a preference model and, in all training environments, sets half the prompts to normal queries taken from the training of Claude-2."
+  },
+  "regression:metadata_constrained_discovery:15": {
+    "excerpt_sha256": [
+      "3aee35f634c0bdfdd73b6b4bf8454c02621667bd76088e62bc0f69c09af85c80"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper states that its intervention stops a particular direction from ever being represented in the network's internal activation stream. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that this effectively prevents the model from ever representing this direction in its residual stream."
+  },
+  "regression:metadata_constrained_discovery:16": {
+    "excerpt_sha256": [
+      "4e195cbab02d468918b267f8c8391e999bf32ff1bdd720ad0f0f6480b98b95cf"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper expresses the aspiration that its new benchmark will help build and measure assistants that behave more reliably on practical online tasks involving talking to people. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports the hope that its benchmark enables the evaluation and development of more consistent and capable agents for real-world digital tasks involving human interaction."
+  },
+  "regression:metadata_constrained_discovery:17": {
+    "excerpt_sha256": [
+      "26593236ee65c9c31aa1a589c265ac3854b826be31065c0091b84c24eb3024e3"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper sets itself apart by running a live environment where an assistant makes successive tool calls against lifelike applications, some of which hand back hostile content. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that, in contrast to prior work, AgentDojo runs a dynamic environment where agents execute multiple tool calls against realistic applications, some of which return malicious data."
+  },
+  "regression:metadata_constrained_discovery:18": {
+    "excerpt_sha256": [
+      "49aae08d8da971b6d72cc986a1450020023f55d494428c1629743557083f0ce5"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper grants the attacker not the whole body of material that was meant to be erased, but plausibly some modest portion of it. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that although it does not assume the adversary has access to the entire unlearn set, it may be reasonable to assume a small or limited subset of that data is available."
+  },
+  "regression:metadata_constrained_discovery:19": {
+    "excerpt_sha256": [
+      "2e70b674dd147956a766ef05b5ed3481719eee032a24d4094e2492b3599b6d02"
+    ],
+    "prompt": "Within the constrained catalog subset, one paper describes a prior shaped as an almost-diagonal band that broadens toward the middle and tightens at the extremes. Which paper is it, and what does it report?",
+    "reference_answer": "The paper reports that the 2D beta-binomial prior is a near-diagonal heuristic matrix that is wider near the center and narrower near the corners."
+  }
+}
