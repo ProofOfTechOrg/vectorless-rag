@@ -406,3 +406,89 @@ def test_active_run_with_completed_partial_calls_stays_running_and_incomplete() 
     assert group["incomplete_calls"] == 0
     assert report["totals"]["incomplete_runs"] == 1
     assert report["totals"]["incomplete_calls"] == 0
+
+
+def _priced_call(model: str, run_id: uuid.UUID, trace_id: str) -> ModelCall:
+    return ModelCall(
+        id=uuid.uuid4(),
+        query_run_id=run_id,
+        trace_id=trace_id,
+        stage=ModelCallStage.query_synthesis,
+        model=model,
+        provider_attempt=1,
+        outcome=ModelCallOutcome.completed,
+        input_tokens=1_000_000,
+        cache_hit_input_tokens=0,
+        cache_miss_input_tokens=1_000_000,
+        cache_write_input_tokens=0,
+        unattributed_input_tokens=0,
+        output_tokens=0,
+        reasoning_output_tokens=0,
+        total_tokens=1_000_000,
+        usage_available=True,
+        cache_attribution_complete=True,
+    )
+
+
+def test_each_model_is_priced_at_its_own_rate() -> None:
+    """Indexing and serving run on different models, so one rate cannot cover both."""
+    run_id, trace_id = uuid.uuid4(), uuid.uuid4().hex
+    run = QueryRun(
+        id=run_id,
+        trace_id=trace_id,
+        thread_id="thread",
+        route=RunRoute.documents,
+        question="q",
+        answer="a",
+    )
+    pricing = Pricing(
+        1.0,
+        1.0,
+        1.0,
+        overrides={"indexing-model": Pricing(10.0, 10.0, 10.0, environment_prefix="PAGEINDEX")},
+    )
+    calls = [
+        _priced_call("serving-model", run_id, trace_id),
+        _priced_call("indexing-model", run_id, trace_id),
+    ]
+
+    report = cast(
+        dict[str, Any],
+        build_query_cost_report([run], calls, pricing, days=30),
+    )
+
+    # One million cache-miss tokens at $1 plus one million at $10.
+    assert report["groups"][0]["known_cost"]["known_cost_usd"] == 11.0
+
+
+def test_a_missing_override_price_is_reported_against_its_own_variable() -> None:
+    run_id, trace_id = uuid.uuid4(), uuid.uuid4().hex
+    run = QueryRun(
+        id=run_id,
+        trace_id=trace_id,
+        thread_id="thread",
+        route=RunRoute.documents,
+        question="q",
+        answer="a",
+    )
+    pricing = Pricing(
+        1.0,
+        1.0,
+        1.0,
+        overrides={"indexing-model": Pricing(None, None, None, environment_prefix="PAGEINDEX")},
+    )
+
+    report = cast(
+        dict[str, Any],
+        build_query_cost_report(
+            [run], [_priced_call("indexing-model", run_id, trace_id)], pricing, days=30
+        ),
+    )
+
+    cost = report["groups"][0]["known_cost"]
+    assert cost["known_cost_usd"] is None
+    assert cost["missing_price_configuration"] == [
+        "PAGEINDEX_CACHE_HIT_INPUT_COST_PER_MILLION_USD",
+        "PAGEINDEX_INPUT_COST_PER_MILLION_USD",
+        "PAGEINDEX_OUTPUT_COST_PER_MILLION_USD",
+    ]

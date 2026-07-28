@@ -100,12 +100,14 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             if active_jobs:
                 raise RuntimeError("pilot requires no pre-existing active ingestion jobs")
             availability = await provider.require_available(session)
+            # The pilot measures ingestion, which runs on PAGEINDEX_MODEL, so its snapshot
+            # records that model's rates rather than the query model's.
             prices = {
-                "input_per_million_usd": settings.deepseek_input_cost_per_million_usd,
+                "input_per_million_usd": settings.pageindex_input_cost_per_million_usd,
                 "cache_hit_input_per_million_usd": (
-                    settings.deepseek_cache_hit_input_cost_per_million_usd
+                    settings.pageindex_cache_hit_input_cost_per_million_usd
                 ),
-                "output_per_million_usd": settings.deepseek_output_cost_per_million_usd,
+                "output_per_million_usd": settings.pageindex_output_cost_per_million_usd,
                 "max_output_tokens": settings.pageindex_max_output_tokens,
                 "max_attempts": settings.pageindex_llm_max_attempts,
             }

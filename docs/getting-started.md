@@ -37,7 +37,7 @@ Open `.env` and assign your provider key:
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 ```
 
-Keep `DEEPSEEK_MODEL=deepseek-v4-pro` and `PAGEINDEX_MODEL=deepseek/deepseek-v4-pro`. Confirm current availability and cost in the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/).
+Keep `DEEPSEEK_MODEL=deepseek-v4-flash` for serving and `PAGEINDEX_MODEL=deepseek/deepseek-v4-pro` for indexing. The two are priced separately, by `DEEPSEEK_*_COST_PER_MILLION_USD` and `PAGEINDEX_*_COST_PER_MILLION_USD`, because cost reports resolve each recorded call against the rates of the model that produced it. Confirm current availability and cost in the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/).
 
 Do not commit `.env` or copy its values into logs, issues, shell history, or browser storage.
 

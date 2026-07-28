@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     deepseek_cache_hit_input_cost_per_million_usd: float | None = None
     deepseek_output_cost_per_million_usd: float | None = None
     pageindex_model: str = "deepseek/deepseek-v4-pro"
+    # Indexing runs on its own model, so it needs its own rates; reusing the query rates
+    # misstates ingestion cost by whatever the two models' prices differ by.
+    pageindex_input_cost_per_million_usd: float | None = None
+    pageindex_cache_hit_input_cost_per_million_usd: float | None = None
+    pageindex_output_cost_per_million_usd: float | None = None
     pageindex_source_dir: Path = Path("/opt/pageindex")
     pageindex_work_dir: Path = Path("/workspaces")
     pageindex_version: Literal["190f8b378be58199ca993566a9214dba72089c54+vr4"] = (
@@ -102,6 +107,9 @@ class Settings(BaseSettings):
         "deepseek_input_cost_per_million_usd",
         "deepseek_cache_hit_input_cost_per_million_usd",
         "deepseek_output_cost_per_million_usd",
+        "pageindex_input_cost_per_million_usd",
+        "pageindex_cache_hit_input_cost_per_million_usd",
+        "pageindex_output_cost_per_million_usd",
     )
     @classmethod
     def non_negative_prices(cls, value: float | None) -> float | None:
