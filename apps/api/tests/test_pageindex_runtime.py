@@ -287,3 +287,18 @@ async def test_async_json_fallback_does_not_mask_provider_rejection() -> None:
             invalid_json_fallback={"answer": "no"},
         )
     assert error.value.failure_code == "pageindex_provider_rejected"
+
+
+def test_control_characters_from_pdf_text_do_not_discard_the_response() -> None:
+    """PDF text layers carry raw control bytes that the model quotes back inside JSON.
+
+    A lambda extracted from one corpus paper arrives as 0x15, so strict parsing rejected
+    an otherwise valid response and burned every retry on a deterministic failure.
+    """
+    payload = '{"thinking": "title \x15 in FastEmit", "answer": "yes"}'
+    assert extract_json(payload) == {"thinking": "title \x15 in FastEmit", "answer": "yes"}
+
+
+def test_malformed_json_is_still_rejected() -> None:
+    with pytest.raises(InvalidPageIndexJSON):
+        extract_json('{"unterminated": ')

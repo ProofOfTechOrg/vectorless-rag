@@ -137,7 +137,11 @@ def extract_json(content: str) -> dict[str, Any] | list[Any]:
         parsed = json.loads(candidate)
     except json.JSONDecodeError:
         try:
-            parsed = json.loads(_repair_json(candidate))
+            # PDF text layers carry control characters - a lambda extracted from one of
+            # these papers arrives as 0x15 - and the model quotes page text back inside its
+            # JSON strings, where strict parsing rejects the raw byte. The document is
+            # structurally valid JSON, so relax only that rule rather than lose the response.
+            parsed = json.loads(_repair_json(candidate), strict=False)
         except json.JSONDecodeError as error:
             raise InvalidPageIndexJSON(
                 "pageindex_invalid_json",
