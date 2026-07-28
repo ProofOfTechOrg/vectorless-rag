@@ -107,6 +107,11 @@ class PageIndexAdapter:
 
     def _child_environment(self) -> dict[str, str]:
         environment = {
+            # PageIndex is vendored at this path rather than installed into the environment,
+            # so the child resolves it only through PYTHONPATH. The child environment is
+            # rebuilt rather than inherited, so this is set explicitly from configuration
+            # instead of passed through, keeping the child's import path deterministic.
+            "PYTHONPATH": str(self.settings.pageindex_source_dir),
             "DATABASE_URL": self.settings.database_url,
             "DEEPSEEK_MODEL": self.settings.deepseek_model,
             "PAGEINDEX_MODEL": self.settings.pageindex_model,

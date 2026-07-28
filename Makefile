@@ -257,9 +257,9 @@ evaluation-run: ## Run a frozen PageIndex evaluation experiment from a reviewed 
 	@test -n "$(INDEX_HASH)" || { echo "INDEX_HASH=<sha256> is required" >&2; exit 2; }
 	cd $(API_DIR) && $(UV) run python scripts/run_evaluation.py --index-hash "$(INDEX_HASH)"
 evaluation-freeze: ## Print the index digest for evaluation-run INDEX_HASH.
-	cd $(API_DIR) && $(UV) run python scripts/freeze_index.py
+	$(COMPOSE) exec -T api python scripts/freeze_index.py
 evaluation-execute: ## Execute prepared trials against DeepSeek (LIMIT=n, DRY_RUN=1).
-	cd $(API_DIR) && $(UV) run python scripts/execute_evaluation.py \
+	$(COMPOSE) exec -T api python scripts/execute_evaluation.py \
 		$(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY_RUN),--dry-run,)
 evaluation-report: ## Build the local report for the latest frozen evaluation experiment.
 	cd $(API_DIR) && $(UV) run python scripts/report_evaluation.py
