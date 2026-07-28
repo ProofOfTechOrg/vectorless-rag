@@ -45,12 +45,15 @@ def _canonical_json(value: object) -> str:
 
 def _token_count(encoding: tiktoken.Encoding, value: object) -> int:
     text = value if isinstance(value, str) else _canonical_json(value)
-    return len(encoding.encode(text))
+    # disallowed_special=() throughout this module: these count and slice untrusted
+    # document text, and tiktoken otherwise raises on a page that merely contains the
+    # literal "<|endoftext|>". Special sequences are characters here, never controls.
+    return len(encoding.encode(text, disallowed_special=()))
 
 
 def _wrapped_token_count(encoding: tiktoken.Encoding, value: object) -> int:
     text = value if isinstance(value, str) else _canonical_json(value)
-    return len(encoding.encode(wrap_untrusted_document(text)))
+    return len(encoding.encode(wrap_untrusted_document(text), disallowed_special=()))
 
 
 def _truncate_text(
@@ -65,7 +68,7 @@ def _truncate_text(
     if tokens is None:
         character_limit = min(len(value), MODEL_TEXT_TOKEN_LIMIT * 16)
         while True:
-            tokens = encoding.encode(value[:character_limit])
+            tokens = encoding.encode(value[:character_limit], disallowed_special=())
             if len(tokens) >= MODEL_TEXT_TOKEN_LIMIT or character_limit == len(value):
                 break
             character_limit = min(len(value), character_limit * 2)
@@ -1268,7 +1271,7 @@ class PageIndexRetriever:
                     proposed_tokens = _token_count(self.encoding, proposed_content)
                     available_tokens = token_budget - tokens_used
                     if proposed_tokens > available_tokens:
-                        encoded_text = self.encoding.encode(text)
+                        encoded_text = self.encoding.encode(text, disallowed_special=())
                         low = 1
                         high = len(encoded_text)
                         best_content = ""

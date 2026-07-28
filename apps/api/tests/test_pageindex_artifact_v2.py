@@ -314,3 +314,53 @@ async def test_loader_rejects_extra_fields_and_unsupported_schema() -> None:
     store.objects[key] = invalid
     with pytest.raises(ArtifactValidationError, match="manifest validation failed"):
         await load_manifest_v2(store, key, sha256_bytes(invalid))
+
+
+def test_a_reversed_child_range_collapses_instead_of_failing_the_document() -> None:
+    # PageIndex derives a node's end from where the next entry starts, so an out-of-order
+    # sibling makes that subtraction run backwards. Losing a whole verified document to the
+    # arithmetic is a worse answer than trusting the start the model actually reported.
+    tree = _tree()
+    tree["structure"][0]["nodes"][0].update({"start_index": 4, "end_index": 3})
+
+    normalized = normalize_tree_v2(tree, page_count=10)
+
+    child = normalized.tree[0].children[0]
+    assert child.subtree_page_range == PageRange(page_start=4, page_end=4)
+    assert child.direct_page_ranges == [PageRange(page_start=4, page_end=4)]
+    assert normalized.reversed_ranges == 1
+
+
+def test_a_range_running_past_the_document_is_still_refused() -> None:
+    # Only the end is manufactured by the derivation. A start or end outside the document is
+    # a claim about pages that do not exist, which stays fatal.
+    tree = _tree()
+    tree["structure"][0]["nodes"][0].update({"start_index": 3, "end_index": 99})
+
+    with pytest.raises(ArtifactValidationError, match="invalid page range 3-99"):
+        normalize_tree_v2(tree, page_count=10)
+
+
+def test_a_page_containing_a_special_token_literal_still_indexes() -> None:
+    # tiktoken refuses by default on text merely containing "<|endoftext|>", so a PDF
+    # carrying that string could deny its own indexing. It is data here, not a control token.
+    pages = ["Ordinary first page.", "A page quoting <|endoftext|> in its body."]
+    pages += [f"Filler page {number}." for number in range(3, 11)]
+
+    build = build_manifest_v2(
+        document_id="doc",
+        document_sha256="0" * 64,
+        metadata={"title": "Special tokens"},
+        raw_tree=_tree(),
+        pages=pages,
+        generator_commit="commit",
+        patch_sha256="1" * 64,
+        model="model",
+        prompt_profile="profile",
+        options_profile={},
+        parser="PyPDF2",
+        parser_version="3.0.0",
+    )
+
+    assert build.manifest.quality.page_count == 10
+    assert build.manifest.quality.total_page_tokens > 0
