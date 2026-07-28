@@ -47,8 +47,16 @@ def main() -> None:
         choices=(1, 2, 3),
         help="passes per item; more than one estimates within-configuration variance",
     )
+    parser.add_argument(
+        "--max-cost-usd",
+        type=float,
+        required=True,
+        help="database-enforced ceiling for the whole run; trials stop once it is reached",
+    )
     parser.add_argument("--output", type=Path, default=root / "run")
     args = parser.parse_args()
+    if args.max_cost_usd <= 0:
+        raise SystemExit("--max-cost-usd must be positive")
 
     if git_value("status", "--porcelain"):
         raise SystemExit("evaluation execution requires a clean worktree")
@@ -82,6 +90,7 @@ def main() -> None:
         repetitions=args.repetitions,
         evidence_budgets=EVIDENCE_BUDGETS,
         seed=args.seed,
+        maximum_cost_usd=args.max_cost_usd,
         created_at=datetime.now(UTC),
     )
     trials = build_trials(cases, seed=args.seed, repetitions=args.repetitions)

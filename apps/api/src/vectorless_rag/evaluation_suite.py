@@ -145,6 +145,10 @@ class FrozenEvaluationManifest(StrictEvaluationModel):
     repetitions: int = Field(ge=1, le=3)
     evidence_budgets: tuple[Literal[6400, 12800, 25600], ...]
     seed: int
+    # Frozen at plan time and materialised as the experiment's database ceiling before the
+    # first trial, so an unattended run stops at a number chosen in advance rather than at
+    # whatever the provider is willing to bill.
+    maximum_cost_usd: float = Field(gt=0)
     created_at: datetime
 
     @model_validator(mode="after")

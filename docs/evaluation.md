@@ -47,8 +47,10 @@ After review:
 ```bash
 make evaluation-seed
 make evaluation-freeze
-make evaluation-run INDEX_HASH=<index_sha256 from evaluation-freeze>
+make evaluation-run INDEX_HASH=<index_sha256 from evaluation-freeze> MAX_COST=25
 ```
+
+`MAX_COST` is the whole run's ceiling in US dollars. It is recorded in the frozen manifest and materialised as the experiment's database limit before the first trial, so execution stops with `experiment_cost_cap` rather than running past the number you chose. Resuming reuses the existing limit rather than raising it, so a resumed run cannot exceed what the plan was frozen with.
 
 Freezing requires the stack running and the corpus ingested, since it reads what is actually queryable. `make evaluation-freeze` reduces every ready document's active PageIndex artifact digest to one value, ordered by arXiv ID, the same construction the corpus manifest uses for PDFs. It fails when any document the corpus manifest targets is missing from the index, because an unindexed target scores as a retrieval miss rather than as the setup error it is.
 
@@ -56,7 +58,7 @@ The digest covers the whole ready catalog rather than only the targeted document
 
 Seeding uses each case’s stable UUID as the Langfuse dataset item ID. The run preflight requires a clean worktree, exact release commit, complete provider price snapshot, reviewed dataset, tracked corpus hash, and explicit frozen index hash. It writes ignored local artifacts under `apps/api/evaluation/run/`:
 
-- `manifest.json`: release, configuration, corpus, index, dataset, prices, budgets, repetitions, and seed
+- `manifest.json`: release, configuration, corpus, index, dataset, prices, budgets, repetitions, seed, and cost ceiling
 - `trials.jsonl`: fixed-seed interleaving for route, corpus-routing, oracle-document retrieval, and forced-route end-to-end experiments
 - `scores.jsonl`: append-only local score input
 - `summary.json`: aggregate output

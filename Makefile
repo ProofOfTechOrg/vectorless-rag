@@ -253,9 +253,11 @@ evaluation-seed: ## Seed the reviewed PageIndex evaluation suite into Langfuse.
 	$(COMPOSE) exec -T api python scripts/seed_evaluation.py /dev/stdin \
 		--suite pageindex-v2 --corpus evaluation/pageindex-v2-corpus.json \
 		--name "$(DATASET_NAME)" < "$(DATASET)"
-evaluation-run: ## Run a frozen PageIndex evaluation experiment from a reviewed suite.
+evaluation-run: ## Prepare a frozen PageIndex experiment (INDEX_HASH=…, MAX_COST=…).
 	@test -n "$(INDEX_HASH)" || { echo "INDEX_HASH=<sha256> is required" >&2; exit 2; }
-	cd $(API_DIR) && $(UV) run python scripts/run_evaluation.py --index-hash "$(INDEX_HASH)"
+	@test -n "$(MAX_COST)" || { echo "MAX_COST=<usd> is required; it becomes the run's ceiling" >&2; exit 2; }
+	cd $(API_DIR) && $(UV) run python scripts/run_evaluation.py \
+		--index-hash "$(INDEX_HASH)" --max-cost-usd "$(MAX_COST)"
 evaluation-freeze: ## Print the index digest for evaluation-run INDEX_HASH.
 	$(COMPOSE) exec -T api python scripts/freeze_index.py
 evaluation-execute: ## Execute prepared trials against DeepSeek (LIMIT=n, DRY_RUN=1).

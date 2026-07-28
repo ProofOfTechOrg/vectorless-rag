@@ -18,6 +18,7 @@ import json
 import time
 import uuid
 from contextlib import AsyncExitStack
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
@@ -39,6 +40,8 @@ from vectorless_rag.llm import DeepSeekLLM, LLMError
 from vectorless_rag.models import (
     Document,
     DocumentStatus,
+    Experiment,
+    ExperimentMembership,
     ModelCall,
     QueryRun,
     RunFailureCode,
@@ -137,11 +140,16 @@ async def token_totals(session: AsyncSession, query_run_id: uuid.UUID) -> tuple[
 
 class Executor:
     def __init__(
-        self, runner: GraphRunner, documents: dict[str, uuid.UUID], settings: Settings
+        self,
+        runner: GraphRunner,
+        documents: dict[str, uuid.UUID],
+        settings: Settings,
+        experiment_id: uuid.UUID,
     ) -> None:
         self.runner = runner
         self.documents = documents
         self.settings = settings
+        self.experiment_id = experiment_id
 
     async def finalize(
         self,
@@ -191,6 +199,19 @@ class Executor:
             question=case.prompt,
         )
         session.add(run)
+        # The cost ceiling is enforced per model call by resolving the call's owning run to an
+        # experiment through this row. Without it the reservation finds no experiment and the
+        # cap never fires, which is how a 1,440-trial run ends up unbounded.
+        session.add(
+            ExperimentMembership(
+                experiment_id=self.experiment_id,
+                query_run_id=run.id,
+                trial_key=str(trial.trial_id),
+                repetition=trial.repetition,
+                sequence_number=trial.sequence_number,
+                included=True,
+            )
+        )
         await session.commit()
 
         # Built outside the try so a malformed case raises instead of being recorded as an
@@ -273,6 +294,39 @@ class Executor:
         return score, judge
 
 
+async def ensure_experiment(database: Database, manifest: FrozenEvaluationManifest) -> None:
+    """Materialise the frozen plan as the experiment row the cost ceiling is read from.
+
+    The plan is built on the host, which cannot reach the database, so the row is created
+    here instead. Resuming re-enters this, so an existing row is left alone: rewriting the
+    ceiling mid-run would let a resume raise a limit the plan was frozen with.
+    """
+    async with database.session() as session:
+        if await session.get(Experiment, manifest.experiment_id) is not None:
+            return
+        session.add(
+            Experiment(
+                id=manifest.experiment_id,
+                name=f"pageindex-v2-{manifest.created_at.strftime('%Y%m%dT%H%M%SZ')}",
+                release_sha=manifest.release_sha,
+                configuration_hash=manifest.configuration_sha256,
+                corpus_hash=manifest.corpus_sha256,
+                index_hash=manifest.index_sha256,
+                dataset_hash=manifest.dataset_sha256,
+                price_snapshot=manifest.price_snapshot,
+                repetitions=manifest.repetitions,
+                # The sweep varies this per trial; the row records the widest budget it can
+                # reach, since that is what the ceiling has to survive.
+                evidence_token_budget=max(manifest.evidence_budgets),
+                seed=manifest.seed,
+                maximum_cost_usd=Decimal(str(manifest.maximum_cost_usd)),
+                frozen_at=manifest.created_at,
+            )
+        )
+        await session.commit()
+    print(f"experiment armed with a ${manifest.maximum_cost_usd:.2f} ceiling")
+
+
 async def run(args: argparse.Namespace) -> None:
     settings = get_settings()
     if not settings.deepseek_api_key:
@@ -339,6 +393,7 @@ async def run(args: argparse.Namespace) -> None:
                 f"{len(missing)} target document(s) are not indexed and ready: {missing[:5]}"
             )
         print(f"resolved {len(documents)} indexed documents; all trial targets present")
+        await ensure_experiment(database, manifest)
         if args.dry_run:
             for trial in pending[:5]:
                 case = cases[trial.item_id]
@@ -364,7 +419,7 @@ async def run(args: argparse.Namespace) -> None:
                 observability,
                 checkpointer,
             )
-            executor = Executor(runner, documents, settings)
+            executor = Executor(runner, documents, settings, manifest.experiment_id)
             judge_path = args.run / "judge-queue.jsonl"
             for index, trial in enumerate(pending, 1):
                 async with database.session() as session:

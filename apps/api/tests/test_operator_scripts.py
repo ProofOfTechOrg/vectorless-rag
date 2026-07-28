@@ -273,3 +273,36 @@ def test_integration_runner_cleans_only_its_project_after_failure(tmp_path: Path
     assert "up -d --wait postgres" in calls[0]
     assert "down --volumes --remove-orphans" in calls[1]
     assert "--project-name vectorless-rag " not in "\n".join(calls)
+
+
+def test_a_frozen_evaluation_plan_requires_a_positive_cost_ceiling() -> None:
+    import uuid
+    from datetime import UTC, datetime
+
+    from pydantic import ValidationError
+
+    from vectorless_rag.evaluation_suite import EVIDENCE_BUDGETS, FrozenEvaluationManifest
+
+    fields: dict[str, Any] = {
+        "schema_version": 1,
+        "experiment_id": uuid.uuid4(),
+        "release_sha": "0" * 40,
+        "configuration_sha256": "1" * 64,
+        "corpus_sha256": "2" * 64,
+        "index_sha256": "3" * 64,
+        "dataset_sha256": "4" * 64,
+        "price_snapshot": {"input_per_million_usd": 1.0},
+        "repetitions": 1,
+        "evidence_budgets": EVIDENCE_BUDGETS,
+        "seed": 1,
+        "created_at": datetime.now(UTC),
+    }
+
+    # An unbounded run is the failure this field exists to prevent, so it carries no default
+    # a caller could fall through to.
+    with pytest.raises(ValidationError):
+        FrozenEvaluationManifest.model_validate(fields)
+    with pytest.raises(ValidationError):
+        FrozenEvaluationManifest.model_validate({**fields, "maximum_cost_usd": 0})
+    plan = FrozenEvaluationManifest.model_validate({**fields, "maximum_cost_usd": 25.0})
+    assert plan.maximum_cost_usd == 25.0
