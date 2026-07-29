@@ -16,9 +16,9 @@ current checkout before editing.
 | Evaluation dataset | 120/120 cases human-approved; `make evaluation-check` clean |
 | Corpus index | 104/104 documents indexed and ready |
 | Index recipe | 98 documents on `+vr5`, 6 on `+vr6` — deliberate, see below |
-| Trial executor | Written and gated; **never run against a live provider** |
+| Trial executor | Live gate complete: 10/1,440 scored, 8 included, 2 deadline exclusions |
 | Cost ceiling | Implemented; `make evaluation-run` now requires `MAX_COST` |
-| Branch | 19 commits ahead of `origin/master`, no remote branch, not merged |
+| Branch | No remote branch; not merged. Refresh `origin` before comparing refs |
 
 `make api-lint`, `make api-typecheck`, `make docs-check`, and `make compose-check`
 pass. The provider-free API suite is 398 passed; the disposable PostgreSQL
@@ -26,26 +26,46 @@ integration stack is 9 passed.
 
 ## Do this next
 
-The `api` container must be rebuilt before anything else. Use
-`evaluation-restart`, which refuses a dirty worktree and gives the image and
-runtime the same clean-HEAD release recorded in the manifest.
+The frozen run is already prepared, armed, and resumable. Continuing it sends
+evaluation prompts and retrieved corpus excerpts to DeepSeek. Obtain explicit
+approval for that full 1,430-trial egress, then run:
 
 ```bash
-make evaluation-restart
-make evaluation-freeze
-make evaluation-seed
-make evaluation-run INDEX_HASH=<index_sha256 from freeze> MAX_COST=25
 make evaluation-execute DRY_RUN=1
-make evaluation-execute LIMIT=10
 make evaluation-execute
 make evaluation-report
 ```
 
-`evaluation-freeze` will report two `configuration_hashes`. That is expected;
-see [Two configuration hashes](#two-configuration-hashes-is-intended).
+The dry run is safe to repeat and should report 10 already scored and 1,430
+pending without provider calls. Do not create a new manifest: that would create
+a different experiment rather than resume this one.
 
-Run `LIMIT=10` before the full 1,440 and read the actual cost out of
-`agent.model_calls` — the per-trial figure below is derived, not measured.
+## Current frozen run
+
+| Field | Value |
+| --- | --- |
+| Experiment | `4b1098f7-81d8-4d7b-a6e5-7b7da6dcc60b` |
+| Runtime release | `0dd3bbb94851f53cfec6b4dfe16915afb79a6a35` |
+| Runtime configuration | `ea661c92dd99001b1faf152f50349142512c04e2c33ee614de394a33862a1656` |
+| Reviewed corpus | `d7e2d075f9e20c4778269bf4de6b7b4d9158dc92e206eaeccf59a25954442b68` |
+| Active index | `ae4a7407c9ec07b60ce580a2e547c4ebd3d40ecae7e4cb3f0bc0f76346a4ca5a` |
+| Dataset | `821e973c6362b105e899586cac9c9c189c6deb98cf0de047a8a9b3f754a9f872` |
+| Ceiling | `$25.000000` |
+| Progress | 10 scored: 8 included, 2 excluded as `TimeoutError` |
+| Model accounting | 47 calls, `$0.093061` measured, `$0` actively reserved |
+
+Both exclusions are 12,800-token cross-document catalog workloads. They
+completed four to seven large document-selection calls, cancelled the next call
+at the exact 180-second production deadline, persisted
+`failure_code=deadline_exceeded` plus `error=TimeoutError`, reconciled every
+reservation, and allowed the next trial to continue. This is measured runtime
+behaviour, not an executor failure.
+
+The earlier experiment `b2c2c14a-d9d3-4b96-9894-cf48eee427cf` failed executor
+preflight before any provider call. It is preserved in PostgreSQL as invalid
+with reason `executor_preflight_failed`, zero memberships, zero model calls, and
+zero spend. Its local manifest and empty score ledger were moved intact to
+`/tmp/pageindex-evaluation-run-b2c2c14a`.
 
 ## Decisions and why
 
@@ -166,10 +186,10 @@ rebuild rather than the whole corpus.
   groups duplicated work — do not reuse it.
 - The corpus is 2,350 pages across 104 documents, so a full re-index is roughly
   **$4–5 and two hours** at four worker replicas.
-- **Trials: ~$0.003 each, derived not measured** — catalog routing over 104
-  documents plus evidence and synthesis at `deepseek-v4-flash` rates. 1,440
-  trials is therefore ~$4–5. `MAX_COST=25` gives about six times headroom: high
-  enough not to false-trip on a bad estimate, low enough to stop a runaway.
+- **Trials: $0.009306/trial over the 10-trial live gate** — 47 model calls cost
+  $0.093061. A straight-line projection is about $13.40 for 1,440 trials, but
+  this small shuffled sample includes two expensive deadline cases and is not a
+  forecast. `MAX_COST=25` remains the authoritative bound.
 
 ## Operating recipes
 
