@@ -1,11 +1,11 @@
 <!-- Content type: Reference -->
-<!-- Content plan: Goal: let a fresh maintainer resume the PageIndex v2 evaluation without redoing its investigation. Audience: maintainers continuing the evaluation. Content: current state, decisions with rationale, diagnosed failure classes, operating recipes, measured costs, and remaining steps. Open questions: MAX_COST value, and whether to merge the branch before executing. -->
+<!-- Content plan: Goal: let a fresh maintainer resume the PageIndex v2 evaluation without redoing its investigation. Audience: maintainers continuing the evaluation. Content: current state, decisions with rationale, diagnosed failure classes, operating recipes, measured costs, and remaining steps. Open questions: whether the capped partial baseline is sufficient, whether to authorize a new higher-cap experiment, and how to score the claim-recall queue. -->
 
 # Resume the PageIndex v2 evaluation
 
 State, decisions, and findings for the PageIndex v2 evaluation as of branch
 `fix/pageindex-evaluation-dataset`, written against base commit
-`79b10f4037bc71892fe923dda3f35aadda15304c`. Written so the work can continue
+`a870e20c6b4e562594108c2d2d87667ff3969f7e`. Written so the work can continue
 from the repository and this page alone. Reconfirm all anchors against the
 current checkout before editing.
 
@@ -13,12 +13,13 @@ current checkout before editing.
 
 | Item | State |
 | --- | --- |
-| Evaluation dataset | 120/120 cases human-approved; `make evaluation-check` clean |
+| Evaluation dataset | 120/120 approved: 40 by `gcharang`, 80 automated structural reviews explicitly marked “not a human read”; `make evaluation-check` clean |
 | Corpus index | 104/104 documents indexed and ready |
 | Index recipe | 98 documents on `+vr5`, 6 on `+vr6` — deliberate, see below |
-| Trial executor | Bounded parallel execution implemented; verification in progress |
-| Cost ceiling | Implemented; `make evaluation-run` now requires `MAX_COST` |
-| Branch | No remote branch; not merged. Refresh `origin` before comparing refs |
+| Trial executor | Bounded concurrency 4 verified live; maximum observed overlap 4 |
+| Current run | Stopped safely at its frozen $25 ceiling after 227/1,440 trials |
+| Partial report | 172 included, 55 excluded; claim recall not yet scored |
+| Branch | No remote branch; 23 commits ahead of refreshed `origin/master` after this handoff update |
 
 `make api-lint`, `make api-typecheck`, `make docs-check`, and `make compose-check`
 pass. The provider-free API suite is 409 passed; the disposable PostgreSQL
@@ -26,23 +27,73 @@ integration stack is 10 passed.
 
 ## Do this next
 
-Finish verification and the three review lanes for the parallel executor, then
-commit it. The retired sequential manifest is release-pinned and must not be
-reused. Build and freeze a new release:
+The `$25` experiment is complete **as a capped partial run**, not as the full
+1,440-trial baseline. Re-running `make evaluation-execute` may consume small
+amounts of headroom released when the last in-flight calls finalized, but it
+cannot make this a complete run and will add more cap-denied trials. Do not do
+that by default.
 
-```bash
-make evaluation-restart
-make evaluation-freeze
-make evaluation-seed
-make evaluation-run INDEX_HASH=<index_sha256 from freeze> MAX_COST=25 CONCURRENCY=4
-make evaluation-execute DRY_RUN=1
-make evaluation-execute LIMIT=12
-make evaluation-execute
-make evaluation-report
-```
+1. Decide whether 172 included trials are enough for a partial regression
+   diagnostic. Do not present them as a complete baseline.
+2. If a complete 1,440-trial baseline is required, explicitly authorize a new,
+   higher-cap experiment. The existing manifest and database ceiling are
+   immutable; a new experiment repeats earlier trials rather than continuing
+   their spend under a different ceiling. At the observed conservative exposure
+   rate, a full run projects to roughly `$155`
+   (`$24.290311 / 226 provider-active trials × 1,440 = $154.77`; moderate
+   confidence because the capped prefix is not a guarantee of the remaining
+   mix).
+3. If `answer_claim_recall` is required, score the 35 entries in
+   `apps/api/evaluation/run/judge-queue.jsonl`. No scorer/writer exists yet; add
+   and review one before editing `scores.jsonl`.
+4. Preserve the Git-ignored run directory and the experiment rows before
+   preparing another manifest. `make evaluation-report` reproduces the current
+   partial report in `apps/api/evaluation/run/summary.json`.
 
 Concurrency is part of the frozen configuration hash. Execution defaults to the
 manifest value and rejects a different `CONCURRENCY` override.
+
+## Current capped parallel run
+
+| Field | Value |
+| --- | --- |
+| Experiment | `09471839-de04-4f94-97aa-a34e31b86509` |
+| Runtime release | `a870e20c6b4e562594108c2d2d87667ff3969f7e` |
+| Runtime configuration | `52d6f1a262ed873d11dbce6d3d64dba30cfb6f807f6fc20a210b6969e833f8b6` |
+| Reviewed corpus | `d7e2d075f9e20c4778269bf4de6b7b4d9158dc92e206eaeccf59a25954442b68` |
+| Active index | `ae4a7407c9ec07b60ce580a2e547c4ebd3d40ecae7e4cb3f0bc0f76346a4ca5a` |
+| Dataset | `821e973c6362b105e899586cac9c9c189c6deb98cf0de047a8a9b3f754a9f872` |
+| Concurrency | 4; maximum observed overlapping model calls: 4 |
+| Ceiling | `$25.000000` |
+| Progress | 227 terminal memberships, frozen sequence 0–226; 0 nonterminal |
+| Outcomes | 172 included; 44 `TimeoutError`; 10 `provider_rejected`; 1 `experiment_cost_cap` |
+| Model accounting | 1,203 calls; `$1.241899` measured telemetry; `$23.051574` held for 54 `review_required` calls |
+| Cap exposure | `$24.290311` (`$1.238737` finalized measured + `$23.051574` held) |
+| Wall time | 67m54s, from first model-call start to last completion |
+| Local artifacts | 227 scores, 35 judge items, and `summary.json` under `apps/api/evaluation/run` |
+| State | Valid, capped partial run; not a complete 1,440-trial baseline |
+
+The final database audit found no `reserved` reservation, no nonterminal
+`ModelCall`, and no nonterminal `QueryRun`. The `$1.241899` telemetry total
+includes `$0.003162` observed on calls whose final usage remained incomplete;
+the cap correctly charges those calls at their full reservation instead. The
+executor stopped scheduling as soon as the database denied a reservation, then
+drained already-admitted work.
+
+Coverage is uneven because this is a capped prefix:
+
+| Workload | Scored | Included | Excluded |
+| --- | ---: | ---: | ---: |
+| `corpus_routing` | 45 | 28 | 17 |
+| `forced_route_end_to_end` | 65 | 47 | 18 |
+| `oracle_document_retrieval` | 51 | 51 | 0 |
+| `route` | 66 | 46 | 20 |
+
+The partial report contains retrieval and refusal metrics, but
+`answer_claim_recall` has count zero because its 35 answerable end-to-end
+results are only queued for judging. The exact 180-second deadline and
+HTTP-200 structured-response rejection remain the only provider failure
+classes; the parallel scheduler introduced no new failure class.
 
 ## Retired sequential run
 
@@ -193,12 +244,31 @@ rebuild rather than the whole corpus.
   groups duplicated work — do not reuse it.
 - The corpus is 2,350 pages across 104 documents, so a full re-index is roughly
   **$4–5 and two hours** at four worker replicas.
-- **Trials: $0.766011 measured plus $7.683858 conservatively held over 80
-  durable trials** — failed or cancelled provider calls often lack final token
-  telemetry, so the budget retains their worst-case reservation. Measured spend
-  alone projects below $25, but committed budget exposure does not. If the same
-  failure rate persists, the database will stop the new run well before 1,440
-  trials; `MAX_COST=25` remains the authoritative bound.
+- **Current trials: $1.241899 measured telemetry over 1,203 model calls; the
+  cap charges $1.238737 finalized measured plus $23.051574 held, or
+  $24.290311 total exposure over 227 durable trials.** Failed provider calls
+  often lack final token telemetry, so 54 `review_required` calls retain their
+  worst-case reservation. Measured spend alone is not a safe projection.
+- **Retired sequential trials: $0.766011 measured plus $7.683858 held over 80
+  durable trials.** Those rows remain invalid with reason
+  `replaced_by_parallel_execution` and do not count against the current
+  experiment.
+
+## Reuse map
+
+Extend these existing surfaces; do not create a second planning, accounting, or
+reporting path:
+
+| Responsibility | Existing surface |
+| --- | --- |
+| Frozen schemas, hashes, trial IDs, and bootstrap intervals | `apps/api/src/vectorless_rag/evaluation_suite.py` |
+| Clean-release plan creation | `apps/api/scripts/run_evaluation.py` |
+| Resume ledger, bounded workers, durable terminalization | `apps/api/scripts/execute_evaluation.py` |
+| Provider-call reservation and reconciliation | `apps/api/src/vectorless_rag/usage.py` |
+| Database-authoritative cap trigger | `apps/api/alembic/versions/0005_measurement_experiments.py` |
+| Partial/full aggregate report | `apps/api/scripts/report_evaluation.py` |
+| Active-index and corpus digest verification | `apps/api/scripts/freeze_index.py` |
+| Operator entry points | Root `Makefile`, targets prefixed `evaluation-` |
 
 ## Operating recipes
 
@@ -291,3 +361,172 @@ make pageindex-patch-test PAGEINDEX_SOURCE=/opt/pageindex
 A final unbiased vector-versus-PageIndex verdict still needs a new sealed dataset
 created after both implementations and their indexes freeze. This suite is a
 PageIndex v2 regression baseline, and it is visible to future vector development.
+
+## Appendix: current-state anchors
+
+The snippets below—and any line numbers derived from them—are as of base
+`a870e20c6b4e562594108c2d2d87667ff3969f7e`. Always read the symbol again before
+editing. These anchors are the evidence for the edit targets and invariants
+described above.
+
+### Frozen identity includes concurrency and cost
+
+`apps/api/src/vectorless_rag/evaluation_suite.py`,
+`evaluation_configuration_sha256` and `FrozenEvaluationManifest`:
+
+```python
+def evaluation_configuration_sha256(
+    settings: Settings,
+    *,
+    execution_concurrency: int,
+) -> str:
+    snapshot = {name: getattr(settings, name) for name in EVALUATION_RUNTIME_SETTING_NAMES}
+    snapshot["execution_concurrency"] = execution_concurrency
+```
+
+```python
+class FrozenEvaluationManifest(StrictEvaluationModel):
+    schema_version: Literal[2]
+    experiment_id: uuid.UUID
+    release_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    corpus_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    index_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dataset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    price_snapshot: dict[str, float]
+    repetitions: int = Field(ge=1, le=3)
+    evidence_budgets: tuple[Literal[6400, 12800, 25600], ...]
+    execution_concurrency: int = Field(ge=1, le=8)
+    seed: int
+    maximum_cost_usd: Decimal = Field(
+        gt=Decimal("0"),
+        max_digits=14,
+        decimal_places=6,
+        allow_inf_nan=False,
+    )
+```
+
+The current local `manifest.json` pins schema 2, experiment
+`09471839-de04-4f94-97aa-a34e31b86509`, concurrency 4, cost `$25`, and release
+`a870e20c6b4e562594108c2d2d87667ff3969f7e`.
+
+### The coordinator is bounded and is the only ledger writer
+
+`apps/api/scripts/execute_evaluation.py`, `execute_pending_trials`:
+
+```python
+for executor in executors[: len(pending)]:
+    schedule(executor)
+
+try:
+    while inflight:
+        done, _ = await asyncio.wait(inflight, return_when=asyncio.FIRST_COMPLETED)
+```
+
+```python
+while next_to_write in completed:
+    trial, score, judge = completed.pop(next_to_write)
+    append_trial_result(scores_path, judge_path, score, judge)
+    next_to_write += 1
+
+if not budget_exhausted:
+    for executor in available:
+        if next_to_schedule == len(pending):
+            break
+        schedule(executor)
+```
+
+Each `Executor` owns one checkpointer and gets one database session per task.
+Completed results buffer by frozen position, and a cap-denied result prevents
+new scheduling while admitted work drains.
+
+### Cancellation terminalizes any durable running row
+
+`apps/api/scripts/execute_evaluation.py`, `Executor.execute`:
+
+```python
+except asyncio.CancelledError:
+    latency = round((time.monotonic() - lifecycle_started) * 1000)
+
+    async def terminalize_cancelled_run() -> None:
+        await session.rollback()
+        durable_run = await session.get(QueryRun, run_id, populate_existing=True)
+        if durable_run is None or query_run_status(durable_run) != QueryRunStatus.running:
+            return
+        await self.finalize(
+            session,
+            durable_run,
+            latency=latency,
+            failure_code=RunFailureCode.request_failed,
+            evaluation_failure_code=EXECUTION_CANCELLED_FAILURE_CODE,
+        )
+```
+
+Tests cover cancellation during run creation, inside the graph, and during
+successful finalization. Do not narrow this handler back to the provider call.
+
+### The database serializes cap decisions
+
+`apps/api/alembic/versions/0005_measurement_experiments.py`,
+`agent.enforce_experiment_cost_cap`:
+
+```sql
+SELECT maximum_cost_usd INTO cap
+FROM agent.experiments
+WHERE id = NEW.experiment_id
+FOR UPDATE;
+```
+
+```sql
+IF committed + NEW.reserved_cost_usd > cap THEN
+  RAISE EXCEPTION 'experiment cost cap exceeded';
+END IF;
+```
+
+`test_concurrent_reservations_serialize_at_the_experiment_cap` in
+`apps/api/tests/test_postgres_integration.py` holds the winning transaction open
+across two connections and proves exactly one reservation fits a one-reservation
+cap.
+
+### Claim recall has a queue but no scorer
+
+`apps/api/scripts/execute_evaluation.py`, `Executor.score_terminal_run`:
+
+```python
+if trial.experiment_kind == "forced_route_end_to_end" and case.answerable:
+    judge = {
+        "trial_id": str(trial.trial_id),
+        "item_id": str(case.item_id),
+        "claims": [claim.claim for claim in case.atomic_claims],
+        "answer": run.answer or "",
+    }
+```
+
+`report_evaluation.py` reads `answer_claim_recall` from `scores.jsonl`; no
+current script consumes `judge-queue.jsonl` or writes that field. A future
+scorer must join by `trial_id`, validate one result per queued trial, and update
+the resume ledger atomically.
+
+### A higher ceiling requires a new experiment
+
+Current immutable state:
+
+```text
+experiment_id = 09471839-de04-4f94-97aa-a34e31b86509
+maximum_cost_usd = 25.000000
+```
+
+Target transition, only after explicit authorization:
+
+```bash
+test ! -e /tmp/pageindex-evaluation-run-09471839
+mv apps/api/evaluation/run /tmp/pageindex-evaluation-run-09471839
+make evaluation-run \
+  INDEX_HASH=ae4a7407c9ec07b60ce580a2e547c4ebd3d40ecae7e4cb3f0bc0f76346a4ca5a \
+  MAX_COST=<new-authorized-ceiling> CONCURRENCY=4
+```
+
+That command must create a new experiment UUID and clean manifest. Do not edit
+the existing JSON or `agent.experiments.maximum_cost_usd`: either mutation
+breaks the frozen-protocol claim. Rejected alternatives are raising the current
+row in place and copying old scores into a differently bounded experiment.
