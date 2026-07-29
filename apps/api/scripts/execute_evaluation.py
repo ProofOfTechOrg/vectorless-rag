@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import time
 import uuid
+from collections.abc import Sequence
 from contextlib import AsyncExitStack
-from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,22 +31,35 @@ from vectorless_rag.config import Settings, get_settings
 from vectorless_rag.db import Database, driver_free_url, make_engine
 from vectorless_rag.evaluation_suite import (
     EvaluationCase,
+    EvaluationCorpusManifest,
     EvaluationScore,
     EvaluationTrial,
     FrozenEvaluationManifest,
+    build_trials,
+    evaluation_configuration_sha256,
+    evaluation_price_snapshot,
+    file_sha256,
+    frozen_index_sha256,
     load_cases,
+    load_corpus_manifest,
+    validate_indexed_corpus,
 )
 from vectorless_rag.graph import GraphResult, GraphRunner, GraphRunOptions
-from vectorless_rag.llm import DeepSeekLLM, LLMError
+from vectorless_rag.llm import MAX_PROVIDER_ATTEMPTS, DeepSeekLLM, LLMError
 from vectorless_rag.models import (
+    ApiKey,
     Document,
     DocumentStatus,
     Experiment,
+    ExperimentIndexVersion,
     ExperimentMembership,
+    IndexVersion,
     ModelCall,
     QueryRun,
+    QueryRunStatus,
     RunFailureCode,
     RunRoute,
+    query_run_status,
 )
 from vectorless_rag.observability import Observability
 from vectorless_rag.provider import ProviderGate
@@ -53,29 +67,43 @@ from vectorless_rag.retrieval import CorpusRouter, PageIndexRetriever, Vectorles
 from vectorless_rag.schemas import ChatRequest, MetadataConstraints
 from vectorless_rag.sql_guard import PostgreSQLAdapter
 from vectorless_rag.storage import S3ObjectStore
-from vectorless_rag.usage import UsageOwner, usage_context
+from vectorless_rag.usage import ExperimentBudgetExceeded, UsageOwner, usage_context
 
 # Every stratum in this suite is answerable from document text, so the router is correct when
 # it chooses documents. Unanswerable cases still route to documents; being unable to answer is
 # a retrieval outcome, measured by insufficient rather than by the route.
 EXPECTED_ROUTE = RunRoute.documents
+IMAGE_RELEASE_PATH = Path("/app/.release")
 
 
-def options_for(kind: str, budget: int, oracle: tuple[uuid.UUID, ...]) -> GraphRunOptions:
+def options_for(
+    kind: str,
+    budget: int,
+    oracle: tuple[uuid.UUID, ...],
+    index_version_ids: tuple[tuple[uuid.UUID, uuid.UUID], ...] = (),
+) -> GraphRunOptions:
     """Map an experiment kind onto the graph's frozen-evaluation overrides.
 
     route leaves the router free so its choice can be scored; the rest pin the route so the
     retrieval stages are measured without routing noise standing in front of them.
     """
     if kind == "route":
-        return GraphRunOptions(evidence_token_budget=budget)
+        return GraphRunOptions(
+            evidence_token_budget=budget,
+            index_version_ids=index_version_ids,
+        )
     if kind == "oracle_document_retrieval":
         return GraphRunOptions(
             forced_route=EXPECTED_ROUTE,
             oracle_document_ids=oracle,
             evidence_token_budget=budget,
+            index_version_ids=index_version_ids,
         )
-    return GraphRunOptions(forced_route=EXPECTED_ROUTE, evidence_token_budget=budget)
+    return GraphRunOptions(
+        forced_route=EXPECTED_ROUTE,
+        evidence_token_budget=budget,
+        index_version_ids=index_version_ids,
+    )
 
 
 def overlaps(start: int, end: int, other_start: int, other_end: int) -> bool:
@@ -145,11 +173,17 @@ class Executor:
         documents: dict[str, uuid.UUID],
         settings: Settings,
         experiment_id: uuid.UUID,
+        api_key_id: uuid.UUID,
+        index_version_ids: dict[uuid.UUID, uuid.UUID],
     ) -> None:
         self.runner = runner
         self.documents = documents
         self.settings = settings
         self.experiment_id = experiment_id
+        self.api_key_id = api_key_id
+        self.index_version_ids = tuple(
+            sorted(index_version_ids.items(), key=lambda item: str(item[0]))
+        )
 
     async def finalize(
         self,
@@ -159,13 +193,14 @@ class Executor:
         latency: int,
         result: GraphResult | None = None,
         failure_code: RunFailureCode | None = None,
+        evaluation_failure_code: str | None = None,
     ) -> None:
         """Terminalize the QueryRun the way the HTTP surface does.
 
         query_run_status reads answer and failure_code; a row carrying neither stays
         `running` forever and makes query-cost-report treat the whole window as incomplete.
-        The precise provider code stays on the score, which is free text; this column only
-        carries the coarse category the serving report groups by.
+        failure_code carries the coarse category the serving report groups by; error carries
+        the bounded evaluation code so a resume can reconstruct the exact file score.
         """
         run.latency_ms = latency
         if result is not None:
@@ -176,7 +211,9 @@ class Executor:
             run.citations = [dict(item) for item in result.get("citations", [])]
             run.insufficient = bool(result.get("insufficient", False))
         else:
-            run.failure_code = failure_code or RunFailureCode.request_failed
+            coarse_failure = failure_code or RunFailureCode.request_failed
+            run.failure_code = coarse_failure
+            run.error = evaluation_failure_code or coarse_failure.value
             run.insufficient = True
         await session.commit()
 
@@ -191,28 +228,20 @@ class Executor:
             for target in case.target_documents
             if target.arxiv_id in self.documents
         )
-        run = QueryRun(
-            id=uuid.uuid4(),
-            trace_id=uuid.uuid4().hex,
-            thread_id=f"eval-{trial.trial_id}",
-            api_key_id=None,
+        run, created = await create_trial_run(
+            session,
+            experiment_id=self.experiment_id,
+            api_key_id=self.api_key_id,
             question=case.prompt,
+            trial=trial,
         )
-        session.add(run)
-        # The cost ceiling is enforced per model call by resolving the call's owning run to an
-        # experiment through this row. Without it the reservation finds no experiment and the
-        # cap never fires, which is how a 1,440-trial run ends up unbounded.
-        session.add(
-            ExperimentMembership(
-                experiment_id=self.experiment_id,
-                query_run_id=run.id,
-                trial_key=str(trial.trial_id),
-                repetition=trial.repetition,
-                sequence_number=trial.sequence_number,
-                included=True,
-            )
-        )
-        await session.commit()
+        if not created:
+            if query_run_status(run) == QueryRunStatus.running:
+                raise SystemExit(
+                    f"trial {trial.trial_id} has a nonterminal persisted query run; "
+                    "inspect it before resuming"
+                )
+            return await self.score_terminal_run(session, case, trial, run)
 
         # Built outside the try so a malformed case raises instead of being recorded as an
         # excluded trial: a bad dataset is a defect, not a provider failure.
@@ -220,7 +249,12 @@ class Executor:
             message=case.prompt,
             constraints=MetadataConstraints.model_validate(case.constraints),
         )
-        options = options_for(trial.experiment_kind, trial.evidence_token_budget, oracle)
+        options = options_for(
+            trial.experiment_kind,
+            trial.evidence_token_budget,
+            oracle,
+            self.index_version_ids,
+        )
 
         started = time.monotonic()
         try:
@@ -228,9 +262,15 @@ class Executor:
             # success exactly the long multi-round runs that production returns as 504, which
             # would bias the report toward the hardest cases the suite exists to measure.
             async with asyncio.timeout(self.settings.request_deadline_seconds):
-                with usage_context(UsageOwner(trace_id=run.trace_id, query_run_id=run.id)):
+                with usage_context(
+                    UsageOwner(
+                        trace_id=run.trace_id,
+                        query_run_id=run.id,
+                        require_cost_reservation=True,
+                    )
+                ):
                     result = await self.runner.run(session, request, run, options=options)
-        except (LLMError, TimeoutError) as error:
+        except (ExperimentBudgetExceeded, LLMError, TimeoutError) as error:
             await session.rollback()
             code = getattr(error, "failure_code", type(error).__name__)
             latency = round((time.monotonic() - started) * 1000)
@@ -243,6 +283,7 @@ class Executor:
                     if isinstance(error, TimeoutError)
                     else RunFailureCode.request_failed
                 ),
+                evaluation_failure_code=str(code)[:80],
             )
             return (
                 EvaluationScore(
@@ -257,14 +298,40 @@ class Executor:
 
         latency = round((time.monotonic() - started) * 1000)
         await self.finalize(session, run, latency=latency, result=result)
-        citations = result.get("citations", [])
+        return await self.score_terminal_run(session, case, trial, run)
+
+    async def score_terminal_run(
+        self,
+        session: AsyncSession,
+        case: EvaluationCase,
+        trial: EvaluationTrial,
+        run: QueryRun,
+    ) -> tuple[EvaluationScore, dict[str, Any] | None]:
+        if query_run_status(run) == QueryRunStatus.failed:
+            return (
+                EvaluationScore(
+                    trial_id=trial.trial_id,
+                    query_run_id=run.id,
+                    latency_ms=run.latency_ms,
+                    failure_code=run.error
+                    or (
+                        run.failure_code.value
+                        if run.failure_code is not None
+                        else RunFailureCode.request_failed.value
+                    ),
+                    included=False,
+                ),
+                None,
+            )
+
+        citations = [dict(item) for item in run.citations]
         # Citations carry the document UUID; the suite is keyed by arXiv ID.
         by_id = {str(value): key for key, value in self.documents.items()}
         for item in citations:
             item["arxiv_id"] = by_id.get(str(item.get("source_id")))
 
-        insufficient = bool(result.get("insufficient", False))
-        route = str(result.get("route", ""))
+        insufficient = run.insufficient
+        route = run.route.value if run.route is not None else ""
         # Recall and precision are ratios over target spans, and an unanswerable case has
         # none. Leaving them unset keeps a refusal out of means the report takes over
         # measured ratios; refusal correctness is its own metric rather than a bit smuggled
@@ -279,7 +346,7 @@ class Executor:
             document_recall=metrics.get("document_recall"),
             support_recall=metrics.get("support_recall"),
             citation_precision=metrics.get("citation_precision"),
-            latency_ms=latency,
+            latency_ms=run.latency_ms,
             input_tokens=inputs,
             output_tokens=outputs,
         )
@@ -289,7 +356,7 @@ class Executor:
                 "trial_id": str(trial.trial_id),
                 "item_id": str(case.item_id),
                 "claims": [claim.claim for claim in case.atomic_claims],
-                "answer": str(result.get("answer", "")),
+                "answer": run.answer or "",
             }
         return score, judge
 
@@ -320,37 +387,206 @@ def scored_trials(path: Path) -> set[uuid.UUID]:
     return done
 
 
-async def ensure_experiment(database: Database, manifest: FrozenEvaluationManifest) -> None:
+def validate_frozen_inputs(
+    settings: Settings,
+    manifest: FrozenEvaluationManifest,
+    trials: list[EvaluationTrial],
+    cases: list[EvaluationCase],
+    *,
+    dataset_sha256: str,
+    corpus: EvaluationCorpusManifest,
+    image_release: str,
+) -> None:
+    if settings.release != manifest.release_sha:
+        raise SystemExit("runtime RELEASE does not match the frozen manifest")
+    if image_release != manifest.release_sha:
+        raise SystemExit("built image release does not match the frozen manifest")
+    if dataset_sha256 != manifest.dataset_sha256:
+        raise SystemExit("evaluation dataset does not match the frozen manifest")
+    if corpus.corpus_snapshot_sha256 != manifest.corpus_sha256:
+        raise SystemExit("evaluation corpus does not match the frozen manifest")
+    if evaluation_configuration_sha256(settings) != manifest.configuration_sha256:
+        raise SystemExit("evaluation runtime configuration does not match the frozen manifest")
+    try:
+        current_prices = evaluation_price_snapshot(
+            settings, maximum_provider_attempts=MAX_PROVIDER_ATTEMPTS
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    if current_prices != manifest.price_snapshot:
+        raise SystemExit("provider prices or reservation bounds changed after the run was frozen")
+    expected_trials = build_trials(
+        cases,
+        seed=manifest.seed,
+        repetitions=manifest.repetitions,
+    )
+    if trials != expected_trials:
+        raise SystemExit("evaluation trials do not match the frozen dataset and seed")
+
+
+def bind_frozen_index(
+    rows: Sequence[tuple[str | None, uuid.UUID, uuid.UUID, str, uuid.UUID | None]],
+    expected_sha256: str,
+) -> tuple[dict[str, uuid.UUID], dict[uuid.UUID, uuid.UUID]]:
+    missing_metadata = [str(row[2]) for row in rows if row[4] is None]
+    if missing_metadata:
+        raise SystemExit(
+            f"{len(missing_metadata)} frozen index version(s) have no metadata snapshot: "
+            f"{missing_metadata[:5]}"
+        )
+    try:
+        current_sha256 = frozen_index_sha256([(row[0], row[3]) for row in rows])
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+    if current_sha256 != expected_sha256:
+        raise SystemExit("active index does not match the frozen manifest")
+    return (
+        {str(row[0]): row[1] for row in rows},
+        {row[1]: row[2] for row in rows},
+    )
+
+
+async def create_trial_run(
+    session: AsyncSession,
+    *,
+    experiment_id: uuid.UUID,
+    api_key_id: uuid.UUID,
+    question: str,
+    trial: EvaluationTrial,
+) -> tuple[QueryRun, bool]:
+    run_id = uuid.uuid5(experiment_id, str(trial.trial_id))
+    thread_id = f"eval-{experiment_id}-{trial.trial_id}"
+    existing = await session.get(QueryRun, run_id)
+    if existing is not None:
+        membership = await session.scalar(
+            select(ExperimentMembership).where(ExperimentMembership.query_run_id == run_id)
+        )
+        if (
+            membership is None
+            or membership.experiment_id != experiment_id
+            or membership.trial_key != str(trial.trial_id)
+            or membership.repetition != trial.repetition
+            or membership.sequence_number != trial.sequence_number
+            or existing.api_key_id != api_key_id
+            or existing.thread_id != thread_id
+            or existing.question != question
+        ):
+            raise SystemExit("persisted evaluation trial identity does not match the frozen plan")
+        return existing, False
+
+    run = QueryRun(
+        id=run_id,
+        trace_id=uuid.uuid4().hex,
+        thread_id=thread_id,
+        api_key_id=api_key_id,
+        question=question,
+    )
+    session.add(run)
+    await session.flush([run])
+    # The cost ceiling resolves each model call through this membership. Persist the run
+    # first so the membership cannot race its foreign key during SQLAlchemy's unit of work.
+    session.add(
+        ExperimentMembership(
+            experiment_id=experiment_id,
+            query_run_id=run.id,
+            trial_key=str(trial.trial_id),
+            repetition=trial.repetition,
+            sequence_number=trial.sequence_number,
+            included=True,
+        )
+    )
+    await session.commit()
+    return run, True
+
+
+async def ensure_experiment(
+    session: AsyncSession,
+    manifest: FrozenEvaluationManifest,
+    index_version_ids: frozenset[uuid.UUID],
+) -> uuid.UUID:
     """Materialise the frozen plan as the experiment row the cost ceiling is read from.
 
     The plan is built on the host, which cannot reach the database, so the row is created
     here instead. Resuming re-enters this, so an existing row is left alone: rewriting the
     ceiling mid-run would let a resume raise a limit the plan was frozen with.
     """
-    async with database.session() as session:
-        if await session.get(Experiment, manifest.experiment_id) is not None:
-            return
+    api_key_id = uuid.uuid5(manifest.experiment_id, "disabled-evaluation-principal")
+    prefix = f"eval{api_key_id.hex[:12]}"
+    key_hash = hashlib.sha256(f"disabled-evaluation-principal:{api_key_id}".encode()).hexdigest()
+    existing_key = await session.get(ApiKey, api_key_id)
+    if existing_key is None:
         session.add(
-            Experiment(
-                id=manifest.experiment_id,
-                name=f"pageindex-v2-{manifest.created_at.strftime('%Y%m%dT%H%M%SZ')}",
-                release_sha=manifest.release_sha,
-                configuration_hash=manifest.configuration_sha256,
-                corpus_hash=manifest.corpus_sha256,
-                index_hash=manifest.index_sha256,
-                dataset_hash=manifest.dataset_sha256,
-                price_snapshot=manifest.price_snapshot,
-                repetitions=manifest.repetitions,
-                # The sweep varies this per trial; the row records the widest budget it can
-                # reach, since that is what the ceiling has to survive.
-                evidence_token_budget=max(manifest.evidence_budgets),
-                seed=manifest.seed,
-                maximum_cost_usd=Decimal(str(manifest.maximum_cost_usd)),
-                frozen_at=manifest.created_at,
+            ApiKey(
+                id=api_key_id,
+                name=f"evaluation:{manifest.experiment_id}",
+                prefix=prefix,
+                key_hash=key_hash,
+                scopes=[],
+                disabled=True,
             )
         )
-        await session.commit()
-    print(f"experiment armed with a ${manifest.maximum_cost_usd:.2f} ceiling")
+    elif (
+        existing_key.prefix != prefix
+        or existing_key.key_hash != key_hash
+        or existing_key.scopes
+        or not existing_key.disabled
+    ):
+        raise SystemExit("existing evaluation principal does not match the frozen experiment")
+
+    existing_experiment = await session.get(Experiment, manifest.experiment_id)
+    if existing_experiment is None:
+        existing_experiment = Experiment(
+            id=manifest.experiment_id,
+            name=f"pageindex-v2-{manifest.created_at.strftime('%Y%m%dT%H%M%SZ')}",
+            release_sha=manifest.release_sha,
+            configuration_hash=manifest.configuration_sha256,
+            corpus_hash=manifest.corpus_sha256,
+            index_hash=manifest.index_sha256,
+            dataset_hash=manifest.dataset_sha256,
+            price_snapshot=manifest.price_snapshot,
+            repetitions=manifest.repetitions,
+            # The sweep varies this per trial; the row records the widest budget it can
+            # reach, since that is what the ceiling has to survive.
+            evidence_token_budget=max(manifest.evidence_budgets),
+            seed=manifest.seed,
+            maximum_cost_usd=manifest.maximum_cost_usd,
+            frozen_at=manifest.created_at,
+        )
+        session.add(existing_experiment)
+        await session.flush([existing_experiment])
+        session.add_all(
+            ExperimentIndexVersion(
+                experiment_id=manifest.experiment_id,
+                index_version_id=index_version_id,
+            )
+            for index_version_id in index_version_ids
+        )
+    elif (
+        not existing_experiment.valid
+        or existing_experiment.release_sha != manifest.release_sha
+        or existing_experiment.configuration_hash != manifest.configuration_sha256
+        or existing_experiment.corpus_hash != manifest.corpus_sha256
+        or existing_experiment.index_hash != manifest.index_sha256
+        or existing_experiment.dataset_hash != manifest.dataset_sha256
+        or existing_experiment.price_snapshot != manifest.price_snapshot
+        or existing_experiment.repetitions != manifest.repetitions
+        or existing_experiment.evidence_token_budget != max(manifest.evidence_budgets)
+        or existing_experiment.seed != manifest.seed
+        or existing_experiment.maximum_cost_usd != manifest.maximum_cost_usd
+        or existing_experiment.frozen_at != manifest.created_at
+    ):
+        raise SystemExit("existing experiment does not match the frozen manifest")
+    else:
+        persisted_index_versions = frozenset(
+            await session.scalars(
+                select(ExperimentIndexVersion.index_version_id).where(
+                    ExperimentIndexVersion.experiment_id == manifest.experiment_id
+                )
+            )
+        )
+        if persisted_index_versions != index_version_ids:
+            raise SystemExit("existing experiment does not use the frozen index versions")
+    return api_key_id
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -365,7 +601,24 @@ async def run(args: argparse.Namespace) -> None:
         for line in (args.run / "trials.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    cases = {case.item_id: case for case in load_cases(args.dataset)}
+    case_list = load_cases(args.dataset)
+    cases = {case.item_id: case for case in case_list}
+    corpus = load_corpus_manifest(args.corpus)
+    try:
+        image_release = (
+            await asyncio.to_thread(IMAGE_RELEASE_PATH.read_text, encoding="utf-8")
+        ).strip()
+    except OSError as error:
+        raise SystemExit(f"cannot read the built image release: {error}") from error
+    validate_frozen_inputs(
+        settings,
+        manifest,
+        trials,
+        case_list,
+        dataset_sha256=file_sha256(args.dataset),
+        corpus=corpus,
+        image_release=image_release,
+    )
     scores_path = args.run / "scores.jsonl"
     done = scored_trials(scores_path)
     pending = [trial for trial in trials if trial.trial_id not in done]
@@ -395,13 +648,27 @@ async def run(args: argparse.Namespace) -> None:
         async with database.session() as session:
             rows = (
                 await session.execute(
-                    select(Document.arxiv_id, Document.id).where(
-                        Document.status == DocumentStatus.ready,
-                        Document.active_index_version_id.is_not(None),
+                    select(
+                        Document.arxiv_id,
+                        Document.id,
+                        IndexVersion.id,
+                        IndexVersion.artifact_sha256,
+                        IndexVersion.metadata_version_id,
+                        Document.sha256,
                     )
+                    .join(IndexVersion, Document.active_index_version_id == IndexVersion.id)
+                    .where(Document.status == DocumentStatus.ready)
+                    .order_by(Document.arxiv_id)
                 )
             ).all()
-        documents = {str(row[0]): row[1] for row in rows}
+        try:
+            validate_indexed_corpus([(row[0], str(row[5])) for row in rows], corpus)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        documents, index_version_ids = bind_frozen_index(
+            [(row[0], row[1], row[2], str(row[3]), row[4]) for row in rows],
+            manifest.index_sha256,
+        )
         missing = sorted(
             {
                 target.arxiv_id
@@ -415,7 +682,13 @@ async def run(args: argparse.Namespace) -> None:
                 f"{len(missing)} target document(s) are not indexed and ready: {missing[:5]}"
             )
         print(f"resolved {len(documents)} indexed documents; all trial targets present")
-        await ensure_experiment(database, manifest)
+        async with database.session() as session:
+            api_key_id = await ensure_experiment(
+                session,
+                manifest,
+                frozenset(index_version_ids.values()),
+            )
+        print(f"experiment armed with a ${manifest.maximum_cost_usd:.2f} ceiling")
         if args.dry_run:
             for trial in pending[:5]:
                 case = cases[trial.item_id]
@@ -441,7 +714,14 @@ async def run(args: argparse.Namespace) -> None:
                 observability,
                 checkpointer,
             )
-            executor = Executor(runner, documents, settings, manifest.experiment_id)
+            executor = Executor(
+                runner,
+                documents,
+                settings,
+                manifest.experiment_id,
+                api_key_id,
+                index_version_ids,
+            )
             judge_path = args.run / "judge-queue.jsonl"
             for index, trial in enumerate(pending, 1):
                 async with database.session() as session:
@@ -459,6 +739,8 @@ async def run(args: argparse.Namespace) -> None:
                 print(
                     f"[{index}/{len(pending)}] {trial.experiment_kind} {score.latency_ms}ms{flag}"
                 )
+                if score.failure_code == ExperimentBudgetExceeded.failure_code:
+                    raise SystemExit(ExperimentBudgetExceeded.diagnostic)
     finally:
         observability.flush()
         await sql_engine.dispose()
@@ -470,6 +752,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", type=Path, default=root / "run")
     parser.add_argument("--dataset", type=Path, default=root / "pageindex-v2-regression.jsonl")
+    parser.add_argument("--corpus", type=Path, default=root / "pageindex-v2-corpus.json")
     parser.add_argument(
         "--limit",
         type=int,

@@ -12,6 +12,8 @@ from vectorless_rag.config import Settings
 from vectorless_rag.models import ProviderAvailability, ProviderState
 
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
+DEEPSEEK_MAX_INPUT_TOKENS = 1_000_000
+DEEPSEEK_MAX_OUTPUT_TOKENS = 384_000
 STALE_POSITIVE_WINDOW = timedelta(minutes=5)
 STATUS_CACHE_WINDOW = timedelta(seconds=30)
 

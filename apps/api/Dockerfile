@@ -1,5 +1,6 @@
 FROM ghcr.io/astral-sh/uv:0.11.29 AS uv
 FROM python:3.12.13-slim AS runtime
+ARG RELEASE=dev
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 UV_COMPILE_BYTECODE=1
 RUN apt-get update && apt-get install -y --no-install-recommends git libmagic1 && rm -rf /var/lib/apt/lists/*
 COPY --from=uv /uv /uvx /bin/
@@ -14,10 +15,15 @@ COPY patches ./patches
 COPY evaluation ./evaluation
 COPY pilots ./pilots
 COPY telemetry ./telemetry
+RUN printf '%s\n' "$RELEASE" > /app/.release
 RUN uv sync --frozen --no-dev && sh /app/scripts/install-pageindex.sh /opt/pageindex
 ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/opt/pageindex:/app/src"
 RUN python scripts/test_pageindex_patch.py /opt/pageindex
-RUN useradd --create-home --uid 10001 app && mkdir -p /workspaces && chown -R app:app /app /workspaces
+RUN useradd --create-home --uid 10001 app \
+    && mkdir -p /workspaces \
+    && chown -R app:app /app /workspaces \
+    && chown root:root /app/.release \
+    && chmod 0444 /app/.release
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "vectorless_rag.api:app", "--host", "0.0.0.0", "--port", "8000"]

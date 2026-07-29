@@ -29,6 +29,7 @@ from vectorless_rag.usage import (
 
 StructuredT = TypeVar("StructuredT", bound=BaseModel)
 FORMAT_CORRECTION = "\nYour prior response was invalid or empty. Return only the required schema."
+MAX_PROVIDER_ATTEMPTS = 3
 
 
 class LLMError(RuntimeError):
@@ -117,7 +118,7 @@ class DeepSeekLLM:
         self.observability = observability or Observability(settings)
         self.ledger = ledger or ModelCallLedger(
             settings.database_url,
-            maximum_provider_attempts=3,
+            maximum_provider_attempts=MAX_PROVIDER_ATTEMPTS,
         )
         self.provider_gate = provider_gate or ProviderGate(settings)
 
@@ -335,7 +336,7 @@ class DeepSeekLLM:
         last_error: Exception | None = None
         logical_call_id = uuid.uuid4()
         retry_delay_ms: int | None = None
-        for attempt in range(1, 4):
+        for attempt in range(1, MAX_PROVIDER_ATTEMPTS + 1):
             hard_failure = self.provider_gate.hard_failure
             if hard_failure is not None:
                 raise LLMError(
@@ -396,7 +397,7 @@ class DeepSeekLLM:
                         http_status=failure.http_status,
                     ) from error
                 last_error = error
-            if attempt == 3:
+            if attempt == MAX_PROVIDER_ATTEMPTS:
                 break
             delay = secrets.SystemRandom().uniform(0, min(8.0, 0.5 * (2 ** (attempt - 1))))
             retry_delay_ms = round(delay * 1000)
@@ -404,8 +405,8 @@ class DeepSeekLLM:
         if isinstance(last_error, StructuredOutputError):
             raise StructuredOutputError(
                 last_error.failure_code,
-                "The model did not return valid structured output after three attempts.",
-                attempts=3,
+                "The model did not return valid structured output after the retry limit.",
+                attempts=MAX_PROVIDER_ATTEMPTS,
                 finish_reason=last_error.finish_reason,
                 retryable=False,
             ) from last_error
@@ -413,15 +414,15 @@ class DeepSeekLLM:
             failure = classify_provider_failure(last_error)
             raise LLMError(
                 failure.code,
-                "The model request failed after three attempts.",
-                attempts=3,
+                "The model request failed after the retry limit.",
+                attempts=MAX_PROVIDER_ATTEMPTS,
                 retryable=failure.retryable,
                 http_status=failure.http_status,
             ) from last_error
         raise LLMError(
             "llm_retry_exhausted",
-            "The model request failed after three transient attempts.",
-            attempts=3,
+            "The model request failed after the transient retry limit.",
+            attempts=MAX_PROVIDER_ATTEMPTS,
         ) from last_error
 
 

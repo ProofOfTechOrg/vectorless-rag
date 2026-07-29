@@ -22,6 +22,8 @@ from vectorless_rag.models import (
 from vectorless_rag.operational_logging import emit_event, event_json
 from vectorless_rag.reporting import Pricing, build_query_cost_report
 from vectorless_rag.usage import (
+    ExperimentBudgetExceeded,
+    ModelCallLedger,
     UsageOwner,
     current_usage_owner,
     normalize_token_usage,
@@ -33,6 +35,47 @@ class _FailingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         del record
         raise RuntimeError("handler failed")
+
+
+class _EmptyAsyncCursor:
+    async def fetchone(self) -> None:
+        return None
+
+
+class _ReservationlessAsyncConnection:
+    def __init__(self) -> None:
+        self.executions = 0
+
+    async def execute(self, query: str, parameters: dict[str, object]) -> _EmptyAsyncCursor:
+        del query, parameters
+        self.executions += 1
+        return _EmptyAsyncCursor()
+
+
+class _AsyncConnectionContext:
+    def __init__(self, connection: _ReservationlessAsyncConnection) -> None:
+        self.connection = connection
+
+    async def __aenter__(self) -> _ReservationlessAsyncConnection:
+        return self.connection
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> None:
+        del exc_type, exc, traceback
+
+
+class _OpenReservationlessAsyncPool:
+    closed = False
+
+    def __init__(self, connection: _ReservationlessAsyncConnection) -> None:
+        self._connection = connection
+
+    def connection(self) -> _AsyncConnectionContext:
+        return _AsyncConnectionContext(self._connection)
 
 
 def _query_run(
@@ -196,6 +239,30 @@ async def test_concurrent_usage_contexts_keep_attempt_and_trace_ownership() -> N
     assert first == UsageOwner(trace_id=first_trace, ingestion_attempt_id=first_id)
     assert second == UsageOwner(trace_id=second_trace, ingestion_attempt_id=second_id)
     assert current_usage_owner() is None
+
+
+async def test_required_cost_reservation_stops_before_model_call_insert() -> None:
+    connection = _ReservationlessAsyncConnection()
+    ledger = object.__new__(ModelCallLedger)
+    cast(Any, ledger)._async_pool = _OpenReservationlessAsyncPool(connection)
+    cast(Any, ledger)._async_open_lock = asyncio.Lock()
+    cast(Any, ledger).maximum_provider_attempts = 3
+    owner = UsageOwner(
+        trace_id=uuid.uuid4().hex,
+        query_run_id=uuid.uuid4(),
+        require_cost_reservation=True,
+    )
+
+    with usage_context(owner):
+        with pytest.raises(ExperimentBudgetExceeded):
+            await ledger.astart(
+                ModelCallStage.query_route,
+                "provider/model",
+                1,
+                prompt="question",
+            )
+
+    assert connection.executions == 1
 
 
 def test_operational_events_are_one_line_allowlisted_json(

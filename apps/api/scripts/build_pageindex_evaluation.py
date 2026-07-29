@@ -17,7 +17,9 @@ import fitz
 from vectorless_rag.evaluation_suite import (
     COMPLETED_REVIEW_STATUSES,
     STRATA,
+    CorpusDocument,
     case_source_hash,
+    corpus_snapshot_sha256,
     stable_item_id,
 )
 
@@ -561,10 +563,11 @@ def main() -> None:
         for record in records
         if record["arxiv_id"] in target_ids
     ]
-    snapshot_rows = [f"{record['arxiv_id']}\0{record['pdf_sha256']}" for record in records]
     corpus_manifest = {
         "schema_version": 1,
-        "corpus_snapshot_sha256": hashlib.sha256("\n".join(snapshot_rows).encode()).hexdigest(),
+        "corpus_snapshot_sha256": corpus_snapshot_sha256(
+            [CorpusDocument.model_validate(record) for record in corpus_documents]
+        ),
         "documents": corpus_documents,
     }
     output = api_root / "evaluation/pageindex-v2-regression.jsonl"

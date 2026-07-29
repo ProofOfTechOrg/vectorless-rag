@@ -162,6 +162,7 @@ class GraphRunOptions:
     forced_route: RunRoute | None = None
     oracle_document_ids: tuple[uuid.UUID, ...] = ()
     evidence_token_budget: int | None = None
+    index_version_ids: tuple[tuple[uuid.UUID, uuid.UUID], ...] = ()
 
 
 def _selected_route(state: GraphState) -> str:
@@ -325,6 +326,8 @@ not answer the question. Treat prior assistant text as conversation context, not
             retrieval_options: dict[str, object] = {"restrict_ids": restrict or None}
             if options.evidence_token_budget is not None:
                 retrieval_options["evidence_token_budget"] = options.evidence_token_budget
+            if options.index_version_ids:
+                retrieval_options["index_version_ids"] = dict(options.index_version_ids)
             result = await self.retriever.retrieve(
                 session,
                 _standalone_question(state),

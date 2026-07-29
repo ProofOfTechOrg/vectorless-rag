@@ -37,7 +37,7 @@ export UV_CACHE_DIR
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up rebuild dev dev-build dev-health down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
-	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-review evaluation-review-status evaluation-seed evaluation-run evaluation-freeze evaluation-execute evaluation-report \
+	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-review evaluation-review-status evaluation-seed evaluation-restart evaluation-run evaluation-freeze evaluation-execute evaluation-report \
 	secret-api-pepper secret-session secrets-langfuse
 
 help: ## Show all supported project commands.
@@ -253,11 +253,17 @@ evaluation-seed: ## Seed the reviewed PageIndex evaluation suite into Langfuse.
 	$(COMPOSE) exec -T api python scripts/seed_evaluation.py /dev/stdin \
 		--suite pageindex-v2 --corpus evaluation/pageindex-v2-corpus.json \
 		--name "$(DATASET_NAME)" < "$(DATASET)"
+evaluation-restart: ## Rebuild API and worker with the clean HEAD as the runtime release.
+	@test -z "$$(git status --porcelain)" || { echo "evaluation rebuild requires a clean worktree" >&2; exit 2; }
+	@release_sha="$$(git rev-parse HEAD)"; \
+		RELEASE="$$release_sha" $(COMPOSE) up -d --build --force-recreate api worker
 evaluation-run: ## Prepare a frozen PageIndex experiment (INDEX_HASH=…, MAX_COST=…).
 	@test -n "$(INDEX_HASH)" || { echo "INDEX_HASH=<sha256> is required" >&2; exit 2; }
 	@test -n "$(MAX_COST)" || { echo "MAX_COST=<usd> is required; it becomes the run's ceiling" >&2; exit 2; }
-	cd $(API_DIR) && $(UV) run python scripts/run_evaluation.py \
-		--index-hash "$(INDEX_HASH)" --max-cost-usd "$(MAX_COST)"
+	@release_sha="$$(git rev-parse HEAD)"; \
+		RELEASE="$$release_sha" $(UV) run --project $(API_DIR) \
+		python $(API_DIR)/scripts/run_evaluation.py \
+			--index-hash "$(INDEX_HASH)" --max-cost-usd "$(MAX_COST)"
 evaluation-freeze: ## Print the index digest for evaluation-run INDEX_HASH.
 	$(COMPOSE) exec -T api python scripts/freeze_index.py
 evaluation-execute: ## Execute prepared trials against DeepSeek (LIMIT=n, DRY_RUN=1).

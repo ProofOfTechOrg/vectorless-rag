@@ -6,17 +6,25 @@ import re
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
 import tiktoken
-from sqlalchemy import and_, case, func, literal, or_, select
+from sqlalchemy import Date, Text, and_, case, func, literal, or_, select, tuple_
+from sqlalchemy import cast as sql_cast
+from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vectorless_rag.config import Settings
 from vectorless_rag.llm import UNTRUSTED_DOCUMENT_SYSTEM, StructuredLLM, wrap_untrusted_document
-from vectorless_rag.models import Document, DocumentStatus, IndexVersion, ModelCallStage
+from vectorless_rag.models import (
+    Document,
+    DocumentMetadataVersion,
+    DocumentStatus,
+    IndexVersion,
+    ModelCallStage,
+)
 from vectorless_rag.pageindex_artifact import (
     DerivedNode,
     derive_nodes,
@@ -24,6 +32,7 @@ from vectorless_rag.pageindex_artifact import (
 )
 from vectorless_rag.schemas import (
     CandidateSelection,
+    DocumentMetadata,
     Evidence,
     MetadataConstraints,
     NodeChoice,
@@ -157,6 +166,7 @@ class Retriever(Protocol):
         restrict_ids: list[uuid.UUID] | None = None,
         *,
         evidence_token_budget: int | None = None,
+        index_version_ids: Mapping[uuid.UUID, uuid.UUID] | None = None,
     ) -> RetrievalResult: ...
 
 
@@ -172,21 +182,72 @@ class CorpusRouter:
         question: str,
         constraints: MetadataConstraints,
         restrict_ids: list[uuid.UUID] | None = None,
+        *,
+        index_version_ids: Mapping[uuid.UUID, uuid.UUID] | None = None,
     ) -> list[CandidateDocument]:
-        filters: list[Any] = [
-            Document.status == DocumentStatus.ready,
-            Document.active_index_version_id.is_not(None),
-        ]
+        filters: list[Any] = []
+        if index_version_ids is None:
+            filters.extend(
+                [
+                    Document.status == DocumentStatus.ready,
+                    Document.active_index_version_id.is_not(None),
+                ]
+            )
+            index_join = and_(
+                IndexVersion.id == Document.active_index_version_id,
+                IndexVersion.document_id == Document.id,
+            )
+            title = Document.title
+            abstract = Document.abstract
+            description = Document.description
+            topics = Document.topics
+            submitted_date = Document.submitted_date
+            search_vector = Document.search_vector
+            metadata_payload = literal(None)
+            metadata_page_count = literal(None)
+        else:
+            filters.append(
+                tuple_(Document.id, IndexVersion.id).in_(tuple(index_version_ids.items()))
+            )
+            index_join = IndexVersion.document_id == Document.id
+            metadata_payload = DocumentMetadataVersion.metadata_payload
+            metadata_page_count = DocumentMetadataVersion.page_count
+            title = metadata_payload["title"].astext
+            abstract = metadata_payload["abstract"].astext
+            description = metadata_payload["description"].astext
+            topics = metadata_payload["topics"]
+            submitted_date = sql_cast(
+                func.nullif(metadata_payload["submitted_date"].astext, ""),
+                Date,
+            )
+            search_vector = func.to_tsvector(
+                "english",
+                func.concat_ws(
+                    " ",
+                    title,
+                    abstract,
+                    description,
+                    sql_cast(topics, Text),
+                ),
+            )
         if constraints.arxiv_ids:
             filters.append(Document.arxiv_id.in_(constraints.arxiv_ids))
         if constraints.authors:
-            filters.append(Document.authors.overlap(constraints.authors))
+            filters.append(
+                Document.authors.overlap(constraints.authors)
+                if index_version_ids is None
+                else metadata_payload["authors"].op("?|")(array(constraints.authors))
+            )
         if constraints.topics:
-            filters.append(Document.topics.overlap(constraints.topics))
+            filters.append(
+                Document.topics.overlap(constraints.topics)
+                if index_version_ids is None
+                else topics.op("?|")(array(constraints.topics))
+            )
         if constraints.date_from:
-            filters.append(Document.submitted_date >= constraints.date_from)
+            filters.append(submitted_date >= constraints.date_from)
         if constraints.date_to:
-            filters.append(Document.submitted_date <= constraints.date_to)
+            filters.append(submitted_date <= constraints.date_to)
         if restrict_ids is not None:
             filters.append(Document.id.in_(restrict_ids))
 
@@ -196,63 +257,86 @@ class CorpusRouter:
         signal_query = (
             func.websearch_to_tsquery("english", " or ".join(tokens)) if tokens else strict_query
         )
-        rank = func.ts_rank_cd(Document.search_vector, signal_query)
-        strict_match = Document.search_vector.op("@@")(strict_query)
+        rank = func.ts_rank_cd(search_vector, signal_query)
+        strict_match = search_vector.op("@@")(strict_query)
         normalized_question = search_text.strip().casefold()
         exact = or_(
             func.lower(Document.arxiv_id) == normalized_question,
-            func.lower(Document.title) == normalized_question,
+            func.lower(title) == normalized_question,
         )
-        statement = (
-            select(
-                Document,
-                IndexVersion.pageindex_description,
-                IndexVersion.top_level_outline,
-                IndexVersion.manifest_sha256,
-                IndexVersion.artifact_sha256,
-                IndexVersion.configuration_hash,
-                rank.label("lexical_rank"),
-                strict_match.label("strict_match"),
-                exact.label("exact_match"),
-            )
-            .join(
-                IndexVersion,
+        statement = select(
+            Document,
+            IndexVersion.id,
+            IndexVersion.pageindex_description,
+            IndexVersion.top_level_outline,
+            IndexVersion.manifest_sha256,
+            IndexVersion.artifact_sha256,
+            IndexVersion.configuration_hash,
+            metadata_payload,
+            metadata_page_count,
+            rank.label("lexical_rank"),
+            strict_match.label("strict_match"),
+            exact.label("exact_match"),
+        ).join(IndexVersion, index_join)
+        if index_version_ids is not None:
+            statement = statement.join(
+                DocumentMetadataVersion,
                 and_(
-                    IndexVersion.id == Document.active_index_version_id,
-                    IndexVersion.document_id == Document.id,
+                    DocumentMetadataVersion.id == IndexVersion.metadata_version_id,
+                    DocumentMetadataVersion.document_id == Document.id,
                 ),
             )
-            .where(and_(*filters))
-            .order_by(
-                case((exact, 0), else_=1),
-                case((strict_match, 0), else_=1),
-                rank.desc(),
-                func.coalesce(Document.arxiv_id, literal("")),
-                Document.id,
-            )
+        statement = statement.where(and_(*filters)).order_by(
+            case((exact, 0), else_=1),
+            case((strict_match, 0), else_=1),
+            rank.desc(),
+            func.coalesce(Document.arxiv_id, literal("")),
+            Document.id,
         )
         rows = (await session.execute(statement)).all()
         result: list[CandidateDocument] = []
         for (
             document,
+            index_version_id,
             pageindex_description,
             top_level_outline,
             manifest_sha256,
             artifact_sha256,
             configuration_hash,
+            raw_metadata,
+            raw_metadata_page_count,
             raw_rank,
             raw_strict,
             raw_exact,
         ) in rows:
+            selected_document = document
+            if raw_metadata is not None:
+                frozen_metadata = DocumentMetadata.model_validate(raw_metadata)
+                selected_document = Document(
+                    id=document.id,
+                    sha256=document.sha256,
+                    arxiv_id=document.arxiv_id,
+                    original_filename=document.original_filename,
+                    pdf_object_key=document.pdf_object_key,
+                    title=frozen_metadata.title,
+                    authors=frozen_metadata.authors,
+                    abstract=frozen_metadata.abstract,
+                    description=frozen_metadata.description,
+                    topics=frozen_metadata.topics,
+                    submitted_date=frozen_metadata.submitted_date,
+                    status=DocumentStatus.ready,
+                    page_count=int(raw_metadata_page_count),
+                    active_index_version_id=index_version_id,
+                )
             result.append(
                 CandidateDocument(
-                    document=document,
+                    document=selected_document,
                     fts_match=bool(raw_strict),
                     lexical_rank=float(raw_rank or 0),
                     exact_match=bool(raw_exact),
                     description=pageindex_description
-                    or document.description
-                    or document.abstract
+                    or selected_document.description
+                    or selected_document.abstract
                     or "",
                     outline=list(top_level_outline or []),
                     index_digest=manifest_sha256 or artifact_sha256,
@@ -683,12 +767,22 @@ class PageIndexRetriever:
             children=tuple(child.node_id for child in node.children),
         )
 
-    async def _artifact(self, session: AsyncSession, document: Document) -> _ArtifactView:
-        if document.active_index_version_id is None:
+    async def _artifact(
+        self,
+        session: AsyncSession,
+        document: Document,
+        index_version_id: uuid.UUID | None = None,
+    ) -> _ArtifactView:
+        selected_version_id = index_version_id or document.active_index_version_id
+        if selected_version_id is None:
             raise ValueError(f"document {document.id} has no active index")
-        version = await session.get(IndexVersion, document.active_index_version_id)
+        version = await session.get(IndexVersion, selected_version_id)
         if version is None:
-            raise ValueError(f"active index {document.active_index_version_id} is missing")
+            raise ValueError(f"index {selected_version_id} is missing")
+        if version.document_id != document.id:
+            raise ValueError(
+                f"index {selected_version_id} does not belong to document {document.id}"
+            )
         if version.artifact_schema_version == 2:
             if version.manifest_object_key is None or version.manifest_sha256 is None:
                 raise ValueError("PageIndex v2 version has no manifest")
@@ -1081,10 +1175,18 @@ class PageIndexRetriever:
         documents: list[Document],
         *,
         evidence_token_budget: int | None = None,
+        index_version_ids: Mapping[uuid.UUID, uuid.UUID] | None = None,
     ) -> tuple[list[Evidence], bool, int, dict[str, object]]:
+        async def load(document: Document) -> _ArtifactView | dict[str, object]:
+            if index_version_ids is None:
+                return await self._artifact(session, document)
+            index_version_id = index_version_ids.get(document.id)
+            if index_version_id is None:
+                raise ValueError(f"document {document.id} has no pinned index")
+            return await self._artifact(session, document, index_version_id)
+
         artifacts = {
-            document.id: self._coerce_artifact(await self._artifact(session, document))
-            for document in documents
+            document.id: self._coerce_artifact(await load(document)) for document in documents
         }
         selected_nodes: list[_SelectedNode] = []
         used_nodes: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
@@ -1377,9 +1479,16 @@ class VectorlessRetriever:
         restrict_ids: list[uuid.UUID] | None = None,
         *,
         evidence_token_budget: int | None = None,
+        index_version_ids: Mapping[uuid.UUID, uuid.UUID] | None = None,
     ) -> RetrievalResult:
         started = time.monotonic()
-        candidates = await self.router.candidates(session, question, constraints, restrict_ids)
+        candidates = await self.router.candidates(
+            session,
+            question,
+            constraints,
+            restrict_ids,
+            index_version_ids=index_version_ids,
+        )
         selected = await self.router.select_ranked(question, candidates)
         selection_ms = round((time.monotonic() - started) * 1000)
         if not selected:
@@ -1398,6 +1507,7 @@ class VectorlessRetriever:
             question,
             documents,
             evidence_token_budget=evidence_token_budget,
+            index_version_ids=index_version_ids,
         )
         retrieval_ms = round((time.monotonic() - retrieval_started) * 1000)
         configuration_hashes = sorted(

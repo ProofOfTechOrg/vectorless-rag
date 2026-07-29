@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import date
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -358,9 +359,10 @@ class _CandidateSession:
     def __init__(self, rows: list[tuple[Any, ...]]) -> None:
         self.rows = rows
         self.execute_calls = 0
+        self.statement: object | None = None
 
     async def execute(self, statement: object) -> _CandidateRows:
-        del statement
+        self.statement = statement
         self.execute_calls += 1
         return _CandidateRows(self.rows)
 
@@ -382,11 +384,14 @@ async def test_catalog_query_returns_active_version_fields_without_followup_look
         [
             (
                 document,
+                version_id,
                 "indexed description",
                 [{"node_id": "root"}],
                 "a" * 64,
                 "b" * 64,
                 "c" * 64,
+                None,
+                None,
                 0.25,
                 True,
                 False,
@@ -406,6 +411,75 @@ async def test_catalog_query_returns_active_version_fields_without_followup_look
     assert candidates[0].description == "indexed description"
     assert candidates[0].index_digest == "a" * 64
     assert candidates[0].configuration_hash == "c" * 64
+
+
+async def test_pinned_catalog_query_uses_immutable_version_metadata() -> None:
+    document_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    document = Document(
+        id=document_id,
+        sha256="e" * 64,
+        arxiv_id="2401.00001",
+        original_filename="catalog.pdf",
+        pdf_object_key="pdf/catalog",
+        title="Mutable title",
+        authors=["Mutable Author"],
+        abstract="mutable abstract",
+        description="mutable description",
+        topics=["mutable"],
+        submitted_date=date(2026, 1, 1),
+        status=DocumentStatus.ready,
+        active_index_version_id=uuid.uuid4(),
+    )
+    frozen_metadata = {
+        "title": "Frozen title",
+        "authors": ["Frozen Author"],
+        "abstract": "frozen abstract",
+        "description": "frozen description",
+        "topics": ["frozen"],
+        "submitted_date": "2025-01-02",
+    }
+    session = _CandidateSession(
+        [
+            (
+                document,
+                version_id,
+                None,
+                [],
+                "a" * 64,
+                "b" * 64,
+                "c" * 64,
+                frozen_metadata,
+                12,
+                0.25,
+                True,
+                False,
+            )
+        ]
+    )
+    router = CorpusRouter(Settings(), UnusedLLM())
+
+    candidates = await router.candidates(
+        session,  # pyright: ignore[reportArgumentType]
+        "frozen",
+        MetadataConstraints(
+            authors=["Frozen Author"],
+            topics=["frozen"],
+            date_from=date(2025, 1, 1),
+        ),
+        index_version_ids={document_id: version_id},
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].document is not document
+    assert candidates[0].document.title == "Frozen title"
+    assert candidates[0].document.authors == ["Frozen Author"]
+    assert candidates[0].document.topics == ["frozen"]
+    assert candidates[0].document.submitted_date == date(2025, 1, 2)
+    assert candidates[0].document.active_index_version_id == version_id
+    assert candidates[0].description == "frozen description"
+    assert session.statement is not None
+    assert "document_metadata_versions" in str(session.statement)
 
 
 class TreeCaptureLLM:

@@ -33,6 +33,7 @@ from vectorless_rag.models import (
     ModelCallCostReservation,
     ModelCallStage,
 )
+from vectorless_rag.provider import DEEPSEEK_MAX_INPUT_TOKENS, DEEPSEEK_MAX_OUTPUT_TOKENS
 from vectorless_rag.retrieval import CorpusRouter
 from vectorless_rag.schemas import MetadataConstraints
 from vectorless_rag.sql_guard import PostgreSQLAdapter, validate_sql
@@ -669,7 +670,7 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                 dataset_hash, price_snapshot, repetitions, evidence_token_budget,
                 seed, maximum_cost_usd, frozen_at)
                VALUES (%s, 'budget-test', %s, %s, %s, %s, %s, %s::jsonb, 1, 6400,
-                       1, 0.001, now())""",
+                       1, 8, now())""",
             (
                 experiment_id,
                 "a" * 40,
@@ -682,7 +683,6 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                         "input_per_million_usd": 1,
                         "cache_hit_input_per_million_usd": 0.1,
                         "output_per_million_usd": 2,
-                        "max_output_tokens": 100,
                         "max_attempts": 3,
                     }
                 ),
@@ -707,7 +707,9 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
             "ingestion_attempt_id": attempt_id,
             "reservation_id": reservation_id,
             "logical_call_id": logical_call_id,
-            "prompt_bytes": 10,
+            "legacy_max_input_tokens": DEEPSEEK_MAX_INPUT_TOKENS,
+            "legacy_max_output_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
+            "legacy_query_max_attempts": 3,
         }
         row = connection.execute(RESERVE_MODEL_CALL_SQL, parameters).fetchone()
         assert row == (reservation_id,)
@@ -715,7 +717,7 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
             """SELECT reserved_cost_usd, status
                FROM agent.model_call_cost_reservations WHERE id = %s""",
             (reservation_id,),
-        ).fetchone() == (Decimal("0.000630"), "reserved")
+        ).fetchone() == (Decimal("5.304000"), "reserved")
 
         connection.execute("SAVEPOINT over_cap")
         with pytest.raises(psycopg.errors.RaiseException, match="experiment cost cap exceeded"):
@@ -725,7 +727,6 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                     **parameters,
                     "reservation_id": uuid.uuid4(),
                     "logical_call_id": uuid.uuid4(),
-                    "prompt_bytes": 1_000,
                 },
             ).fetchone()
         connection.execute("ROLLBACK TO SAVEPOINT over_cap")
@@ -752,4 +753,106 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                FROM agent.model_call_cost_reservations WHERE id = %s""",
             (reservation_id,),
         ).fetchone() == (Decimal("0.000020"), "finalized")
+        connection.rollback()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not OWNER_URL, reason="PostgreSQL owner URL not set")
+def test_query_experiment_reservations_are_non_null_capped_and_valid_only() -> None:
+    assert OWNER_URL is not None
+    owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
+    api_key_id = uuid.uuid4()
+    experiment_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    first_reservation_id = uuid.uuid4()
+    with psycopg.connect(owner_sync) as connection:
+        connection.execute(
+            """INSERT INTO agent.api_keys
+               (id, name, prefix, key_hash, scopes, disabled)
+               VALUES (%s, 'query-budget-test', %s, %s, '{}'::text[], true)""",
+            (api_key_id, f"t{api_key_id.hex[:8]}", api_key_id.hex + api_key_id.hex),
+        )
+        connection.execute(
+            """INSERT INTO agent.experiments
+               (id, name, release_sha, configuration_hash, corpus_hash, index_hash,
+                dataset_hash, price_snapshot, repetitions, evidence_token_budget,
+                seed, maximum_cost_usd, frozen_at)
+               VALUES (%s, 'query-budget-test', %s, %s, %s, %s, %s, %s::jsonb, 1, 6400,
+                       1, 8, now())""",
+            (
+                experiment_id,
+                "a" * 40,
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                "e" * 64,
+                json.dumps(
+                    {
+                        "input_per_million_usd": 1,
+                        "cache_hit_input_per_million_usd": 0.1,
+                        "output_per_million_usd": 2,
+                    }
+                ),
+            ),
+        )
+        connection.execute(
+            """INSERT INTO agent.query_runs
+               (id, trace_id, thread_id, api_key_id, question)
+               VALUES (%s, %s, 'query-budget-thread', %s, 'question')""",
+            (run_id, uuid.uuid4().hex, api_key_id),
+        )
+        connection.execute(
+            """INSERT INTO agent.experiment_memberships
+               (id, experiment_id, query_run_id, trial_key, repetition,
+                sequence_number, included)
+               VALUES (%s, %s, %s, %s, 1, 0, true)""",
+            (uuid.uuid4(), experiment_id, run_id, str(uuid.uuid4())),
+        )
+        parameters = {
+            "query_run_id": run_id,
+            "ingestion_attempt_id": None,
+            "reservation_id": first_reservation_id,
+            "logical_call_id": uuid.uuid4(),
+            "legacy_max_input_tokens": DEEPSEEK_MAX_INPUT_TOKENS,
+            "legacy_max_output_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
+            "legacy_query_max_attempts": 3,
+        }
+        assert connection.execute(RESERVE_MODEL_CALL_SQL, parameters).fetchone() == (
+            first_reservation_id,
+        )
+        assert connection.execute(
+            """SELECT reserved_cost_usd
+               FROM agent.model_call_cost_reservations WHERE id = %s""",
+            (first_reservation_id,),
+        ).fetchone() == (Decimal("5.304000"),)
+
+        connection.execute("SAVEPOINT over_cap")
+        with pytest.raises(psycopg.errors.RaiseException, match="experiment cost cap exceeded"):
+            connection.execute(
+                RESERVE_MODEL_CALL_SQL,
+                {
+                    **parameters,
+                    "reservation_id": uuid.uuid4(),
+                    "logical_call_id": uuid.uuid4(),
+                },
+            ).fetchone()
+        connection.execute("ROLLBACK TO SAVEPOINT over_cap")
+
+        connection.execute(
+            """UPDATE agent.experiments
+               SET valid = false, invalid_reason = 'test'
+               WHERE id = %s""",
+            (experiment_id,),
+        )
+        assert (
+            connection.execute(
+                RESERVE_MODEL_CALL_SQL,
+                {
+                    **parameters,
+                    "reservation_id": uuid.uuid4(),
+                    "logical_call_id": uuid.uuid4(),
+                },
+            ).fetchone()
+            is None
+        )
         connection.rollback()

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 from pathlib import Path
 
@@ -24,7 +23,11 @@ from sqlalchemy import select
 
 from vectorless_rag.config import get_settings
 from vectorless_rag.db import Database
-from vectorless_rag.evaluation_suite import load_corpus_manifest
+from vectorless_rag.evaluation_suite import (
+    frozen_index_sha256,
+    load_corpus_manifest,
+    validate_indexed_corpus,
+)
 from vectorless_rag.models import Document, DocumentStatus, IndexVersion
 
 
@@ -40,6 +43,7 @@ async def freeze(corpus: Path | None) -> dict[str, object]:
                         IndexVersion.artifact_sha256,
                         IndexVersion.configuration_hash,
                         IndexVersion.model_name,
+                        Document.sha256,
                     )
                     .join(IndexVersion, Document.active_index_version_id == IndexVersion.id)
                     .where(Document.status == DocumentStatus.ready)
@@ -52,24 +56,11 @@ async def freeze(corpus: Path | None) -> dict[str, object]:
     if not rows:
         raise SystemExit("no ready document carries an active index version; nothing to freeze")
 
-    # arxiv_id is nullable and carries no uniqueness constraint, so collapsing rows into a
-    # dict keyed by it would drop a digest and still produce a well-formed hash: a corpus
-    # that lost a document would freeze indistinguishably from a clean smaller one.
-    identifiers = [row[0] for row in rows]
-    ambiguous = sorted(
-        {str(name) for name in identifiers if name is None or identifiers.count(name) > 1}
-    )
-    if ambiguous:
-        raise SystemExit(
-            f"{len(ambiguous)} arXiv identifier(s) are missing or shared by several ready "
-            f"documents, so the digest would not identify the index: {ambiguous[:5]}"
-        )
+    try:
+        digest = frozen_index_sha256([(row[0], str(row[1])) for row in rows])
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     indexed = {str(row[0]): str(row[1]) for row in rows}
-    # Same construction as the corpus snapshot: sorted identifier and digest pairs, NUL
-    # separated so neither field can imitate the delimiter.
-    digest = hashlib.sha256(
-        "\n".join(f"{arxiv_id}\0{indexed[arxiv_id]}" for arxiv_id in sorted(indexed)).encode()
-    ).hexdigest()
 
     result: dict[str, object] = {
         "index_sha256": digest,
@@ -78,16 +69,17 @@ async def freeze(corpus: Path | None) -> dict[str, object]:
         "models": sorted({str(row[3]) for row in rows if row[3]}),
     }
     if corpus is not None:
-        required = {document.arxiv_id for document in load_corpus_manifest(corpus).documents}
-        absent = sorted(required - set(indexed))
+        corpus_manifest = load_corpus_manifest(corpus)
+        required = {document.arxiv_id for document in corpus_manifest.documents}
         result["corpus_manifest_documents"] = len(required)
-        if absent:
-            raise SystemExit(
-                json.dumps(
-                    {**result, "missing_from_index": absent, "error": "targets are not indexed"},
-                    indent=2,
-                )
+        try:
+            validate_indexed_corpus(
+                [(row[0], str(row[4])) for row in rows],
+                corpus_manifest,
             )
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
+        result["corpus_pdf_digests_verified"] = len(required)
     return result
 
 

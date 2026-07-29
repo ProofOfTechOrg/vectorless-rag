@@ -29,7 +29,11 @@ from vectorless_rag.models import (
     ModelCallCostReservation,
 )
 from vectorless_rag.pilot_suite import PilotDocument, load_pilot_manifest
-from vectorless_rag.provider import ProviderGate, provider_configuration_hash
+from vectorless_rag.provider import (
+    DEEPSEEK_MAX_INPUT_TOKENS,
+    ProviderGate,
+    provider_configuration_hash,
+)
 from vectorless_rag.storage import S3ObjectStore
 
 TERMINAL = {
@@ -108,6 +112,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
                     settings.pageindex_cache_hit_input_cost_per_million_usd
                 ),
                 "output_per_million_usd": settings.pageindex_output_cost_per_million_usd,
+                "max_input_tokens": DEEPSEEK_MAX_INPUT_TOKENS,
                 "max_output_tokens": settings.pageindex_max_output_tokens,
                 "max_attempts": settings.pageindex_llm_max_attempts,
             }

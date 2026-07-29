@@ -17,6 +17,7 @@ from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from vectorless_rag.db import driver_free_url
 from vectorless_rag.models import ModelCallOutcome, ModelCallStage
+from vectorless_rag.provider import DEEPSEEK_MAX_INPUT_TOKENS, DEEPSEEK_MAX_OUTPUT_TOKENS
 
 _SAFE_SCALAR = re.compile(r"^[a-zA-Z0-9_.:-]{1,128}$")
 _OWNER: ContextVar[UsageOwner | None] = ContextVar("model_call_owner", default=None)
@@ -44,6 +45,7 @@ class UsageOwner:
     trace_id: str
     query_run_id: uuid.UUID | None = None
     ingestion_attempt_id: uuid.UUID | None = None
+    require_cost_reservation: bool = False
 
     def __post_init__(self) -> None:
         if (self.query_run_id is None) == (self.ingestion_attempt_id is None):
@@ -283,20 +285,20 @@ class StartedModelCall:
 
 RESERVE_MODEL_CALL_SQL = """
 WITH owner_experiment AS (
-    SELECT j.experiment_id
+    SELECT j.experiment_id, 'ingestion' AS owner_kind
     FROM agent.ingestion_attempts a
     JOIN agent.ingestion_jobs j ON j.id = a.job_id
     WHERE a.id = %(ingestion_attempt_id)s::uuid
       AND j.experiment_id IS NOT NULL
     UNION ALL
-    SELECT m.experiment_id
+    SELECT m.experiment_id, 'query' AS owner_kind
     FROM agent.experiment_memberships m
     WHERE m.query_run_id = %(query_run_id)s::uuid
     ORDER BY 1
     LIMIT 1
 ),
 experiment AS (
-    SELECT e.*
+    SELECT e.*, o.owner_kind
     FROM agent.experiments e
     JOIN owner_experiment o ON o.experiment_id = e.id
     WHERE e.valid
@@ -312,17 +314,29 @@ inserted AS (
         round(
             (
                 (
-                    %(prompt_bytes)s
+                    coalesce(
+                        (e.price_snapshot->>'max_input_tokens')::numeric,
+                        -- Legacy DeepSeek snapshots predate explicit reservation bounds.
+                        %(legacy_max_input_tokens)s
+                    )
                     * greatest(
                         (e.price_snapshot->>'input_per_million_usd')::numeric,
                         (e.price_snapshot->>'cache_hit_input_per_million_usd')::numeric
                     )
-                    + (e.price_snapshot->>'max_output_tokens')::numeric
+                    + coalesce(
+                        (e.price_snapshot->>'max_output_tokens')::numeric,
+                        %(legacy_max_output_tokens)s
+                    )
                     * (e.price_snapshot->>'output_per_million_usd')::numeric
                 )
                 / 1000000
             )
-            * (e.price_snapshot->>'max_attempts')::numeric,
+            * coalesce(
+                (e.price_snapshot->>'max_attempts')::numeric,
+                CASE
+                    WHEN e.owner_kind = 'query' THEN %(legacy_query_max_attempts)s
+                END
+            ),
             6
         ),
         'reserved'
@@ -587,6 +601,22 @@ class ModelCallLedger:
             "cache_attribution_complete": usage.cache_attribution_complete,
         }
 
+    def _reservation_parameters(
+        self,
+        owner: UsageOwner,
+        reservation_id: uuid.UUID,
+        logical_call_id: uuid.UUID,
+    ) -> dict[str, object]:
+        return {
+            "query_run_id": owner.query_run_id,
+            "ingestion_attempt_id": owner.ingestion_attempt_id,
+            "reservation_id": reservation_id,
+            "logical_call_id": logical_call_id,
+            "legacy_max_input_tokens": DEEPSEEK_MAX_INPUT_TOKENS,
+            "legacy_max_output_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
+            "legacy_query_max_attempts": self.maximum_provider_attempts,
+        }
+
     def start(
         self,
         stage: ModelCallStage,
@@ -623,12 +653,10 @@ class ModelCallLedger:
             with self._pool.connection() as connection:
                 reservation = connection.execute(
                     RESERVE_MODEL_CALL_SQL,
-                    {
-                        **parameters,
-                        "reservation_id": reservation_id,
-                        "prompt_bytes": parameters["prompt_bytes"] or 0,
-                    },
+                    self._reservation_parameters(owner, reservation_id, logical_call_id),
                 ).fetchone()
+                if owner.require_cost_reservation and reservation is None:
+                    raise ExperimentBudgetExceeded
                 cost_reservation_id = (
                     uuid.UUID(str(reservation[0])) if reservation is not None else None
                 )
@@ -648,6 +676,8 @@ class ModelCallLedger:
         except Exception as error:
             if "experiment cost cap exceeded" in str(error):
                 raise ExperimentBudgetExceeded from error
+            if isinstance(error, ExperimentBudgetExceeded):
+                raise
             if isinstance(error, UsagePersistenceError):
                 raise
             raise UsagePersistenceError from error
@@ -692,13 +722,11 @@ class ModelCallLedger:
             async with self._async_pool.connection() as connection:
                 reservation_cursor = await connection.execute(
                     RESERVE_MODEL_CALL_SQL,
-                    {
-                        **parameters,
-                        "reservation_id": reservation_id,
-                        "prompt_bytes": parameters["prompt_bytes"] or 0,
-                    },
+                    self._reservation_parameters(owner, reservation_id, logical_call_id),
                 )
                 reservation = await reservation_cursor.fetchone()
+                if owner.require_cost_reservation and reservation is None:
+                    raise ExperimentBudgetExceeded
                 cost_reservation_id = (
                     uuid.UUID(str(reservation[0])) if reservation is not None else None
                 )
@@ -719,6 +747,8 @@ class ModelCallLedger:
         except Exception as error:
             if "experiment cost cap exceeded" in str(error):
                 raise ExperimentBudgetExceeded from error
+            if isinstance(error, ExperimentBudgetExceeded):
+                raise
             if isinstance(error, UsagePersistenceError):
                 raise
             raise UsagePersistenceError from error

@@ -4,8 +4,10 @@
 # Resume the PageIndex v2 evaluation
 
 State, decisions, and findings for the PageIndex v2 evaluation as of branch
-`fix/pageindex-evaluation-dataset` at `a6b30f0`. Written so the work can continue
-from the repository and this page alone.
+`fix/pageindex-evaluation-dataset`, written against base commit
+`f6bbd7240211bab5a36a38b40e3401480ec76204`. Written so the work can continue
+from the repository and this page alone. Reconfirm all anchors against the
+current checkout before editing.
 
 ## Where it stands
 
@@ -16,19 +18,20 @@ from the repository and this page alone.
 | Index recipe | 98 documents on `+vr5`, 6 on `+vr6` — deliberate, see below |
 | Trial executor | Written and gated; **never run against a live provider** |
 | Cost ceiling | Implemented; `make evaluation-run` now requires `MAX_COST` |
-| Branch | Ten commits ahead of `master`, no remote branch, not merged |
+| Branch | 19 commits ahead of `origin/master`, no remote branch, not merged |
 
 `make api-lint`, `make api-typecheck`, `make docs-check`, and `make compose-check`
-pass. The API suite is 380 passed, 6 skipped.
+pass. The provider-free API suite is 398 passed; the disposable PostgreSQL
+integration stack is 9 passed.
 
 ## Do this next
 
-The `api` container must be rebuilt before anything else: `compose.yaml` gained a
-bind mount for `apps/api/evaluation`, and the executor fixes are not in the running
-image.
+The `api` container must be rebuilt before anything else. Use
+`evaluation-restart`, which refuses a dirty worktree and gives the image and
+runtime the same clean-HEAD release recorded in the manifest.
 
 ```bash
-make restart-app
+make evaluation-restart
 make evaluation-freeze
 make evaluation-seed
 make evaluation-run INDEX_HASH=<index_sha256 from freeze> MAX_COST=25
@@ -251,7 +254,8 @@ Verify with `git apply --check` against a pristine copy, and bump `+vrN` in both
 
 ```bash
 make api-lint && make api-typecheck && make docs-check && make compose-check
-cd apps/api && uv run pytest          # expect 380 passed, 6 skipped
+cd apps/api && uv run pytest          # expect 398 passed, 9 skipped
+TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 9 passed
 make pageindex-patch-test PAGEINDEX_SOURCE=/opt/pageindex
 ```
 

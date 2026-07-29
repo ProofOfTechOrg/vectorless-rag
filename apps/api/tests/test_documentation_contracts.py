@@ -41,6 +41,16 @@ def test_operator_make_targets_pass_explicit_runtime_contracts() -> None:
     assert makefile.index('mkdir "$$output_dir"') < makefile.index(
         "$(COMPOSE) exec -T api python scripts/run_pageindex_pilot.py"
     )
+    assert 'RELEASE="$$release_sha" $(UV) run --project $(API_DIR) \\' in makefile
+    assert "python $(API_DIR)/scripts/run_evaluation.py \\" in makefile
+    assert (
+        'RELEASE="$$release_sha" $(COMPOSE) up -d --build --force-recreate api worker' in makefile
+    )
+    dockerfile = (ROOT / "apps/api/Dockerfile").read_text()
+    compose = (ROOT / "compose.yaml").read_text()
+    assert "ARG RELEASE=dev" in dockerfile
+    assert "RUN printf '%s\\n' \"$RELEASE\" > /app/.release" in dockerfile
+    assert "args:\n        RELEASE: ${RELEASE}" in compose
 
     dockerignore = (ROOT / "apps/api/.dockerignore").read_text().splitlines()
     assert "evaluation/run/" in dockerignore
