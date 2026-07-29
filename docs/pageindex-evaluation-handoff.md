@@ -1,13 +1,9 @@
 <!-- Content type: Reference -->
-<!-- Content plan: Goal: let a fresh maintainer resume the PageIndex v2 evaluation without redoing its investigation. Audience: maintainers continuing the evaluation. Content: current state, decisions with rationale, diagnosed failure classes, operating recipes, measured costs, and remaining steps. Open questions: whether the capped partial baseline is sufficient, whether to authorize a new higher-cap experiment, and how to score the claim-recall queue. -->
+<!-- Content plan: Goal: let a fresh maintainer resume the PageIndex v2 evaluation without redoing its investigation. Audience: maintainers continuing the evaluation. Content: current state, decisions with rationale, diagnosed failure classes, implemented corrections, operating recipes, measured costs, and remaining steps. Open questions: whether to retain the capped partial run only as historical evidence and who will score the claim-recall queue. -->
 
 # Resume the PageIndex v2 evaluation
 
-State, decisions, and findings for the PageIndex v2 evaluation as of branch
-`fix/pageindex-evaluation-dataset`, written against base commit
-`a870e20c6b4e562594108c2d2d87667ff3969f7e`. Written so the work can continue
-from the repository and this page alone. Reconfirm all anchors against the
-current checkout before editing.
+This reference records the PageIndex v2 evaluation state, the defects found in its capped run, and the corrected procedure. It covers branch `fix/pageindex-evaluation-dataset` with working-tree fixes based on commit `74016bbdf5d0ee0b77d735bc5c7a297b4341b6c2`. Reconfirm every anchor against the checkout before editing because the fixes described below are not committed at this baseline.
 
 ## Where it stands
 
@@ -16,42 +12,56 @@ current checkout before editing.
 | Evaluation dataset | 120/120 approved: 40 by `gcharang`, 80 automated structural reviews explicitly marked “not a human read”; `make evaluation-check` clean |
 | Corpus index | 104/104 documents indexed and ready |
 | Index recipe | 98 documents on `+vr5`, 6 on `+vr6` — deliberate, see below |
-| Trial executor | Bounded concurrency 4 verified live; maximum observed overlap 4 |
+| Trial executor | Historical bounded concurrency 4 verified live; compact parallel catalog routing now has provider-free coverage |
 | Current run | Stopped safely at its frozen $25 ceiling after 227/1,440 trials |
 | Partial report | 172 included, 55 excluded; claim recall not yet scored |
-| Branch | No remote branch; 23 commits ahead of refreshed `origin/master` after this handoff update |
+| Corrected trial plan | 1,080 trials; removes 360 duplicate graph executions |
+| Corrected cost control | Request-bounded reservations and terminal unknown-attempt reconciliation at schema head `0006_bound_cost_reservations` |
+| Branch | No remote branch; 23 commits ahead of refreshed `origin/master`, plus the uncommitted fixes described here |
 
 `make api-lint`, `make api-typecheck`, `make docs-check`, and `make compose-check`
-pass. The provider-free API suite is 409 passed; the disposable PostgreSQL
-integration stack is 10 passed.
+pass. The provider-free API suite is 426 passed, 12 skipped; the disposable
+PostgreSQL integration stack is 12 passed.
 
 ## Do this next
 
-The `$25` experiment is complete **as a capped partial run**, not as the full
-1,440-trial baseline. Re-running `make evaluation-execute` may consume small
-amounts of headroom released when the last in-flight calls finalized, but it
-cannot make this a complete run and will add more cap-denied trials. Do not do
-that by default.
+The `$25` experiment remains a valid capped partial run, not a complete baseline. Do not resume it: its 1,440-trial plan, runtime release, and accounting protocol are frozen.
 
-1. Decide whether 172 included trials are enough for a partial regression
-   diagnostic. Do not present them as a complete baseline.
-2. If a complete 1,440-trial baseline is required, explicitly authorize a new,
-   higher-cap experiment. The existing manifest and database ceiling are
-   immutable; a new experiment repeats earlier trials rather than continuing
-   their spend under a different ceiling. At the observed conservative exposure
-   rate, a full run projects to roughly `$155`
-   (`$24.290311 / 226 provider-active trials × 1,440 = $154.77`; moderate
-   confidence because the capped prefix is not a guarantee of the remaining
-   mix).
-3. If `answer_claim_recall` is required, score the 35 entries in
-   `apps/api/evaluation/run/judge-queue.jsonl`. No scorer/writer exists yet; add
-   and review one before editing `scores.jsonl`.
-4. Preserve the Git-ignored run directory and the experiment rows before
-   preparing another manifest. `make evaluation-report` reproduces the current
-   partial report in `apps/api/evaluation/run/summary.json`.
+No budget increase is justified by this run. The retired `$155` projection extrapolated conservative cap exposure, not provider spend. That exposure included `$23.051574` held by 54 uncertain calls, each reserved as three attempts at the frozen 1 million input-token and 8,192 output-token limits. It also included a trial plan with 360 duplicate graph executions.
+
+Continue in this order:
+
+1. Review and commit the working-tree fixes, rebuild the application, and migrate PostgreSQL to `0006_bound_cost_reservations`.
+2. Preserve `apps/api/evaluation/run` as the historical run for experiment `09471839-de04-4f94-97aa-a34e31b86509`.
+3. Create a new 1,080-trial experiment with the same `$25` ceiling. Do not raise the ceiling unless the corrected run reaches it and the database audit shows legitimate measured or request-bounded exposure.
+4. Run `make evaluation-execute DRY_RUN=1`, then a small `LIMIT=12` live canary before continuing the experiment. The dry run validates identity and index bindings but does not estimate cost.
+5. Score answer claims with `make evaluation-judge REVIEWER=your_reviewer_name_here`, then rebuild `summary.json` with `make evaluation-report`.
 
 Concurrency is part of the frozen configuration hash. Execution defaults to the
 manifest value and rejects a different `CONCURRENCY` override.
+
+## Defects corrected after the capped run
+
+The capped run and the independent clean-code, architecture, and QA passes
+exposed the defects below. The working tree fixes each root cause and retains
+historical read compatibility.
+
+| Defect | Evidence from the capped run | Correction |
+| --- | --- | --- |
+| Full-catalog routing was serial and failed batches leaked sibling tasks | A 104-document catalog generated one model call per document; 44 trials reached the exact 180s request deadline after 4 to 13 completed calls | Pack up to 32 compact catalog entries per map call, run map and reduction batches concurrently, and cancel plus join every sibling when any batch fails |
+| Malformed HTTP-200 responses did not retry on both provider call paths | Ten document-selection calls returned HTTP 200 without valid structured output and were classified `provider_rejected` | Classify `openai.APIResponseValidationError` as retryable `upstream_invalid_response`, and use that shared classification in both the application LLM and PageIndex runtime retry loops |
+| An older successful call could erase a newer provider-blocking failure | Completion success unconditionally persisted `available`, even if another in-flight call or worker had since observed an authentication, permission, or credit failure | Completion success no longer changes provider availability; only a fresh status or balance observation can clear a hard failure |
+| Reservations used frozen maximum bounds | The old ledger reserved 1 million input tokens plus 8,192 output tokens for all three attempts, independent of request size | Persist immutable per-call input, output, and attempt bounds; derive the input-token bound from serialized UTF-8 bytes plus a 4,096-byte request-wrapper allowance |
+| An experiment-attached call could proceed without a reservation | The ledger treated “no experiment” and “attached experiment rejected by validity or bounds” as the same empty SQL result when reservation enforcement was optional | Return a rejection sentinel for an attached experiment that cannot reserve, and stop the call before inserting model-call telemetry regardless of the caller’s optional-reservation flag |
+| Terminal uncertain calls retained unused attempts | One missing usage record kept the entire three-attempt reservation | On terminal reconciliation, retain measured usage plus one per-request bound for each attempt whose usage is unknown |
+| Reservation-to-call relationships were application-only invariants | The schema allowed a call to reuse an attempt number, exceed its reserved attempt limit, use another logical call ID, attach to an owner outside the reservation’s experiment, or mutate reservation/owner identity after validation | Audit historical rows during migration, add a unique reserved-attempt constraint, validate logical ID, attempt bound, and experiment ownership in a database trigger, and make reservation identity/bounds plus attempted-job experiment bindings immutable |
+| Two experiment kinds executed the same graph | `corpus_routing` and `forced_route_end_to_end` used identical `GraphRunOptions`; only their score extraction differed | Stop generating `corpus_routing` trials, reducing new plans from 1,440 to 1,080; keep the literal only for historical manifests |
+| Claim recall had no writer | The current run has 35 durable queue entries and no claim scores | Add a strict, idempotent judgment ledger and atomic score updater in `judge_evaluation.py` |
+| Claim judgments could target a changed answer, and scoring could overwrite a newly appended score | Judgment identity covered the trial, item, and claims but not the answer; atomic replacement serialized only within the scoring process | Bind each judgment to the queued answer’s SHA-256 and use one filesystem lock for executor appends, judgment writes, and score rewrites |
+| A crash could duplicate or tear a claim queue entry | The executor wrote the judge queue before the score resume ledger, so recovery could append the same queue item again | Validate queue items and replace the queue atomically; treat an identical trial item as already written and reject conflicting content |
+| Artifact coverage and reuse identity omitted Python-layer behavior | Internal direct-range gaps appeared covered, and Python artifact-builder changes altered neither the configuration hash nor the reuse key | Recurse over direct page ranges and include `ARTIFACT_BUILDER_VERSION` in both the configuration hash and artifact reuse key |
+
+No live provider call or re-index has run against these corrections. The full API suite, migration render, and disposable PostgreSQL integration suite pass.
 
 ## Current capped parallel run
 
@@ -91,9 +101,10 @@ Coverage is uneven because this is a capped prefix:
 
 The partial report contains retrieval and refusal metrics, but
 `answer_claim_recall` has count zero because its 35 answerable end-to-end
-results are only queued for judging. The exact 180-second deadline and
-HTTP-200 structured-response rejection remain the only provider failure
-classes; the parallel scheduler introduced no new failure class.
+results await judgment. Run `make evaluation-judge-status` to check progress.
+The exact 180s deadline and HTTP-200 structured-response rejection were the
+only provider failure classes; the parallel scheduler introduced no new
+failure class.
 
 ## Retired sequential run
 
@@ -221,21 +232,17 @@ reproducible, not flaky.
 
 ## What changes artifact identity
 
-`configuration_hash` digests only `generator_commit` (the `<sha>+vrN` literal in
-`config.py`) and `patch_sha256` (a digest of the patch file). `recipe_hash` wraps
-that with the document and metadata digests. **The Python artifact layer is not
-hashed**, and nothing re-derives either value on load — `artifact_ops.py` never
-references them.
+`configuration_hash` now digests `ARTIFACT_BUILDER_VERSION`, `generator_commit`, `patch_sha256`, the model, prompt profile, options profile, parser, and parser version. `recipe_hash` wraps that configuration with the document and metadata digests.
 
-- Python-layer fixes (`pageindex_artifact.py`, `pageindex_adapter.py`, …) change
-  no identity and force no re-index.
-- Any byte change to `apps/api/patches/pageindex-runtime.patch` shifts
-  `patch_sha256`, so newly built documents take a new hash. Existing artifacts
-  still load; they are nominally different, not invalidated.
+- Bump `ARTIFACT_BUILDER_VERSION` when Python artifact construction or normalization changes output semantics
+- Bump the `+vrN` suffix in `generator_commit` when vendored PageIndex runtime behavior changes
+- Expect any byte change to `apps/api/patches/pageindex-runtime.patch` to change `patch_sha256`
 
-This distinction decided real work: two of the eight stuck documents were fixed in
-Python for nothing, and the six needing the vendored runtime cost only their own
-rebuild rather than the whole corpus.
+Existing artifacts still load because validation checks their stored digests.
+The active frozen index therefore remains usable for this evaluation without a
+re-index. A future `ensure_current` build intentionally does not reuse an older
+artifact when its builder version differs, because that artifact was produced
+under different Python construction semantics.
 
 ## Costs, measured
 
@@ -245,10 +252,10 @@ rebuild rather than the whole corpus.
 - The corpus is 2,350 pages across 104 documents, so a full re-index is roughly
   **$4–5 and two hours** at four worker replicas.
 - **Current trials: $1.241899 measured telemetry over 1,203 model calls; the
-  cap charges $1.238737 finalized measured plus $23.051574 held, or
-  $24.290311 total exposure over 227 durable trials.** Failed provider calls
-  often lack final token telemetry, so 54 `review_required` calls retain their
-  worst-case reservation. Measured spend alone is not a safe projection.
+  old cap protocol charges $1.238737 finalized measured plus $23.051574 held,
+  or $24.290311 total exposure over 227 durable trials.** This is historical
+  evidence, not a forecast for the corrected protocol. Fifty-four
+  `review_required` calls retain frozen maximum-bound reservations.
 - **Retired sequential trials: $0.766011 measured plus $7.683858 held over 80
   durable trials.** Those rows remain invalid with reason
   `replaced_by_parallel_execution` and do not count against the current
@@ -266,7 +273,9 @@ reporting path:
 | Resume ledger, bounded workers, durable terminalization | `apps/api/scripts/execute_evaluation.py` |
 | Provider-call reservation and reconciliation | `apps/api/src/vectorless_rag/usage.py` |
 | Database-authoritative cap trigger | `apps/api/alembic/versions/0005_measurement_experiments.py` |
+| Request-bound reservation schema and call invariants | `apps/api/alembic/versions/0006_bound_cost_reservations.py` |
 | Partial/full aggregate report | `apps/api/scripts/report_evaluation.py` |
+| Claim judgment and atomic score update | `apps/api/scripts/judge_evaluation.py` |
 | Active-index and corpus digest verification | `apps/api/scripts/freeze_index.py` |
 | Operator entry points | Root `Makefile`, targets prefixed `evaluation-` |
 
@@ -335,26 +344,26 @@ Verify with `git apply --check` against a pristine copy, and bump `+vrN` in both
 
 ## Deliberately not done
 
-- `corpus_routing` and `forced_route_end_to_end` produce identical
-  `GraphRunOptions`, so 360 of 1,440 trials duplicate another 360 and differ only
-  in what is scored from the result. Redundant rather than wrong; about $4.
-- `covered_pages` overstates coverage on widened trees, because
-  `_unmapped_ranges` works from root subtree spans and cannot see a gap inside a
-  widened subtree. Inert: nothing reads that counter, and retrieval uses
-  `subtree_page_range`.
 - `unmapped_pages` is 0 for every document because each final section's range
   extends to the document end, so references and appendices sit inside the last
-  node and can be retrieved as evidence for a final-section hit. Pre-existing and
-  corpus-wide, not introduced by `+vr6`.
-- `direct_page_ranges`, `widened_nodes`, and `widened_pages` have no consumers.
-  They are built, digested, and revalidated on load, but never read.
+  node and can be retrieved as evidence for a final-section hit. The builder
+  cannot infer a semantically correct section boundary from the current model
+  output, so changing this would invent structure.
+- `widened_nodes` and `widened_pages` have no consumers. They are built,
+  digested, and revalidated on load, but never read. `direct_page_ranges` now
+  drives recursive unmapped-page accounting.
+- Historical `corpus_routing` trials remain valid to parse and report. Only new
+  plan generation excludes that duplicate experiment kind.
+- The current 104-document index was not rebuilt. The coverage fix changes
+  artifact metrics and identity for future builds, not retrieval from stored
+  artifacts.
 
 ## Verification
 
 ```bash
 make api-lint && make api-typecheck && make docs-check && make compose-check
-cd apps/api && uv run pytest          # expect 409 passed, 10 skipped
-TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 10 passed
+make api-test                         # expect 426 passed, 12 skipped
+TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 12 passed
 make pageindex-patch-test PAGEINDEX_SOURCE=/opt/pageindex
 ```
 
@@ -364,10 +373,86 @@ PageIndex v2 regression baseline, and it is visible to future vector development
 
 ## Appendix: current-state anchors
 
-The snippets below—and any line numbers derived from them—are as of base
-`a870e20c6b4e562594108c2d2d87667ff3969f7e`. Always read the symbol again before
-editing. These anchors are the evidence for the edit targets and invariants
-described above.
+The snippets below, and any line numbers derived from them, are from the working tree based on `74016bbdf5d0ee0b77d735bc5c7a297b4341b6c2`. Always read the symbol again before editing. These anchors record the corrected edit targets and invariants.
+
+### New plans exclude the duplicate graph execution
+
+`apps/api/src/vectorless_rag/evaluation_suite.py`, `EXPERIMENT_KINDS`:
+
+```python
+EXPERIMENT_KINDS = (
+    "route",
+    "oracle_document_retrieval",
+    "forced_route_end_to_end",
+)
+```
+
+`EvaluationTrial.experiment_kind` still accepts `corpus_routing`, so the current 1,440-trial manifest remains readable. `build_trials` iterates only `EXPERIMENT_KINDS`, so a one-repetition plan now contains 1,080 trials.
+
+### Catalog routing uses compact concurrent batches
+
+`apps/api/src/vectorless_rag/retrieval.py`, `CorpusRouter._batches` and `select_ranked`:
+
+```python
+maximum_batch_size = self.settings.document_limit * 4
+```
+
+```python
+mapped = [
+    item
+    for batch_result in await _gather_or_cancel(
+        [
+            self._select_batch(
+                question,
+                batch,
+                phase="map",
+                selection_limit=self.settings.document_limit,
+            )
+            for batch in self._batches(candidates)
+        ]
+    )
+    for item in batch_result
+]
+```
+
+The regression test binds the current 104-document catalog to batch sizes `32,
+32, 32, 8` and blocks each map task until all four have started. Reduction
+batches use the same concurrent pattern. `_gather_or_cancel` cancels and awaits
+every sibling before re-raising a batch failure; a separate regression proves
+no sibling is left running.
+
+### HTTP-200 validation failures retry
+
+`apps/api/src/vectorless_rag/provider.py`, `classify_provider_failure`:
+
+```python
+if isinstance(error, openai.APIResponseValidationError):
+    return ProviderFailure("upstream_invalid_response", True, status, False)
+```
+
+This branch precedes generic HTTP status classification, so a malformed
+successful response does not become deterministic `provider_rejected`.
+`PageIndexRuntime._retryable` delegates to this classification after its
+PageIndex-specific cases, so sync and async PageIndex calls follow the same
+policy.
+
+### Provider-blocking failures are sticky
+
+`apps/api/src/vectorless_rag/provider.py`, `ProviderGate.status`:
+
+```python
+if available:
+    self._clear_hard_failure()
+    return await self.persist_observation(
+        session,
+        state,
+        ProviderAvailability.available,
+```
+
+The LLM and PageIndex completion paths have no success-state mutation. Their
+regressions inject a hard failure while a provider callback is in flight, then
+return a successful response and prove the failure remains. Only a successful
+fresh status/balance probe calls `_clear_hard_failure`.
 
 ### Frozen identity includes concurrency and cost
 
@@ -410,7 +495,7 @@ The current local `manifest.json` pins schema 2, experiment
 `09471839-de04-4f94-97aa-a34e31b86509`, concurrency 4, cost `$25`, and release
 `a870e20c6b4e562594108c2d2d87667ff3969f7e`.
 
-### The coordinator is bounded and is the only ledger writer
+### The coordinator is bounded and is the only trial-result appender
 
 `apps/api/scripts/execute_evaluation.py`, `execute_pending_trials`:
 
@@ -438,7 +523,9 @@ if not budget_exhausted:
 
 Each `Executor` owns one checkpointer and gets one database session per task.
 Completed results buffer by frozen position, and a cap-denied result prevents
-new scheduling while admitted work drains.
+new scheduling while admitted work drains. The executor, judgment recorder, and
+claim-score updater all hold `evaluation_ledger_lock(run)` around ledger
+mutations.
 
 ### Cancellation terminalizes any durable running row
 
@@ -488,26 +575,131 @@ END IF;
 across two connections and proves exactly one reservation fits a one-reservation
 cap.
 
-### Claim recall has a queue but no scorer
+### Reservations bind the admitted request
+
+`apps/api/src/vectorless_rag/usage.py`, `provider_input_token_limit`:
+
+```python
+def provider_input_token_limit(payload: str | bytes) -> int:
+    encoded = payload.encode() if isinstance(payload, str) else payload
+    return min(
+        DEEPSEEK_MAX_INPUT_TOKENS,
+        max(1, len(encoded) + PROVIDER_REQUEST_BYTE_OVERHEAD),
+    )
+```
+
+`RESERVE_MODEL_CALL_SQL` stores that input limit, the configured output limit,
+and the retry limit on the reservation. Reusing a logical call with different
+bounds raises `UsagePersistenceError`. A call attached to an invalid experiment
+or incompatible reservation returns a rejection sentinel, so ingestion cannot
+silently continue unreserved. Terminal reconciliation uses measured usage where
+available and retains one immutable per-attempt bound for each attempt without
+usage. Reserved and measured costs round upward to the schema’s micro-dollar
+precision, so quantization cannot understate cap exposure.
+
+Schema head `0006_bound_cost_reservations` backfills historical rows from their
+experiment snapshots. It does not rewrite historical `reserved_cost_usd`,
+status, or measured cost. Snapshot limits are validated as positive integral
+JSON numbers and cast through `numeric`, which accepts the actual frozen
+representation (`1000000.0`, `8192.0`, and `3.0`). The migration refuses
+inconsistent historical rows. Snapshots without those keys retain the
+historical provider-limit fallbacks (`1000000`, `384000`, and `3`); that legacy
+case is separate from the current experiment’s explicit `8192.0` output limit.
+The migration then adds a unique
+`(cost_reservation_id, provider_attempt)` constraint and a trigger that enforces
+the reservation’s logical call, attempt bound, and experiment owner. Separate
+triggers make reservation identity and bounds immutable and prevent changing an
+ingestion job’s experiment after its first attempt.
+
+`apps/api/alembic/versions/0006_bound_cost_reservations.py`,
+`agent.cost_reservation_identity_immutable` and
+`agent.ingestion_job_experiment_immutable`:
+
+```sql
+IF NEW.experiment_id IS DISTINCT FROM OLD.experiment_id
+   OR NEW.logical_call_id IS DISTINCT FROM OLD.logical_call_id
+   OR NEW.input_token_limit IS DISTINCT FROM OLD.input_token_limit
+   OR NEW.output_token_limit IS DISTINCT FROM OLD.output_token_limit
+   OR NEW.attempt_limit IS DISTINCT FROM OLD.attempt_limit THEN
+  RAISE EXCEPTION 'cost reservation identity and bounds are immutable';
+END IF;
+```
+
+```sql
+IF NEW.experiment_id IS DISTINCT FROM OLD.experiment_id
+   AND EXISTS (
+     SELECT 1 FROM agent.ingestion_attempts a WHERE a.job_id = OLD.id
+   ) THEN
+  RAISE EXCEPTION
+    'ingestion job experiment binding is immutable after its first attempt';
+END IF;
+```
+
+### Claim recall has a strict scorer
 
 `apps/api/scripts/execute_evaluation.py`, `Executor.score_terminal_run`:
 
 ```python
 if trial.experiment_kind == "forced_route_end_to_end" and case.answerable:
-    judge = {
-        "trial_id": str(trial.trial_id),
-        "item_id": str(case.item_id),
-        "claims": [claim.claim for claim in case.atomic_claims],
-        "answer": run.answer or "",
-    }
+    judge = ClaimJudgeItem(
+        trial_id=trial.trial_id,
+        item_id=case.item_id,
+        claims=[claim.claim for claim in case.atomic_claims],
+        answer=run.answer or "",
+    )
 ```
 
-`report_evaluation.py` reads `answer_claim_recall` from `scores.jsonl`; no
-current script consumes `judge-queue.jsonl` or writes that field. A future
-scorer must join by `trial_id`, validate one result per queued trial, and update
-the resume ledger atomically.
+`apps/api/scripts/judge_evaluation.py`, `_apply_judgments_unlocked`:
 
-### A higher ceiling requires a new experiment
+```python
+if judgment.item_id != item.item_id or judgment.claims != item.claims:
+    raise ValueError(f"claim judgment does not match queued content: {trial_id}")
+if judgment.answer_sha256 != item.answer_sha256:
+    raise ValueError(f"claim judgment does not match queued answer: {trial_id}")
+score = scores_by_trial.get(trial_id)
+if score is None:
+    raise ValueError(f"claim judgment has no durable score: {trial_id}")
+```
+
+The script rejects duplicate or stale trial data, records reviewer provenance in `claim-judgments.jsonl`, and atomically rewrites `scores.jsonl`. Reapplying the same judgments is idempotent.
+
+`ClaimJudgment.answer_sha256` must match `ClaimJudgeItem.answer_sha256`, so a
+judgment cannot be replayed against changed answer text. `record_judgment` and
+`append_trial_result` both hold `evaluation_ledger_lock(run)` across their full
+read-modify-write sequence; the concurrency regression pauses a score rewrite,
+attempts an executor append, and proves both records survive.
+
+### Artifact identity includes Python builder behavior
+
+`apps/api/src/vectorless_rag/pageindex_artifact.py`, `build_manifest_v2`:
+
+```python
+configuration = {
+    "artifact_builder_version": ARTIFACT_BUILDER_VERSION,
+    "generator_commit": generator_commit,
+    "patch_sha256": patch_sha256,
+    "model": model,
+```
+
+`apps/api/src/vectorless_rag/pageindex_adapter.py`, `artifact_version_key`:
+
+```python
+value = "\0".join(
+    (
+        pdf_sha256,
+        pageindex_version,
+        prompt_version,
+        model_name,
+        artifact_builder_version,
+    )
+)
+```
+
+`_unmapped_ranges` now collects every node’s `direct_page_ranges` recursively.
+It no longer treats a widened parent-to-child span as direct coverage. The
+builder version participates in both the manifest configuration and reuse key.
+
+### The corrected run requires a new experiment
 
 Current immutable state:
 
@@ -516,17 +708,20 @@ experiment_id = 09471839-de04-4f94-97aa-a34e31b86509
 maximum_cost_usd = 25.000000
 ```
 
-Target transition, only after explicit authorization:
+Target transition after committing, rebuilding, and migrating the corrections:
 
 ```bash
 test ! -e /tmp/pageindex-evaluation-run-09471839
 mv apps/api/evaluation/run /tmp/pageindex-evaluation-run-09471839
 make evaluation-run \
   INDEX_HASH=ae4a7407c9ec07b60ce580a2e547c4ebd3d40ecae7e4cb3f0bc0f76346a4ca5a \
-  MAX_COST=<new-authorized-ceiling> CONCURRENCY=4
+  MAX_COST=25 CONCURRENCY=4
+make evaluation-execute DRY_RUN=1
+make evaluation-execute LIMIT=12
 ```
 
 That command must create a new experiment UUID and clean manifest. Do not edit
 the existing JSON or `agent.experiments.maximum_cost_usd`: either mutation
 breaks the frozen-protocol claim. Rejected alternatives are raising the current
-row in place and copying old scores into a differently bounded experiment.
+row in place and copying old scores into a differently bounded experiment. Keep
+the `$25` ceiling unless corrected-run evidence proves it is insufficient.

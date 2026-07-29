@@ -35,6 +35,7 @@ from vectorless_rag.usage import (
     ModelCallLedger,
     UsagePersistenceError,
     normalize_token_usage,
+    provider_input_token_limit,
 )
 
 FORMAT_CORRECTION = (
@@ -334,7 +335,10 @@ class PageIndexRuntime:
                 "pageindex_insufficient_system_resource",
                 "pageindex_truncated_response",
             }
-        return _provider_error_code(error) == "insufficient_system_resource"
+        return (
+            classify_provider_failure(error).retryable
+            or _provider_error_code(error) == "insufficient_system_resource"
+        )
 
     @staticmethod
     def _safe_error(error: Exception, attempt: int) -> PageIndexLLMError:
@@ -385,6 +389,12 @@ class PageIndexRuntime:
         last_error: PageIndexLLMError | None = None
         logical_call_id = uuid.uuid4()
         retry_delay_ms: int | None = None
+        reservation_prompt = json.dumps(
+            self._messages(prompt + FORMAT_CORRECTION, chat_history),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        input_token_limit = provider_input_token_limit(reservation_prompt)
         for attempt in range(1, self.settings.pageindex_llm_max_attempts + 1):
             if self.provider_gate.hard_failure is not None:
                 raise PageIndexLLMError(
@@ -405,6 +415,8 @@ class PageIndexRuntime:
                 release=self.settings.release,
                 configuration_hash=provider_configuration_hash(self.settings),
                 retry_delay_ms=retry_delay_ms,
+                input_token_limit=input_token_limit,
+                output_token_limit=self.settings.pageindex_max_output_tokens,
             )
             observation = self.observability.generation(
                 "pageindex-completion", provider_model, serialized_prompt, attempt=attempt
@@ -426,7 +438,6 @@ class PageIndexRuntime:
                     expect_json=expect_json,
                     allow_length=return_finish_reason,
                 )
-                self.provider_gate.observe_completion_success()
                 normalized_usage = normalize_token_usage(usage)
                 try:
                     self.ledger.finish(
@@ -499,6 +510,12 @@ class PageIndexRuntime:
         last_error: PageIndexLLMError | None = None
         logical_call_id = uuid.uuid4()
         retry_delay_ms: int | None = None
+        reservation_prompt = json.dumps(
+            self._messages(prompt + FORMAT_CORRECTION, None),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        input_token_limit = provider_input_token_limit(reservation_prompt)
         for attempt in range(1, self.settings.pageindex_llm_max_attempts + 1):
             if self.provider_gate.hard_failure is not None:
                 raise PageIndexLLMError(
@@ -519,6 +536,8 @@ class PageIndexRuntime:
                 release=self.settings.release,
                 configuration_hash=provider_configuration_hash(self.settings),
                 retry_delay_ms=retry_delay_ms,
+                input_token_limit=input_token_limit,
+                output_token_limit=self.settings.pageindex_max_output_tokens,
             )
             observation = self.observability.generation(
                 "pageindex-completion", provider_model, serialized_prompt, attempt=attempt
@@ -541,7 +560,6 @@ class PageIndexRuntime:
                     expect_json=expect_json,
                     allow_length=False,
                 )
-                self.provider_gate.observe_completion_success()
                 normalized_usage = normalize_token_usage(usage)
                 try:
                     await self.ledger.afinish(

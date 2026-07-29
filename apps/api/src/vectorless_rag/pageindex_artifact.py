@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from vectorless_rag.storage import ObjectStore
 
 ARTIFACT_SCHEMA_VERSION = 2
+ARTIFACT_BUILDER_VERSION = "pageindex-artifact-v2.1"
 PAGE_SHARD_SIZE = 8
 MAX_TREE_DEPTH = 64
 MAX_TREE_NODES = 20_000
@@ -346,9 +347,14 @@ def _normalize_nodes(
 
 def _unmapped_ranges(tree: list[PageIndexNodeV2], page_count: int) -> list[PageRange]:
     covered: set[int] = set()
-    for node in tree:
-        page_range = node.subtree_page_range
-        covered.update(range(page_range.page_start, page_range.page_end + 1))
+
+    def collect(nodes: list[PageIndexNodeV2]) -> None:
+        for node in nodes:
+            for page_range in node.direct_page_ranges:
+                covered.update(range(page_range.page_start, page_range.page_end + 1))
+            collect(node.children)
+
+    collect(tree)
     missing = [page for page in range(1, page_count + 1) if page not in covered]
     if not missing:
         return []
@@ -516,6 +522,7 @@ def build_manifest_v2(
     references, page_objects, totals = _page_shards(pages)
     metadata_sha256 = configuration_digest(metadata)
     configuration = {
+        "artifact_builder_version": ARTIFACT_BUILDER_VERSION,
         "generator_commit": generator_commit,
         "patch_sha256": patch_sha256,
         "model": model,

@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import httpx
+import openai
 from langchain_core.messages import AIMessage
 from pydantic import SecretStr
 from pytest import MonkeyPatch, raises
@@ -33,6 +35,9 @@ class _Runnable:
         self.calls["provider_invocations"] = int(self.calls.get("provider_invocations", 0)) + 1
         self.calls["messages"] = messages
         self.calls["config"] = config
+        before_response = self.calls.get("before_response")
+        if callable(before_response):
+            before_response()
         parsed = RouteDecision(
             route=RunRoute.sql,
             reason="catalog inventory",
@@ -100,6 +105,12 @@ class _Ledger:
         events.append(("finished", call, outcome, finish_reason, usage))
 
 
+class _StatusError(RuntimeError):
+    def __init__(self, status_code: int) -> None:
+        super().__init__("private provider body")
+        self.status_code = status_code
+
+
 async def test_thinking_structured_output_uses_json_mode(monkeypatch: MonkeyPatch) -> None:
     llm = DeepSeekLLM(Settings(deepseek_api_key=SecretStr("test-key")))
     calls: dict[str, Any] = {}
@@ -124,6 +135,32 @@ async def test_thinking_structured_output_uses_json_mode(monkeypatch: MonkeyPatc
     system_message = calls["messages"][0][1]
     assert "JSON Schema" in system_message
     assert "standalone_question" in system_message
+
+
+async def test_success_does_not_clear_hard_failure_observed_inflight(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    llm = DeepSeekLLM(Settings(deepseek_api_key=SecretStr("test-key")))
+    calls: dict[str, Any] = {
+        "before_response": lambda: llm.provider_gate.observe_completion_failure(_StatusError(402))
+    }
+
+    def client(thinking: bool, max_output_tokens: int | None = None) -> _Client:
+        del thinking, max_output_tokens
+        return _Client(calls)
+
+    monkeypatch.setattr(llm, "_client", client)
+
+    await llm._invoke(  # pyright: ignore[reportPrivateUsage]
+        RouteDecision,
+        "Route this request.",
+        "paper titles",
+        thinking=False,
+        stage=ModelCallStage.query_route,
+    )
+
+    assert llm.provider_gate.hard_failure is not None
+    assert llm.provider_gate.hard_failure.code == "insufficient_credit"
 
 
 async def test_non_thinking_structured_output_keeps_function_calling(
@@ -215,6 +252,46 @@ async def test_per_call_output_cap_is_preserved_across_retries(
     )
 
     assert calls == [(1, 4_096), (2, 4_096)]
+
+
+async def test_http_200_response_validation_failure_is_retried(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    llm = DeepSeekLLM(Settings(deepseek_api_key=SecretStr("test-key")))
+    attempts: list[int] = []
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    response = httpx.Response(200, request=request)
+
+    async def invoke(*args: object, attempt: int = 1, **kwargs: object) -> RouteDecision:
+        del args, kwargs
+        attempts.append(attempt)
+        if attempt == 1:
+            raise openai.APIResponseValidationError(
+                response=response,
+                body={"invalid": True},
+            )
+        return RouteDecision(
+            route=RunRoute.sql,
+            reason="catalog inventory",
+            standalone_question="List every paper title",
+        )
+
+    async def no_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(llm, "_invoke", invoke)
+    monkeypatch.setattr(llm_module.asyncio, "sleep", no_sleep)
+
+    result = await llm.structured(
+        RouteDecision,
+        "system",
+        "user",
+        thinking=False,
+        stage=ModelCallStage.query_route,
+    )
+
+    assert result.route == RunRoute.sql
+    assert attempts == [1, 2]
 
 
 async def test_usage_row_starts_before_provider_and_same_row_is_finalized(

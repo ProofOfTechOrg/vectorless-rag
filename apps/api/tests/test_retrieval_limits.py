@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from datetime import date
@@ -321,6 +322,121 @@ async def test_every_catalog_batch_is_exactly_bounded_and_covers_every_candidate
     assert all(len(payload) >= 2 for payload in reduce_payloads)
     assert all("outline" not in item for payload in reduce_payloads for item in payload)
     assert any("&lt;document_data>" in wrapped for _, wrapped, _ in llm.calls)
+
+
+async def test_full_catalog_uses_compact_parallel_map_batches() -> None:
+    candidates = [_candidate(index, fts_match=False) for index in range(104)]
+    router = CorpusRouter(Settings(), CatalogCaptureLLM())
+    batches = router._batches(candidates)  # pyright: ignore[reportPrivateUsage]
+    started = 0
+    all_started = asyncio.Event()
+
+    class ParallelMapLLM(CatalogCaptureLLM):
+        async def structured(
+            self,
+            schema: type[StructuredT],
+            system: str,
+            user: str,
+            *,
+            thinking: bool,
+            stage: ModelCallStage,
+            max_output_tokens: int | None = None,
+        ) -> StructuredT:
+            nonlocal started
+            if "Catalog map batch" in user:
+                started += 1
+                if started == len(batches):
+                    all_started.set()
+                await asyncio.wait_for(all_started.wait(), timeout=1)
+            return await super().structured(
+                schema,
+                system,
+                user,
+                thinking=thinking,
+                stage=stage,
+                max_output_tokens=max_output_tokens,
+            )
+
+    llm = ParallelMapLLM()
+    router = CorpusRouter(Settings(), llm)
+
+    selected = await router.select_ranked("question", candidates)
+
+    assert [len(batch.candidates) for batch in batches] == [32, 32, 32, 8]
+    assert started == 4
+    assert len(selected) == 8
+
+
+async def test_catalog_batch_failure_cancels_and_joins_siblings() -> None:
+    candidates = [_candidate(index, fts_match=False) for index in range(104)]
+    started = 0
+    cancelled = 0
+    all_started = asyncio.Event()
+    never = asyncio.Event()
+    failed_document_id = str(candidates[0].document.id)
+
+    class FailingMapLLM(CatalogCaptureLLM):
+        async def structured(
+            self,
+            schema: type[StructuredT],
+            system: str,
+            user: str,
+            *,
+            thinking: bool,
+            stage: ModelCallStage,
+            max_output_tokens: int | None = None,
+        ) -> StructuredT:
+            del system, thinking, stage, max_output_tokens
+            nonlocal started, cancelled
+            if schema is not CandidateSelection or "Catalog map batch" not in user:
+                raise AssertionError("expected only catalog map calls")
+            started += 1
+            if started == 4:
+                all_started.set()
+            await asyncio.wait_for(all_started.wait(), timeout=1)
+            _, payload_text = _wrapped_payload(user)
+            document_ids = [item["id"] for item in json.loads(payload_text)]
+            if failed_document_id in document_ids:
+                raise RuntimeError("map failed")
+            try:
+                await never.wait()
+            except asyncio.CancelledError:
+                cancelled += 1
+                raise
+            raise AssertionError("sibling map call was not cancelled")
+
+    router = CorpusRouter(Settings(), FailingMapLLM())
+
+    with raises(RuntimeError, match="map failed"):
+        await router.select_ranked("question", candidates)
+
+    assert started == 4
+    assert cancelled == 3
+
+
+def test_catalog_batch_search_reuses_one_token_cache_per_window(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    router = CorpusRouter(Settings(), CatalogCaptureLLM())
+    candidates = [_candidate(index, fts_match=False) for index in range(40)]
+    caches: list[dict[str, list[int]]] = []
+    map_payload = router._map_payload  # pyright: ignore[reportPrivateUsage]
+
+    def capture_cache(
+        candidate: CandidateDocument,
+        *,
+        detail: int,
+        cache: dict[str, list[int]],
+    ) -> dict[str, object]:
+        caches.append(cache)
+        return map_payload(candidate, detail=detail, cache=cache)
+
+    monkeypatch.setattr(router, "_map_payload", capture_cache)
+
+    router._batches(candidates)  # pyright: ignore[reportPrivateUsage]
+
+    assert caches
+    assert len({id(cache) for cache in caches}) == 2
 
 
 async def test_catalog_cap_too_small_for_comparison_fails_without_first_n_fallback() -> None:

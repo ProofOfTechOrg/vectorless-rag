@@ -21,6 +21,7 @@ from vectorless_rag.provider import DEEPSEEK_MAX_INPUT_TOKENS, DEEPSEEK_MAX_OUTP
 
 _SAFE_SCALAR = re.compile(r"^[a-zA-Z0-9_.:-]{1,128}$")
 _OWNER: ContextVar[UsageOwner | None] = ContextVar("model_call_owner", default=None)
+PROVIDER_REQUEST_BYTE_OVERHEAD = 4_096
 
 
 class UsagePersistenceError(RuntimeError):
@@ -65,6 +66,14 @@ def usage_context(owner: UsageOwner) -> Generator[None]:
 
 def current_usage_owner() -> UsageOwner | None:
     return _OWNER.get()
+
+
+def provider_input_token_limit(payload: str | bytes) -> int:
+    encoded = payload.encode() if isinstance(payload, str) else payload
+    return min(
+        DEEPSEEK_MAX_INPUT_TOKENS,
+        max(1, len(encoded) + PROVIDER_REQUEST_BYTE_OVERHEAD),
+    )
 
 
 def ingestion_owner_from_environment() -> UsageOwner | None:
@@ -305,56 +314,68 @@ experiment AS (
 ),
 inserted AS (
     INSERT INTO agent.model_call_cost_reservations (
-        id, experiment_id, logical_call_id, reserved_cost_usd, status
+        id, experiment_id, logical_call_id, reserved_cost_usd,
+        input_token_limit, output_token_limit, attempt_limit, status
     )
     SELECT
         %(reservation_id)s::uuid,
         e.id,
         %(logical_call_id)s::uuid,
-        round(
+        ceil(
             (
-                (
-                    coalesce(
-                        (e.price_snapshot->>'max_input_tokens')::numeric,
-                        -- Legacy DeepSeek snapshots predate explicit reservation bounds.
-                        %(legacy_max_input_tokens)s
-                    )
-                    * greatest(
-                        (e.price_snapshot->>'input_per_million_usd')::numeric,
-                        (e.price_snapshot->>'cache_hit_input_per_million_usd')::numeric
-                    )
-                    + coalesce(
-                        (e.price_snapshot->>'max_output_tokens')::numeric,
-                        %(legacy_max_output_tokens)s
-                    )
-                    * (e.price_snapshot->>'output_per_million_usd')::numeric
+                %(input_token_limit)s
+                * greatest(
+                    (e.price_snapshot->>'input_per_million_usd')::numeric,
+                    (e.price_snapshot->>'cache_hit_input_per_million_usd')::numeric
                 )
-                / 1000000
+                + %(output_token_limit)s
+                * (e.price_snapshot->>'output_per_million_usd')::numeric
             )
-            * coalesce(
-                (e.price_snapshot->>'max_attempts')::numeric,
-                CASE
-                    WHEN e.owner_kind = 'query' THEN %(legacy_query_max_attempts)s
-                END
-            ),
-            6
-        ),
+            * %(attempt_limit)s
+        ) / 1000000,
+        %(input_token_limit)s,
+        %(output_token_limit)s,
+        %(attempt_limit)s,
         'reserved'
     FROM experiment e
-    WHERE NOT EXISTS (
+    WHERE %(input_token_limit)s > 0
+      AND %(output_token_limit)s > 0
+      AND %(attempt_limit)s > 0
+      AND %(input_token_limit)s <= coalesce(
+        (e.price_snapshot->>'max_input_tokens')::numeric,
+        %(legacy_max_input_tokens)s
+      )
+      AND %(output_token_limit)s <= coalesce(
+        (e.price_snapshot->>'max_output_tokens')::numeric,
+        %(legacy_max_output_tokens)s
+      )
+      AND %(attempt_limit)s <= coalesce(
+        (e.price_snapshot->>'max_attempts')::numeric,
+        CASE
+            WHEN e.owner_kind = 'query' THEN %(legacy_query_max_attempts)s
+        END
+      )
+      AND NOT EXISTS (
         SELECT 1
         FROM agent.model_call_cost_reservations r
         WHERE r.experiment_id = e.id
           AND r.logical_call_id = %(logical_call_id)s::uuid
     )
-    RETURNING id
+    RETURNING id, input_token_limit, output_token_limit, attempt_limit
+),
+resolved AS (
+    SELECT id, input_token_limit, output_token_limit, attempt_limit FROM inserted
+    UNION ALL
+    SELECT r.id, r.input_token_limit, r.output_token_limit, r.attempt_limit
+    FROM agent.model_call_cost_reservations r
+    JOIN experiment e ON e.id = r.experiment_id
+    WHERE r.logical_call_id = %(logical_call_id)s::uuid
 )
-SELECT id FROM inserted
+SELECT id, input_token_limit, output_token_limit, attempt_limit FROM resolved
 UNION ALL
-SELECT r.id
-FROM agent.model_call_cost_reservations r
-JOIN experiment e ON e.id = r.experiment_id
-WHERE r.logical_call_id = %(logical_call_id)s::uuid
+SELECT NULL::uuid, NULL::bigint, NULL::integer, NULL::integer
+FROM owner_experiment
+WHERE NOT EXISTS (SELECT 1 FROM resolved)
 LIMIT 1
 """
 
@@ -421,6 +442,15 @@ RECONCILE_MODEL_CALL_RESERVATION_SQL = """
 WITH measured AS (
     SELECT
         r.id,
+        (
+            r.input_token_limit
+            * greatest(
+                (e.price_snapshot->>'input_per_million_usd')::numeric,
+                (e.price_snapshot->>'cache_hit_input_per_million_usd')::numeric
+            )
+            + r.output_token_limit
+            * (e.price_snapshot->>'output_per_million_usd')::numeric
+        ) / 1000000 AS per_attempt_cost_limit,
         sum(
             (
                 coalesce(c.cache_hit_input_tokens, 0)
@@ -434,15 +464,43 @@ WITH measured AS (
                 * (e.price_snapshot->>'output_per_million_usd')::numeric
             ) / 1000000
         ) FILTER (WHERE c.usage_available) AS measured_cost,
-        bool_and(c.usage_available) FILTER (WHERE c.outcome <> 'started') AS usage_complete
+        bool_and(c.usage_available) FILTER (WHERE c.outcome <> 'started') AS usage_complete,
+        count(*) FILTER (
+            WHERE c.outcome <> 'started' AND NOT c.usage_available
+        ) AS unknown_attempts
     FROM agent.model_call_cost_reservations r
     JOIN agent.experiments e ON e.id = r.experiment_id
     LEFT JOIN agent.model_calls c ON c.cost_reservation_id = r.id
     WHERE r.id = %(cost_reservation_id)s::uuid
-    GROUP BY r.id
+    GROUP BY r.id, e.price_snapshot
+    HAVING coalesce(
+        bool_and(
+            c.id IS NULL
+            OR (
+                c.logical_call_id = r.logical_call_id
+                AND c.provider_attempt BETWEEN 1 AND r.attempt_limit
+            )
+        ),
+        true
+    )
+    AND count(c.id) = count(DISTINCT c.provider_attempt)
 )
 UPDATE agent.model_call_cost_reservations r
-SET measured_cost_usd = measured.measured_cost,
+SET measured_cost_usd = CASE
+        WHEN measured.measured_cost IS NULL THEN NULL
+        ELSE ceil(measured.measured_cost * 1000000) / 1000000
+    END,
+    reserved_cost_usd = CASE
+        WHEN %(terminal)s AND NOT coalesce(measured.usage_complete, false)
+        THEN ceil(
+            (
+                coalesce(measured.measured_cost, 0)
+                + measured.unknown_attempts * measured.per_attempt_cost_limit
+            )
+            * 1000000
+        ) / 1000000
+        ELSE r.reserved_cost_usd
+    END,
     status = CASE
         WHEN NOT %(terminal)s THEN 'reserved'
         WHEN coalesce(measured.usage_complete, false) THEN 'finalized'
@@ -451,6 +509,7 @@ SET measured_cost_usd = measured.measured_cost,
     updated_at = now()
 FROM measured
 WHERE r.id = measured.id
+RETURNING r.id
 """
 
 _SYNC_POOLS: dict[str, ConnectionPool[psycopg.Connection[tuple[object, ...]]]] = {}
@@ -606,12 +665,24 @@ class ModelCallLedger:
         owner: UsageOwner,
         reservation_id: uuid.UUID,
         logical_call_id: uuid.UUID,
+        input_token_limit: int,
+        output_token_limit: int,
     ) -> dict[str, object]:
+        if (
+            input_token_limit < 1
+            or input_token_limit > DEEPSEEK_MAX_INPUT_TOKENS
+            or output_token_limit < 1
+            or output_token_limit > DEEPSEEK_MAX_OUTPUT_TOKENS
+        ):
+            raise UsagePersistenceError
         return {
             "query_run_id": owner.query_run_id,
             "ingestion_attempt_id": owner.ingestion_attempt_id,
             "reservation_id": reservation_id,
             "logical_call_id": logical_call_id,
+            "input_token_limit": input_token_limit,
+            "output_token_limit": output_token_limit,
+            "attempt_limit": self.maximum_provider_attempts,
             "legacy_max_input_tokens": DEEPSEEK_MAX_INPUT_TOKENS,
             "legacy_max_output_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
             "legacy_query_max_attempts": self.maximum_provider_attempts,
@@ -629,7 +700,11 @@ class ModelCallLedger:
         release: str | None = None,
         configuration_hash: str | None = None,
         retry_delay_ms: int | None = None,
+        input_token_limit: int,
+        output_token_limit: int,
     ) -> StartedModelCall | None:
+        if provider_attempt > self.maximum_provider_attempts:
+            raise UsagePersistenceError
         owner = _OWNER.get()
         if owner is None:
             return None
@@ -653,10 +728,24 @@ class ModelCallLedger:
             with self._pool.connection() as connection:
                 reservation = connection.execute(
                     RESERVE_MODEL_CALL_SQL,
-                    self._reservation_parameters(owner, reservation_id, logical_call_id),
+                    self._reservation_parameters(
+                        owner,
+                        reservation_id,
+                        logical_call_id,
+                        input_token_limit,
+                        output_token_limit,
+                    ),
                 ).fetchone()
                 if owner.require_cost_reservation and reservation is None:
                     raise ExperimentBudgetExceeded
+                if reservation is not None and reservation[0] is None:
+                    raise ExperimentBudgetExceeded
+                if reservation is not None and tuple(reservation[1:]) != (
+                    input_token_limit,
+                    output_token_limit,
+                    self.maximum_provider_attempts,
+                ):
+                    raise UsagePersistenceError
                 cost_reservation_id = (
                     uuid.UUID(str(reservation[0])) if reservation is not None else None
                 )
@@ -695,7 +784,11 @@ class ModelCallLedger:
         release: str | None = None,
         configuration_hash: str | None = None,
         retry_delay_ms: int | None = None,
+        input_token_limit: int,
+        output_token_limit: int,
     ) -> StartedModelCall | None:
+        if provider_attempt > self.maximum_provider_attempts:
+            raise UsagePersistenceError
         owner = _OWNER.get()
         if owner is None:
             return None
@@ -722,11 +815,25 @@ class ModelCallLedger:
             async with self._async_pool.connection() as connection:
                 reservation_cursor = await connection.execute(
                     RESERVE_MODEL_CALL_SQL,
-                    self._reservation_parameters(owner, reservation_id, logical_call_id),
+                    self._reservation_parameters(
+                        owner,
+                        reservation_id,
+                        logical_call_id,
+                        input_token_limit,
+                        output_token_limit,
+                    ),
                 )
                 reservation = await reservation_cursor.fetchone()
                 if owner.require_cost_reservation and reservation is None:
                     raise ExperimentBudgetExceeded
+                if reservation is not None and reservation[0] is None:
+                    raise ExperimentBudgetExceeded
+                if reservation is not None and tuple(reservation[1:]) != (
+                    input_token_limit,
+                    output_token_limit,
+                    self.maximum_provider_attempts,
+                ):
+                    raise UsagePersistenceError
                 cost_reservation_id = (
                     uuid.UUID(str(reservation[0])) if reservation is not None else None
                 )
@@ -790,7 +897,7 @@ class ModelCallLedger:
                     if cursor.rowcount != 1:
                         raise UsagePersistenceError
                     if call.cost_reservation_id is not None:
-                        connection.execute(
+                        reconciled = connection.execute(
                             RECONCILE_MODEL_CALL_RESERVATION_SQL,
                             {
                                 "cost_reservation_id": call.cost_reservation_id,
@@ -805,7 +912,9 @@ class ModelCallLedger:
                                     or call.provider_attempt >= self.maximum_provider_attempts
                                 ),
                             },
-                        )
+                        ).fetchone()
+                        if reconciled is None:
+                            raise UsagePersistenceError
                 return
             except UsagePersistenceError:
                 raise
@@ -854,7 +963,7 @@ class ModelCallLedger:
                     if cursor.rowcount != 1:
                         raise UsagePersistenceError
                     if call.cost_reservation_id is not None:
-                        await connection.execute(
+                        reconcile_cursor = await connection.execute(
                             RECONCILE_MODEL_CALL_RESERVATION_SQL,
                             {
                                 "cost_reservation_id": call.cost_reservation_id,
@@ -870,6 +979,8 @@ class ModelCallLedger:
                                 ),
                             },
                         )
+                        if await reconcile_cursor.fetchone() is None:
+                            raise UsagePersistenceError
                 return
             except UsagePersistenceError:
                 raise

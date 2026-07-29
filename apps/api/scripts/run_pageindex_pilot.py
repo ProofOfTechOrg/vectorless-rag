@@ -91,7 +91,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     try:
         async with database.session() as session:
             schema_revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-            if schema_revision != "0005_measurement_experiments":
+            if schema_revision != "0006_bound_cost_reservations":
                 raise RuntimeError("database is not at the frozen measurement schema head")
             active_jobs = (
                 await session.scalar(

@@ -7,10 +7,12 @@ from typing import Any
 import pytest
 
 from vectorless_rag.pageindex_artifact import (
+    ARTIFACT_BUILDER_VERSION,
     ArtifactValidationError,
     PageIndexBuildV2,
     PageRange,
     build_manifest_v2,
+    configuration_digest,
     derive_nodes,
     load_manifest_v2,
     normalize_tree_v2,
@@ -96,6 +98,23 @@ def test_recipe_hash_changes_when_prompt_profile_changes() -> None:
     assert first.manifest.configuration_hash != second.manifest.configuration_hash
 
 
+def test_artifact_builder_implementation_is_part_of_recipe_identity() -> None:
+    build = _build()
+
+    assert build.manifest.configuration_hash == configuration_digest(
+        {
+            "artifact_builder_version": ARTIFACT_BUILDER_VERSION,
+            "generator_commit": "190f8b",
+            "patch_sha256": "b" * 64,
+            "model": "provider/model",
+            "prompt_profile": "pageindex-v2",
+            "options_profile": {"toc": "auto"},
+            "parser": "pymupdf",
+            "parser_version": "1",
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -178,9 +197,8 @@ def test_backward_child_underflow_is_rejected() -> None:
 
 
 async def test_gap_between_declared_range_and_child_stays_inside_subtree() -> None:
-    # Declared 2-3 with a child at 7-9: the widened subtree bridges the gap, pages
-    # 4-6 belong to no direct range but stay retrievable through the subtree window,
-    # and only pages outside every root subtree count as unmapped.
+    # Declared 2-3 with a child at 7-9: the widened subtree bridges the gap for retrieval,
+    # but pages 4-6 still belong to no generated node and remain explicitly discoverable.
     tree = copy.deepcopy(_tree())
     root = tree["structure"][0]
     root.update({"start_index": 2, "end_index": 3})
@@ -190,8 +208,8 @@ async def test_gap_between_declared_range_and_child_stays_inside_subtree() -> No
     assert root_node.subtree_page_range == PageRange(page_start=2, page_end=9)
     assert root_node.direct_page_ranges == [PageRange(page_start=2, page_end=3)]
     assert root_node.children[0].direct_page_ranges == [PageRange(page_start=7, page_end=9)]
-    assert normalized.unmapped_pages == 2  # pages 1 and 10 only
-    assert normalized.node_count == 4  # two real nodes plus two synthetic unmapped ranges
+    assert normalized.unmapped_pages == 5  # pages 1, 4-6, and 10
+    assert normalized.node_count == 5  # two real nodes plus three synthetic unmapped ranges
     assert (normalized.widened_nodes, normalized.widened_pages) == (1, 6)
 
     build = _build(tree=tree)

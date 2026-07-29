@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import tempfile
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -30,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vectorless_rag.config import Settings, get_settings
 from vectorless_rag.db import Database, driver_free_url, make_engine
 from vectorless_rag.evaluation_suite import (
+    ClaimJudgeItem,
     EvaluationCase,
     EvaluationCorpusManifest,
     EvaluationScore,
@@ -37,6 +39,7 @@ from vectorless_rag.evaluation_suite import (
     FrozenEvaluationManifest,
     build_trials,
     evaluation_configuration_sha256,
+    evaluation_ledger_lock,
     evaluation_price_snapshot,
     file_sha256,
     frozen_index_sha256,
@@ -224,7 +227,7 @@ class Executor:
         session: AsyncSession,
         case: EvaluationCase,
         trial: EvaluationTrial,
-    ) -> tuple[EvaluationScore, dict[str, Any] | None]:
+    ) -> tuple[EvaluationScore, ClaimJudgeItem | None]:
         run_id = trial_run_id(self.experiment_id, trial.trial_id)
         lifecycle_started = time.monotonic()
         try:
@@ -262,7 +265,7 @@ class Executor:
         session: AsyncSession,
         case: EvaluationCase,
         trial: EvaluationTrial,
-    ) -> tuple[EvaluationScore, dict[str, Any] | None]:
+    ) -> tuple[EvaluationScore, ClaimJudgeItem | None]:
         oracle = tuple(
             self.documents[target.arxiv_id]
             for target in case.target_documents
@@ -346,7 +349,7 @@ class Executor:
         case: EvaluationCase,
         trial: EvaluationTrial,
         run: QueryRun,
-    ) -> tuple[EvaluationScore, dict[str, Any] | None]:
+    ) -> tuple[EvaluationScore, ClaimJudgeItem | None]:
         if query_run_status(run) == QueryRunStatus.failed:
             return (
                 EvaluationScore(
@@ -392,29 +395,71 @@ class Executor:
         )
         judge = None
         if trial.experiment_kind == "forced_route_end_to_end" and case.answerable:
-            judge = {
-                "trial_id": str(trial.trial_id),
-                "item_id": str(case.item_id),
-                "claims": [claim.claim for claim in case.atomic_claims],
-                "answer": run.answer or "",
-            }
+            judge = ClaimJudgeItem(
+                trial_id=trial.trial_id,
+                item_id=case.item_id,
+                claims=[claim.claim for claim in case.atomic_claims],
+                answer=run.answer or "",
+            )
         return score, judge
+
+
+def append_judge_item(path: Path, judge: ClaimJudgeItem) -> None:
+    items: list[ClaimJudgeItem] = []
+    if path.exists():
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(),
+            1,
+        ):
+            if not line.strip():
+                continue
+            try:
+                item = ClaimJudgeItem.model_validate_json(line)
+            except ValueError as error:
+                raise SystemExit(f"{path.name}:{line_number}: {error}") from error
+            if item.trial_id == judge.trial_id:
+                if item != judge:
+                    raise SystemExit(
+                        f"{path.name} has conflicting content for trial {judge.trial_id}"
+                    )
+                return
+            items.append(item)
+    items.append(judge)
+    mode = path.stat().st_mode & 0o777 if path.exists() else None
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            for item in items:
+                handle.write(item.model_dump_json() + "\n")
+        if mode is not None:
+            temporary.chmod(mode)
+        temporary.replace(path)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def append_trial_result(
     scores_path: Path,
     judge_path: Path,
     score: EvaluationScore,
-    judge: dict[str, Any] | None,
+    judge: ClaimJudgeItem | None,
 ) -> None:
     # The judge entry is written first because scores.jsonl is the resume ledger: a crash
     # between the two writes leaves the trial pending and reconstructs it from the terminal
     # QueryRun. The reverse order loses claim-recall input for a trial already marked done.
-    if judge is not None:
-        with judge_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(judge, ensure_ascii=False) + "\n")
-    with scores_path.open("a", encoding="utf-8") as handle:
-        handle.write(score.model_dump_json() + "\n")
+    with evaluation_ledger_lock(scores_path.parent):
+        if judge is not None:
+            append_judge_item(judge_path, judge)
+        with scores_path.open("a", encoding="utf-8") as handle:
+            handle.write(score.model_dump_json() + "\n")
 
 
 async def execute_pending_trials(
@@ -436,17 +481,17 @@ async def execute_pending_trials(
     async def execute_one(
         executor: Executor,
         trial: EvaluationTrial,
-    ) -> tuple[EvaluationScore, dict[str, Any] | None]:
+    ) -> tuple[EvaluationScore, ClaimJudgeItem | None]:
         async with database.session() as session:
             return await executor.execute(session, cases[trial.item_id], trial)
 
     inflight: dict[
-        asyncio.Task[tuple[EvaluationScore, dict[str, Any] | None]],
+        asyncio.Task[tuple[EvaluationScore, ClaimJudgeItem | None]],
         tuple[int, Executor],
     ] = {}
     completed: dict[
         int,
-        tuple[EvaluationTrial, EvaluationScore, dict[str, Any] | None],
+        tuple[EvaluationTrial, EvaluationScore, ClaimJudgeItem | None],
     ] = {}
     next_to_schedule = 0
     next_to_write = 0

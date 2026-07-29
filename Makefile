@@ -37,7 +37,7 @@ export UV_CACHE_DIR
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up rebuild dev dev-build dev-health down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
-	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-review evaluation-review-status evaluation-seed evaluation-restart evaluation-run evaluation-freeze evaluation-execute evaluation-report \
+	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-review evaluation-review-status evaluation-seed evaluation-restart evaluation-run evaluation-freeze evaluation-execute evaluation-judge evaluation-judge-status evaluation-report \
 	secret-api-pepper secret-session secrets-langfuse
 
 help: ## Show all supported project commands.
@@ -269,6 +269,12 @@ evaluation-freeze: ## Print the index digest for evaluation-run INDEX_HASH.
 evaluation-execute: ## Execute prepared trials against DeepSeek (LIMIT=n, DRY_RUN=1).
 	$(COMPOSE) exec -T --user "$$(id -u):$$(id -g)" api python scripts/execute_evaluation.py \
 		$(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY_RUN),--dry-run,) $(if $(CONCURRENCY),--concurrency $(CONCURRENCY),)
+evaluation-judge: ## Judge queued answer claims (REVIEWER=name, optional METHOD=human|automated).
+	@test -n "$(REVIEWER)" || { echo "set REVIEWER=<your identity>" >&2; exit 2; }
+	cd $(API_DIR) && $(UV) run python scripts/judge_evaluation.py \
+		--reviewer "$(REVIEWER)" $(if $(METHOD),--method "$(METHOD)",)
+evaluation-judge-status: ## Show answer-claim judgment progress.
+	cd $(API_DIR) && $(UV) run python scripts/judge_evaluation.py --status
 evaluation-report: ## Build the local report for the latest frozen evaluation experiment.
 	cd $(API_DIR) && $(UV) run python scripts/report_evaluation.py
 

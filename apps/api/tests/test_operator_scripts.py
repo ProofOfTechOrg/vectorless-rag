@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
 import stat
 import subprocess
 import sys
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -24,6 +27,7 @@ sys.path.insert(0, str(API_ROOT))
 
 from scripts import (  # noqa: E402
     execute_evaluation,
+    judge_evaluation,
     run_evaluation,
     run_pageindex_pilot,
     seed_evaluation,
@@ -33,7 +37,9 @@ from vectorless_rag.db import make_engine  # noqa: E402
 from vectorless_rag.evaluation_suite import (  # noqa: E402
     EVALUATION_RUNTIME_SETTING_NAMES,
     EVIDENCE_BUDGETS,
+    ClaimJudgment,
     EvaluationCorpusManifest,
+    EvaluationScore,
     EvaluationTrial,
     FrozenEvaluationManifest,
     build_trials,
@@ -832,6 +838,26 @@ def test_resume_refuses_a_torn_line_that_is_not_the_last(tmp_path: Path) -> None
         execute_evaluation.scored_trials(ledger)
 
 
+def test_judge_queue_append_is_idempotent_and_rejects_conflicts(tmp_path: Path) -> None:
+    path = tmp_path / "judge-queue.jsonl"
+    item = execute_evaluation.ClaimJudgeItem(
+        trial_id=uuid.uuid4(),
+        item_id=uuid.uuid4(),
+        claims=["The answer includes the target finding."],
+        answer="The answer includes the target finding.",
+    )
+
+    execute_evaluation.append_judge_item(path, item)
+    execute_evaluation.append_judge_item(path, item)
+
+    assert path.read_text(encoding="utf-8") == item.model_dump_json() + "\n"
+    with pytest.raises(SystemExit, match="conflicting content"):
+        execute_evaluation.append_judge_item(
+            path,
+            item.model_copy(update={"answer": "Different reconstructed answer."}),
+        )
+
+
 def test_each_experiment_kind_maps_onto_its_own_overrides() -> None:
     from scripts import execute_evaluation
 
@@ -844,6 +870,138 @@ def test_each_experiment_kind_maps_onto_its_own_overrides() -> None:
     assert oracled.oracle_document_ids == oracle
     assert forced.forced_route is execute_evaluation.EXPECTED_ROUTE
     assert forced.oracle_document_ids == ()
+
+
+def test_trial_plan_does_not_repeat_end_to_end_runs_as_corpus_routing() -> None:
+    cases = load_cases(API_ROOT / "evaluation/pageindex-v2-regression.jsonl")
+
+    trials = build_trials(cases, seed=7)
+
+    assert len(trials) == 1_080
+    assert {trial.experiment_kind for trial in trials} == {
+        "route",
+        "oracle_document_retrieval",
+        "forced_route_end_to_end",
+    }
+
+
+def test_claim_judgments_are_validated_and_applied_atomically(tmp_path: Path) -> None:
+    trial_id = uuid.uuid4()
+    item_id = uuid.uuid4()
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "judge-queue.jsonl").write_text(
+        json.dumps(
+            {
+                "trial_id": str(trial_id),
+                "item_id": str(item_id),
+                "claims": ["first", "second"],
+                "answer": "Only the first claim is present.",
+            }
+        )
+        + "\n"
+    )
+    (run / "scores.jsonl").write_text(EvaluationScore(trial_id=trial_id).model_dump_json() + "\n")
+    (run / "claim-judgments.jsonl").write_text(
+        json.dumps(
+            {
+                "trial_id": str(trial_id),
+                "item_id": str(item_id),
+                "claims": ["first", "second"],
+                "answer_sha256": hashlib.sha256(b"Only the first claim is present.").hexdigest(),
+                "supported": [True, False],
+                "reviewer": "reviewer",
+                "method": "human",
+                "reviewed_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        + "\n"
+    )
+
+    assert judge_evaluation.apply_judgments(run) == (1, 0)
+    score = EvaluationScore.model_validate_json((run / "scores.jsonl").read_text())
+    assert score.answer_claim_recall == 0.5
+    assert judge_evaluation.apply_judgments(run) == (1, 0)
+
+    queue_item = json.loads((run / "judge-queue.jsonl").read_text())
+    queue_item["answer"] = "A different answer."
+    (run / "judge-queue.jsonl").write_text(json.dumps(queue_item) + "\n")
+    with pytest.raises(ValueError, match="does not match queued answer"):
+        judge_evaluation.apply_judgments(run)
+    queue_item["answer"] = "Only the first claim is present."
+    (run / "judge-queue.jsonl").write_text(json.dumps(queue_item) + "\n")
+
+    judgment = json.loads((run / "claim-judgments.jsonl").read_text())
+    judgment["claims"] = ["stale"]
+    judgment["supported"] = [True]
+    (run / "claim-judgments.jsonl").write_text(json.dumps(judgment) + "\n")
+    with pytest.raises(ValueError, match="does not match queued content"):
+        judge_evaluation.apply_judgments(run)
+
+
+def test_claim_scoring_cannot_overwrite_concurrently_appended_score(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    item = execute_evaluation.ClaimJudgeItem(
+        trial_id=uuid.uuid4(),
+        item_id=uuid.uuid4(),
+        claims=["supported"],
+        answer="supported",
+    )
+    first_score = EvaluationScore(trial_id=item.trial_id)
+    second_score = EvaluationScore(trial_id=uuid.uuid4())
+    (run / "judge-queue.jsonl").write_text(item.model_dump_json() + "\n")
+    (run / "scores.jsonl").write_text(first_score.model_dump_json() + "\n")
+    (run / "claim-judgments.jsonl").write_text(
+        ClaimJudgment(
+            trial_id=item.trial_id,
+            item_id=item.item_id,
+            claims=item.claims,
+            answer_sha256=item.answer_sha256,
+            supported=[True],
+            reviewer="reviewer",
+            method="human",
+            reviewed_at=datetime.now(UTC),
+        ).model_dump_json()
+        + "\n"
+    )
+    scoring_started = threading.Event()
+    release_scoring = threading.Event()
+    apply_unlocked = judge_evaluation._apply_judgments_unlocked  # pyright: ignore[reportPrivateUsage]
+
+    def paused_apply(path: Path) -> tuple[int, int]:
+        scoring_started.set()
+        assert release_scoring.wait(timeout=2)
+        return apply_unlocked(path)
+
+    monkeypatch.setattr(judge_evaluation, "_apply_judgments_unlocked", paused_apply)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        scoring = executor.submit(judge_evaluation.apply_judgments, run)
+        assert scoring_started.wait(timeout=2)
+        appending = executor.submit(
+            execute_evaluation.append_trial_result,
+            run / "scores.jsonl",
+            run / "judge-queue.jsonl",
+            second_score,
+            None,
+        )
+        try:
+            assert not appending.done()
+        finally:
+            release_scoring.set()
+        assert scoring.result(timeout=2) == (1, 0)
+        appending.result(timeout=2)
+
+    scores = [
+        EvaluationScore.model_validate_json(line)
+        for line in (run / "scores.jsonl").read_text().splitlines()
+    ]
+    assert [score.trial_id for score in scores] == [item.trial_id, second_score.trial_id]
+    assert scores[0].answer_claim_recall == 1
 
 
 def test_frozen_index_binding_rejects_drift_and_pins_exact_versions() -> None:

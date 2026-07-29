@@ -22,11 +22,13 @@ from vectorless_rag.models import (
 from vectorless_rag.operational_logging import emit_event, event_json
 from vectorless_rag.reporting import Pricing, build_query_cost_report
 from vectorless_rag.usage import (
+    PROVIDER_REQUEST_BYTE_OVERHEAD,
     ExperimentBudgetExceeded,
     ModelCallLedger,
     UsageOwner,
     current_usage_owner,
     normalize_token_usage,
+    provider_input_token_limit,
     usage_context,
 )
 
@@ -37,19 +39,23 @@ class _FailingHandler(logging.Handler):
         raise RuntimeError("handler failed")
 
 
-class _EmptyAsyncCursor:
-    async def fetchone(self) -> None:
-        return None
+class _AsyncCursor:
+    def __init__(self, row: tuple[object, ...] | None = None) -> None:
+        self.row = row
+
+    async def fetchone(self) -> tuple[object, ...] | None:
+        return self.row
 
 
 class _ReservationlessAsyncConnection:
-    def __init__(self) -> None:
+    def __init__(self, reservation: tuple[object, ...] | None = None) -> None:
         self.executions = 0
+        self.reservation = reservation
 
-    async def execute(self, query: str, parameters: dict[str, object]) -> _EmptyAsyncCursor:
+    async def execute(self, query: str, parameters: dict[str, object]) -> _AsyncCursor:
         del query, parameters
         self.executions += 1
-        return _EmptyAsyncCursor()
+        return _AsyncCursor(self.reservation if self.executions == 1 else None)
 
 
 class _AsyncConnectionContext:
@@ -221,6 +227,14 @@ def test_invalid_cache_and_reasoning_details_cannot_break_partitions() -> None:
     assert usage.total_tokens == 7
 
 
+def test_provider_input_reservation_is_bounded_by_request_bytes() -> None:
+    payload = "😀" * 100
+
+    assert provider_input_token_limit(payload) == len(payload.encode()) + (
+        PROVIDER_REQUEST_BYTE_OVERHEAD
+    )
+
+
 async def test_concurrent_usage_contexts_keep_attempt_and_trace_ownership() -> None:
     async def observe(attempt_id: uuid.UUID, trace_id: str) -> UsageOwner | None:
         with usage_context(UsageOwner(trace_id=trace_id, ingestion_attempt_id=attempt_id)):
@@ -260,6 +274,33 @@ async def test_required_cost_reservation_stops_before_model_call_insert() -> Non
                 "provider/model",
                 1,
                 prompt="question",
+                input_token_limit=5_000,
+                output_token_limit=1_000,
+            )
+
+    assert connection.executions == 1
+
+
+async def test_attached_experiment_rejection_stops_without_owner_flag() -> None:
+    connection = _ReservationlessAsyncConnection((None, None, None, None))
+    ledger = object.__new__(ModelCallLedger)
+    cast(Any, ledger)._async_pool = _OpenReservationlessAsyncPool(connection)
+    cast(Any, ledger)._async_open_lock = asyncio.Lock()
+    cast(Any, ledger).maximum_provider_attempts = 3
+    owner = UsageOwner(
+        trace_id=uuid.uuid4().hex,
+        ingestion_attempt_id=uuid.uuid4(),
+    )
+
+    with usage_context(owner):
+        with pytest.raises(ExperimentBudgetExceeded):
+            await ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                1,
+                prompt="question",
+                input_token_limit=5_000,
+                output_token_limit=1_000,
             )
 
     assert connection.executions == 1

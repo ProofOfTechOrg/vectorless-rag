@@ -517,6 +517,11 @@ class ModelCall(TimestampMixin, Base):
         Index("ix_model_calls_query_owner", "query_run_id"),
         Index("ix_model_calls_ingestion_owner", "ingestion_attempt_id"),
         Index("ix_model_calls_trace", "trace_id"),
+        UniqueConstraint(
+            "cost_reservation_id",
+            "provider_attempt",
+            name="uq_model_call_reserved_attempt",
+        ),
         {"schema": "agent"},
     )
 
@@ -763,6 +768,9 @@ class ModelCallCostReservation(TimestampMixin, Base):
     )
     logical_call_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     reserved_cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
+    input_token_limit: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    output_token_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_limit: Mapped[int] = mapped_column(Integer, nullable=False)
     measured_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

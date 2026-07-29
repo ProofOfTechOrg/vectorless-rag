@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
@@ -46,6 +47,21 @@ FALLBACK_SEARCH_EXCLUDED_TOKENS = frozenset({"or", "and", "not"})
 MODEL_TEXT_TOKEN_LIMIT = 2_048
 COMPARISON_TEXT_TOKEN_FLOOR = 8
 COMPARISON_TEXT_TOKEN_LIMIT = 256
+CATALOG_MAP_DETAIL_LIMIT = 256
+CATALOG_MAP_OUTLINE_LIMIT = 16
+
+
+async def _gather_or_cancel[ResultT](
+    coroutines: Sequence[Coroutine[Any, Any, ResultT]],
+) -> list[ResultT]:
+    tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 def _canonical_json(value: object) -> str:
@@ -396,87 +412,80 @@ class CorpusRouter:
             "lexical_rank": round(candidate.lexical_rank, 8),
         }
 
-    def _bounded_payload(self, candidate: CandidateDocument) -> dict[str, object]:
-        limit = self.settings.catalog_batch_token_limit
-        cache: dict[str, list[int]] = {}
-
-        title_floor = 1 if candidate.document.title else 0
-
-        def payload(
-            text_limit: int,
-            outline_limit: int,
-            *,
-            preserve_title: bool = True,
-        ) -> dict[str, object]:
-            return self._payload(
-                candidate,
-                text_token_limit=text_limit,
-                title_token_limit=max(title_floor, text_limit) if preserve_title else text_limit,
-                outline_limit=outline_limit,
-                cache=cache,
-            )
-
-        outline_limit = min(len(candidate.outline), 64)
-        structural = payload(0, outline_limit)
-        if _wrapped_token_count(self.encoding, [structural]) > limit:
-            low = 0
-            high = outline_limit
-            while low < high:
-                middle = (low + high + 1) // 2
-                if _wrapped_token_count(self.encoding, [payload(0, middle)]) <= limit:
-                    low = middle
-                else:
-                    high = middle - 1
-            outline_limit = low
-            structural = payload(0, outline_limit)
-        if _wrapped_token_count(self.encoding, [structural]) > limit:
-            structural = payload(0, 0, preserve_title=False)
-            if _wrapped_token_count(self.encoding, [structural]) > limit:
-                raise ValueError("catalog batch token limit cannot fit a minimal candidate")
-            outline_limit = 0
-            title_floor = 0
-
-        low = 0
-        high = MODEL_TEXT_TOKEN_LIMIT
-        while low < high:
-            middle = (low + high + 1) // 2
-            if (
-                _wrapped_token_count(
-                    self.encoding,
-                    [payload(middle, outline_limit)],
-                )
-                <= limit
-            ):
-                low = middle
-            else:
-                high = middle - 1
-        return payload(low, outline_limit)
+    def _map_payload(
+        self,
+        candidate: CandidateDocument,
+        *,
+        detail: int,
+        cache: dict[str, list[int]],
+    ) -> dict[str, object]:
+        return self._payload(
+            candidate,
+            text_token_limit=detail,
+            title_token_limit=max(int(bool(candidate.document.title)), detail),
+            outline_limit=min(
+                len(candidate.outline),
+                CATALOG_MAP_OUTLINE_LIMIT,
+                detail // CATALOG_MAP_OUTLINE_LIMIT,
+            ),
+            cache=cache,
+        )
 
     def _batches(
         self,
         candidates: Sequence[CandidateDocument],
     ) -> list[_CatalogBatch]:
         limit = self.settings.catalog_batch_token_limit
+        maximum_batch_size = self.settings.document_limit * 4
         batches: list[_CatalogBatch] = []
-        current: list[CandidateDocument] = []
-        current_payload: list[dict[str, object]] = []
-        for candidate in candidates:
-            payload = self._bounded_payload(candidate)
-            if (
-                current
-                and _wrapped_token_count(
-                    self.encoding,
-                    [*current_payload, payload],
+        offset = 0
+        while offset < len(candidates):
+            maximum_size = min(maximum_batch_size, len(candidates) - offset)
+            batch_window = tuple(candidates[offset : offset + maximum_size])
+            token_cache: dict[str, list[int]] = {}
+
+            def payloads(
+                size: int,
+                detail: int,
+                window: tuple[CandidateDocument, ...] = batch_window,
+                cache: dict[str, list[int]] = token_cache,
+            ) -> list[dict[str, object]]:
+                return [
+                    self._map_payload(candidate, detail=detail, cache=cache)
+                    for candidate in window[:size]
+                ]
+
+            low = 1
+            high = maximum_size
+            fitting_size = 0
+            while low <= high:
+                middle = (low + high) // 2
+                if _wrapped_token_count(self.encoding, payloads(middle, 0)) <= limit:
+                    fitting_size = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if fitting_size == 0:
+                raise ValueError("catalog batch token limit cannot fit a minimal candidate")
+
+            low = 0
+            high = CATALOG_MAP_DETAIL_LIMIT
+            detail = 0
+            while low <= high:
+                middle = (low + high) // 2
+                if _wrapped_token_count(self.encoding, payloads(fitting_size, middle)) <= limit:
+                    detail = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            batch_candidates = tuple(batch_window[:fitting_size])
+            batches.append(
+                _CatalogBatch(
+                    batch_candidates,
+                    tuple(payloads(fitting_size, detail)),
                 )
-                > limit
-            ):
-                batches.append(_CatalogBatch(tuple(current), tuple(current_payload)))
-                current = []
-                current_payload = []
-            current.append(candidate)
-            current_payload.append(payload)
-        if current:
-            batches.append(_CatalogBatch(tuple(current), tuple(current_payload)))
+            )
+            offset += fitting_size
         return batches
 
     def _comparison_payload(
@@ -666,34 +675,44 @@ class CorpusRouter:
                 )
                 for index, candidate in enumerate(candidates, 1)
             ]
-        mapped: list[tuple[CandidateDocument, str]] = []
-        for batch in self._batches(candidates):
-            mapped.extend(
-                await self._select_batch(
-                    question,
-                    batch,
-                    phase="map",
-                    selection_limit=self.settings.document_limit,
-                )
+        mapped = [
+            item
+            for batch_result in await _gather_or_cancel(
+                [
+                    self._select_batch(
+                        question,
+                        batch,
+                        phase="map",
+                        selection_limit=self.settings.document_limit,
+                    )
+                    for batch in self._batches(candidates)
+                ]
             )
+            for item in batch_result
+        ]
         deduplicated: dict[uuid.UUID, tuple[CandidateDocument, str]] = {}
         for candidate, reason in mapped:
             deduplicated.setdefault(candidate.document.id, (candidate, reason))
         pool = list(deduplicated.values())
         while len(pool) > self.settings.document_limit:
-            reduced: list[tuple[CandidateDocument, str]] = []
-            for batch in self._comparison_batches(pool):
-                reduced.extend(
-                    await self._select_batch(
-                        question,
-                        batch,
-                        phase="reduce",
-                        selection_limit=min(
-                            self.settings.document_limit,
-                            len(batch.candidates) - 1,
-                        ),
-                    )
+            reduced = [
+                item
+                for batch_result in await _gather_or_cancel(
+                    [
+                        self._select_batch(
+                            question,
+                            batch,
+                            phase="reduce",
+                            selection_limit=min(
+                                self.settings.document_limit,
+                                len(batch.candidates) - 1,
+                            ),
+                        )
+                        for batch in self._comparison_batches(pool)
+                    ]
                 )
+                for item in batch_result
+            ]
             next_pool: dict[uuid.UUID, tuple[CandidateDocument, str]] = {}
             for candidate, reason in reduced:
                 next_pool.setdefault(candidate.document.id, (candidate, reason))

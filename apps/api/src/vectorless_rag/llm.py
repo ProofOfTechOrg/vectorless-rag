@@ -25,6 +25,7 @@ from vectorless_rag.usage import (
     ModelCallLedger,
     UsagePersistenceError,
     normalize_token_usage,
+    provider_input_token_limit,
 )
 
 StructuredT = TypeVar("StructuredT", bound=BaseModel)
@@ -159,6 +160,27 @@ class DeepSeekLLM:
             system = (
                 f"{system}\nReturn only a JSON object matching this JSON Schema:\n{schema_json}"
             )
+        reservation_user = user if user.endswith(FORMAT_CORRECTION) else user + FORMAT_CORRECTION
+        input_token_limit = provider_input_token_limit(
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": reservation_user},
+                    ],
+                    "method": method,
+                    "schema": schema.model_json_schema(),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        output_token_limit = (
+            max_output_tokens
+            if max_output_tokens is not None
+            else self.settings.pageindex_max_output_tokens
+        )
         runnable = self._client(thinking, max_output_tokens).with_structured_output(
             schema, method=method, include_raw=True
         )
@@ -173,6 +195,8 @@ class DeepSeekLLM:
             release=self.settings.release,
             configuration_hash=provider_configuration_hash(self.settings),
             retry_delay_ms=retry_delay_ms,
+            input_token_limit=input_token_limit,
+            output_token_limit=output_token_limit,
         )
         observation = self.observability.generation(
             "deepseek-structured",
@@ -216,8 +240,6 @@ class DeepSeekLLM:
             finally:
                 observation.fail()
             raise
-        self.provider_gate.observe_completion_success()
-
         if isinstance(response, schema):
             encoded = response.model_dump_json()
             usage = normalize_token_usage(None)

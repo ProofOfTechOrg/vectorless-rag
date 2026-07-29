@@ -18,6 +18,7 @@ import fitz
 
 from vectorless_rag.config import Settings
 from vectorless_rag.pageindex_artifact import (
+    ARTIFACT_BUILDER_VERSION,
     PageIndexBuildV2,
     build_manifest_v2,
 )
@@ -435,7 +436,20 @@ class PageIndexAdapter:
 
 
 def artifact_version_key(
-    pdf_sha256: str, pageindex_version: str, prompt_version: str, model_name: str
+    pdf_sha256: str,
+    pageindex_version: str,
+    prompt_version: str,
+    model_name: str,
+    *,
+    artifact_builder_version: str = ARTIFACT_BUILDER_VERSION,
 ) -> str:
-    value = "\0".join((pdf_sha256, pageindex_version, prompt_version, model_name))
+    value = "\0".join(
+        (
+            pdf_sha256,
+            pageindex_version,
+            prompt_version,
+            model_name,
+            artifact_builder_version,
+        )
+    )
     return hashlib.sha256(value.encode()).hexdigest()

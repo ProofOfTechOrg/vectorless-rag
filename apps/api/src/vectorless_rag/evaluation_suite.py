@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import math
 import random
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -36,7 +38,6 @@ COMPLETED_REVIEW_STATUSES = frozenset({"approved", "edited", "rejected"})
 USABLE_REVIEW_STATUSES = frozenset({"approved", "edited"})
 EXPERIMENT_KINDS = (
     "route",
-    "corpus_routing",
     "oracle_document_retrieval",
     "forced_route_end_to_end",
 )
@@ -69,6 +70,16 @@ EVALUATION_RUNTIME_SETTING_NAMES = (
     "sql_payload_limit_bytes",
     "sql_explain_cost_ceiling",
 )
+
+
+@contextmanager
+def evaluation_ledger_lock(run: Path) -> Generator[None]:
+    with (run / ".evaluation-ledger.lock").open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def evaluation_configuration_sha256(
@@ -370,6 +381,38 @@ class EvaluationScore(StrictEvaluationModel):
     retry_count: int = Field(default=0, ge=0)
     failure_code: str | None = Field(default=None, max_length=80)
     included: bool = True
+
+
+class ClaimJudgeItem(StrictEvaluationModel):
+    trial_id: uuid.UUID
+    item_id: uuid.UUID
+    claims: list[str] = Field(min_length=1)
+    answer: str
+
+    @property
+    def answer_sha256(self) -> str:
+        return hashlib.sha256(self.answer.encode()).hexdigest()
+
+
+class ClaimJudgment(StrictEvaluationModel):
+    trial_id: uuid.UUID
+    item_id: uuid.UUID
+    claims: list[str] = Field(min_length=1)
+    answer_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    supported: list[bool] = Field(min_length=1)
+    reviewer: str = Field(min_length=1, max_length=128)
+    method: Literal["human", "automated"]
+    reviewed_at: datetime
+
+    @model_validator(mode="after")
+    def one_decision_per_claim(self) -> ClaimJudgment:
+        if len(self.supported) != len(self.claims):
+            raise ValueError("claim judgments require one decision per claim")
+        return self
+
+    @property
+    def recall(self) -> float:
+        return sum(self.supported) / len(self.supported)
 
 
 def stable_item_id(
