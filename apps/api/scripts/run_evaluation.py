@@ -75,6 +75,14 @@ def main() -> None:
         help="passes per item; more than one estimates within-configuration variance",
     )
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        choices=range(1, 9),
+        metavar="1..8",
+        help="frozen number of trials allowed to execute concurrently",
+    )
+    parser.add_argument(
         "--max-cost-usd",
         type=cost_ceiling,
         required=True,
@@ -105,16 +113,20 @@ def main() -> None:
 
     experiment_id = uuid.uuid4()
     manifest = FrozenEvaluationManifest(
-        schema_version=1,
+        schema_version=2,
         experiment_id=experiment_id,
         release_sha=release_sha,
-        configuration_sha256=evaluation_configuration_sha256(settings),
+        configuration_sha256=evaluation_configuration_sha256(
+            settings,
+            execution_concurrency=args.concurrency,
+        ),
         corpus_sha256=corpus.corpus_snapshot_sha256,
         index_sha256=args.index_hash,
         dataset_sha256=file_sha256(args.dataset),
         price_snapshot=prices,
         repetitions=args.repetitions,
         evidence_budgets=EVIDENCE_BUDGETS,
+        execution_concurrency=args.concurrency,
         seed=args.seed,
         maximum_cost_usd=args.max_cost_usd,
         created_at=datetime.now(UTC),

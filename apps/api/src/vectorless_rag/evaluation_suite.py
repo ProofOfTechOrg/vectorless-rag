@@ -71,8 +71,13 @@ EVALUATION_RUNTIME_SETTING_NAMES = (
 )
 
 
-def evaluation_configuration_sha256(settings: Settings) -> str:
+def evaluation_configuration_sha256(
+    settings: Settings,
+    *,
+    execution_concurrency: int,
+) -> str:
     snapshot = {name: getattr(settings, name) for name in EVALUATION_RUNTIME_SETTING_NAMES}
+    snapshot["execution_concurrency"] = execution_concurrency
     return hashlib.sha256(
         json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -271,7 +276,7 @@ def validate_indexed_corpus(
 
 
 class FrozenEvaluationManifest(StrictEvaluationModel):
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     experiment_id: uuid.UUID
     release_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -284,6 +289,7 @@ class FrozenEvaluationManifest(StrictEvaluationModel):
     # carries it so a one-pass run is never mistaken for a repeated one.
     repetitions: int = Field(ge=1, le=3)
     evidence_budgets: tuple[Literal[6400, 12800, 25600], ...]
+    execution_concurrency: int = Field(ge=1, le=8)
     seed: int
     # Frozen at plan time and materialised as the experiment's database ceiling before the
     # first trial, so an unattended run stops at a number chosen in advance rather than at

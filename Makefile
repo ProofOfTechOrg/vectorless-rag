@@ -263,12 +263,12 @@ evaluation-run: ## Prepare a frozen PageIndex experiment (INDEX_HASH=…, MAX_CO
 	@release_sha="$$(git rev-parse HEAD)"; \
 		RELEASE="$$release_sha" $(UV) run --project $(API_DIR) \
 		python $(API_DIR)/scripts/run_evaluation.py \
-			--index-hash "$(INDEX_HASH)" --max-cost-usd "$(MAX_COST)"
+			--index-hash "$(INDEX_HASH)" --max-cost-usd "$(MAX_COST)" $(if $(CONCURRENCY),--concurrency $(CONCURRENCY),)
 evaluation-freeze: ## Print the index digest for evaluation-run INDEX_HASH.
 	$(COMPOSE) exec -T api python scripts/freeze_index.py
 evaluation-execute: ## Execute prepared trials against DeepSeek (LIMIT=n, DRY_RUN=1).
 	$(COMPOSE) exec -T --user "$$(id -u):$$(id -g)" api python scripts/execute_evaluation.py \
-		$(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY_RUN),--dry-run,)
+		$(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY_RUN),--dry-run,) $(if $(CONCURRENCY),--concurrency $(CONCURRENCY),)
 evaluation-report: ## Build the local report for the latest frozen evaluation experiment.
 	cd $(API_DIR) && $(UV) run python scripts/report_evaluation.py
 

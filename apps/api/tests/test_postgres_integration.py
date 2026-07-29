@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TypeVar, cast
@@ -754,6 +756,147 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
             (reservation_id,),
         ).fetchone() == (Decimal("0.000020"), "finalized")
         connection.rollback()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not OWNER_URL, reason="PostgreSQL owner URL not set")
+def test_concurrent_reservations_serialize_at_the_experiment_cap() -> None:
+    assert OWNER_URL is not None
+    owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
+    experiment_id = uuid.uuid4()
+    document_ids = [uuid.uuid4(), uuid.uuid4()]
+    job_ids = [uuid.uuid4(), uuid.uuid4()]
+    attempt_ids = [uuid.uuid4(), uuid.uuid4()]
+    reservation_ids = [uuid.uuid4(), uuid.uuid4()]
+    logical_call_ids = [uuid.uuid4(), uuid.uuid4()]
+    with psycopg.connect(owner_sync) as connection:
+        connection.execute(
+            """INSERT INTO agent.experiments
+               (id, name, release_sha, configuration_hash, corpus_hash, index_hash,
+                dataset_hash, price_snapshot, repetitions, evidence_token_budget,
+                seed, maximum_cost_usd, frozen_at)
+               VALUES (%s, 'concurrent-budget-test', %s, %s, %s, %s, %s, %s::jsonb,
+                       1, 6400, 1, 1, now())""",
+            (
+                experiment_id,
+                "a" * 40,
+                "b" * 64,
+                "c" * 64,
+                "d" * 64,
+                "e" * 64,
+                json.dumps(
+                    {
+                        "input_per_million_usd": 1,
+                        "cache_hit_input_per_million_usd": 0.1,
+                        "output_per_million_usd": 1,
+                        "max_input_tokens": 1_000_000,
+                        "max_output_tokens": 0,
+                        "max_attempts": 1,
+                    }
+                ),
+            ),
+        )
+        for index, document_id in enumerate(document_ids):
+            digest = document_id.hex + document_id.hex
+            connection.execute(
+                """INSERT INTO agent.documents
+                   (id, sha256, original_filename, pdf_object_key, status)
+                   VALUES (%s, %s, %s, %s, 'indexing')""",
+                (
+                    document_id,
+                    digest,
+                    f"concurrent-budget-{index}.pdf",
+                    f"pdf/concurrent-budget-{document_id}",
+                ),
+            )
+            connection.execute(
+                """INSERT INTO agent.ingestion_jobs
+                   (id, document_id, status, force, mode, attempts, retry_budget_consumed,
+                    is_active, metrics, experiment_id)
+                   VALUES (%s, %s, 'running', true, 'reextract_all', 1, 0, true,
+                           '{}'::jsonb, %s)""",
+                (job_ids[index], document_id, experiment_id),
+            )
+            connection.execute(
+                """INSERT INTO agent.ingestion_attempts
+                   (id, job_id, attempt_number, trace_id, worker_id, status, artifact_action,
+                    telemetry_complete, retry_budget_consumed)
+                   VALUES (%s, %s, 1, %s, 'concurrent-budget-worker', 'running', 'none',
+                           false, false)""",
+                (attempt_ids[index], job_ids[index], uuid.uuid4().hex),
+            )
+        connection.commit()
+
+    start = threading.Barrier(2)
+    winner_holds_lock = threading.Event()
+    release_winner = threading.Event()
+
+    def reserve(index: int) -> str:
+        parameters = {
+            "query_run_id": None,
+            "ingestion_attempt_id": attempt_ids[index],
+            "reservation_id": reservation_ids[index],
+            "logical_call_id": logical_call_ids[index],
+            "legacy_max_input_tokens": DEEPSEEK_MAX_INPUT_TOKENS,
+            "legacy_max_output_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
+            "legacy_query_max_attempts": 3,
+        }
+        with psycopg.connect(owner_sync) as connection:
+            start.wait(timeout=10)
+            try:
+                row = connection.execute(RESERVE_MODEL_CALL_SQL, parameters).fetchone()
+            except psycopg.errors.RaiseException as error:
+                connection.rollback()
+                assert "experiment cost cap exceeded" in str(error)
+                return "denied"
+            assert row == (reservation_ids[index],)
+            winner_holds_lock.set()
+            assert release_winner.wait(timeout=10)
+            connection.commit()
+            return "reserved"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(reserve, index) for index in range(2)]
+            try:
+                assert winner_holds_lock.wait(timeout=10)
+                assert not any(future.done() for future in futures)
+            finally:
+                release_winner.set()
+            outcomes = [future.result(timeout=10) for future in futures]
+
+        assert sorted(outcomes) == ["denied", "reserved"]
+        with psycopg.connect(owner_sync) as connection:
+            assert connection.execute(
+                """SELECT count(*), coalesce(sum(reserved_cost_usd), 0)
+                   FROM agent.model_call_cost_reservations
+                   WHERE experiment_id = %s""",
+                (experiment_id,),
+            ).fetchone() == (1, Decimal("1.000000"))
+    finally:
+        release_winner.set()
+        with psycopg.connect(owner_sync) as connection:
+            connection.execute(
+                "DELETE FROM agent.model_call_cost_reservations WHERE experiment_id = %s",
+                (experiment_id,),
+            )
+            connection.execute(
+                "DELETE FROM agent.ingestion_attempts WHERE id = ANY(%s)",
+                (attempt_ids,),
+            )
+            connection.execute(
+                "DELETE FROM agent.ingestion_jobs WHERE id = ANY(%s)",
+                (job_ids,),
+            )
+            connection.execute(
+                "DELETE FROM agent.experiments WHERE id = %s",
+                (experiment_id,),
+            )
+            connection.execute(
+                "DELETE FROM agent.documents WHERE id = ANY(%s)",
+                (document_ids,),
+            )
+            connection.commit()
 
 
 @pytest.mark.integration

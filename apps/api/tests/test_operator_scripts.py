@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -56,6 +57,7 @@ from vectorless_rag.models import (  # noqa: E402
     IndexLifecycleStatus,
     IndexVersion,
     QueryRun,
+    RunFailureCode,
     RunRoute,
 )
 from vectorless_rag.retrieval import CorpusRouter  # noqa: E402
@@ -402,7 +404,7 @@ def test_a_frozen_evaluation_plan_requires_a_positive_cost_ceiling() -> None:
     from pydantic import ValidationError
 
     fields: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment_id": uuid.uuid4(),
         "release_sha": "0" * 40,
         "configuration_sha256": "1" * 64,
@@ -412,6 +414,7 @@ def test_a_frozen_evaluation_plan_requires_a_positive_cost_ceiling() -> None:
         "price_snapshot": _complete_price_snapshot(),
         "repetitions": 1,
         "evidence_budgets": EVIDENCE_BUDGETS,
+        "execution_concurrency": 4,
         "seed": 1,
         "created_at": datetime.now(UTC),
     }
@@ -436,7 +439,7 @@ def test_a_frozen_evaluation_plan_requires_a_finite_cost_ceiling(value: float) -
 
     with pytest.raises(ValidationError):
         FrozenEvaluationManifest(
-            schema_version=1,
+            schema_version=2,
             experiment_id=uuid.uuid4(),
             release_sha="0" * 40,
             configuration_sha256="1" * 64,
@@ -446,6 +449,7 @@ def test_a_frozen_evaluation_plan_requires_a_finite_cost_ceiling(value: float) -
             price_snapshot=_complete_price_snapshot(),
             repetitions=1,
             evidence_budgets=EVIDENCE_BUDGETS,
+            execution_concurrency=4,
             seed=1,
             maximum_cost_usd=Decimal(str(value)),
             created_at=datetime.now(UTC),
@@ -457,7 +461,7 @@ def test_a_frozen_evaluation_plan_requires_a_database_exact_cost_ceiling(value: 
     from pydantic import ValidationError
 
     fields: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment_id": uuid.uuid4(),
         "release_sha": "0" * 40,
         "configuration_sha256": "1" * 64,
@@ -467,6 +471,7 @@ def test_a_frozen_evaluation_plan_requires_a_database_exact_cost_ceiling(value: 
         "price_snapshot": _complete_price_snapshot(),
         "repetitions": 1,
         "evidence_budgets": EVIDENCE_BUDGETS,
+        "execution_concurrency": 4,
         "seed": 1,
         "maximum_cost_usd": value,
         "created_at": datetime.now(UTC),
@@ -482,7 +487,7 @@ def test_frozen_evaluation_plan_requires_cost_reservation_bounds() -> None:
     from pydantic import ValidationError
 
     fields: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "experiment_id": uuid.uuid4(),
         "release_sha": "0" * 40,
         "configuration_sha256": "1" * 64,
@@ -494,6 +499,7 @@ def test_frozen_evaluation_plan_requires_cost_reservation_bounds() -> None:
         },
         "repetitions": 1,
         "evidence_budgets": EVIDENCE_BUDGETS,
+        "execution_concurrency": 4,
         "seed": 1,
         "maximum_cost_usd": 25.0,
         "created_at": datetime.now(UTC),
@@ -516,7 +522,7 @@ def test_frozen_evaluation_plan_rejects_zero_cost_rates() -> None:
     )
     with pytest.raises(ValidationError, match="provider prices must be positive"):
         FrozenEvaluationManifest(
-            schema_version=1,
+            schema_version=2,
             experiment_id=uuid.uuid4(),
             release_sha="0" * 40,
             configuration_sha256="1" * 64,
@@ -526,6 +532,7 @@ def test_frozen_evaluation_plan_rejects_zero_cost_rates() -> None:
             price_snapshot=snapshot,
             repetitions=1,
             evidence_budgets=EVIDENCE_BUDGETS,
+            execution_concurrency=4,
             seed=1,
             maximum_cost_usd=Decimal("25"),
             created_at=datetime.now(UTC),
@@ -571,14 +578,19 @@ def test_evaluation_configuration_hash_covers_every_result_affecting_setting() -
         "sql_explain_cost_ceiling",
     )
     settings = Settings()
-    baseline = evaluation_configuration_sha256(settings)
+    baseline = evaluation_configuration_sha256(settings, execution_concurrency=4)
 
     for name in EVALUATION_RUNTIME_SETTING_NAMES:
         value = getattr(settings, name)
         changed = f"{value}-changed" if isinstance(value, str) else value + 1
         assert (
-            evaluation_configuration_sha256(settings.model_copy(update={name: changed})) != baseline
+            evaluation_configuration_sha256(
+                settings.model_copy(update={name: changed}),
+                execution_concurrency=4,
+            )
+            != baseline
         ), name
+    assert evaluation_configuration_sha256(settings, execution_concurrency=3) != baseline
 
 
 @pytest.mark.integration
@@ -588,7 +600,7 @@ async def test_evaluation_run_and_membership_persist_before_provider_work() -> N
     engine = make_engine(OWNER_URL)
     experiment_id = uuid.uuid4()
     manifest = FrozenEvaluationManifest(
-        schema_version=1,
+        schema_version=2,
         experiment_id=experiment_id,
         release_sha="0" * 40,
         configuration_sha256="1" * 64,
@@ -598,6 +610,7 @@ async def test_evaluation_run_and_membership_persist_before_provider_work() -> N
         price_snapshot=_complete_price_snapshot(),
         repetitions=1,
         evidence_budgets=EVIDENCE_BUDGETS,
+        execution_concurrency=4,
         seed=1,
         maximum_cost_usd=Decimal("25"),
         created_at=datetime.now(UTC),
@@ -886,10 +899,13 @@ def _frozen_input_fixture() -> tuple[
     )
     trials = build_trials(cases, seed=7)
     manifest = FrozenEvaluationManifest(
-        schema_version=1,
+        schema_version=2,
         experiment_id=uuid.uuid4(),
         release_sha=settings.release,
-        configuration_sha256=evaluation_configuration_sha256(settings),
+        configuration_sha256=evaluation_configuration_sha256(
+            settings,
+            execution_concurrency=4,
+        ),
         corpus_sha256=corpus.corpus_snapshot_sha256,
         index_sha256="3" * 64,
         dataset_sha256=file_sha256(dataset),
@@ -899,6 +915,7 @@ def _frozen_input_fixture() -> tuple[
         ),
         repetitions=1,
         evidence_budgets=EVIDENCE_BUDGETS,
+        execution_concurrency=4,
         seed=7,
         maximum_cost_usd=Decimal("25"),
         created_at=datetime.now(UTC),
@@ -918,6 +935,7 @@ def test_frozen_input_validation_rejects_each_identity_drift() -> None:
         dataset_sha256=dataset_sha256,
         corpus=corpus,
         image_release=manifest.release_sha,
+        execution_concurrency=manifest.execution_concurrency,
     )
     checks = (
         (
@@ -1002,7 +1020,19 @@ def test_frozen_input_validation_rejects_each_identity_drift() -> None:
                 dataset_sha256=candidate_dataset_sha256,
                 corpus=candidate_corpus,
                 image_release=candidate_image_release,
+                execution_concurrency=manifest.execution_concurrency,
             )
+    with pytest.raises(SystemExit, match="execution concurrency"):
+        execute_evaluation.validate_frozen_inputs(
+            settings,
+            manifest,
+            trials,
+            cases,
+            dataset_sha256=dataset_sha256,
+            corpus=corpus,
+            image_release=manifest.release_sha,
+            execution_concurrency=3,
+        )
 
 
 def test_evaluation_corpus_snapshot_rejects_tampering_and_duplicates() -> None:
@@ -1040,8 +1070,26 @@ class _BudgetDeniedRunner:
         raise ExperimentBudgetExceeded
 
 
+class _CancelledRunner:
+    async def run(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise asyncio.CancelledError
+
+
+class _SuccessfulRunner:
+    async def run(self, *args: object, **kwargs: object) -> Any:
+        del args, kwargs
+        return {
+            "route": RunRoute.documents.value,
+            "answer": "answer",
+            "citations": [],
+            "insufficient": False,
+        }
+
+
 class _RecordingSession:
-    def __init__(self) -> None:
+    def __init__(self, durable_run: QueryRun | None = None) -> None:
+        self.durable_run = durable_run
         self.commits = 0
         self.rollbacks = 0
 
@@ -1050,6 +1098,19 @@ class _RecordingSession:
 
     async def rollback(self) -> None:
         self.rollbacks += 1
+
+    async def get(
+        self,
+        model: type[QueryRun],
+        identifier: uuid.UUID,
+        *,
+        populate_existing: bool = False,
+    ) -> QueryRun | None:
+        del populate_existing
+        assert model is QueryRun
+        if self.durable_run is None or self.durable_run.id != identifier:
+            return None
+        return self.durable_run
 
 
 def _single_trial() -> tuple[Any, EvaluationTrial]:
@@ -1201,3 +1262,274 @@ async def test_denied_budget_terminalizes_with_recoverable_failure_code(
     assert run.error == ExperimentBudgetExceeded.failure_code
     assert session.rollbacks == 1
     assert session.commits == 1
+
+
+async def test_cancelled_execution_terminalizes_before_propagating(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    case, trial = _single_trial()
+    experiment_id = uuid.uuid4()
+    run = QueryRun(
+        id=execute_evaluation.trial_run_id(experiment_id, trial.trial_id),
+        trace_id=uuid.uuid4().hex,
+        thread_id="cancelled-execution",
+        api_key_id=uuid.uuid4(),
+        question=case.prompt,
+    )
+
+    async def created(*args: object, **kwargs: object) -> tuple[QueryRun, bool]:
+        del args, kwargs
+        return run, True
+
+    monkeypatch.setattr(execute_evaluation, "create_trial_run", created)
+    session = _RecordingSession(run)
+    executor = execute_evaluation.Executor(
+        cast(Any, _CancelledRunner()),
+        {},
+        Settings(),
+        experiment_id,
+        run.api_key_id,
+        {},
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor.execute(cast(Any, session), case, trial)
+
+    assert run.error == execute_evaluation.EXECUTION_CANCELLED_FAILURE_CODE
+    assert run.failure_code == RunFailureCode.request_failed
+    assert session.rollbacks == 1
+    assert session.commits == 1
+
+
+async def test_cancelled_trial_creation_recovers_a_committed_running_row(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    case, trial = _single_trial()
+    experiment_id = uuid.uuid4()
+    run = QueryRun(
+        id=execute_evaluation.trial_run_id(experiment_id, trial.trial_id),
+        trace_id=uuid.uuid4().hex,
+        thread_id="cancelled-creation",
+        api_key_id=uuid.uuid4(),
+        question=case.prompt,
+    )
+
+    async def cancelled_creation(*args: object, **kwargs: object) -> tuple[QueryRun, bool]:
+        del args, kwargs
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(execute_evaluation, "create_trial_run", cancelled_creation)
+    session = _RecordingSession(run)
+    executor = execute_evaluation.Executor(
+        cast(Any, _RunnerMustNotRun()),
+        {},
+        Settings(),
+        experiment_id,
+        run.api_key_id,
+        {},
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor.execute(cast(Any, session), case, trial)
+
+    assert run.error == execute_evaluation.EXECUTION_CANCELLED_FAILURE_CODE
+    assert run.failure_code == RunFailureCode.request_failed
+    assert session.rollbacks == 1
+    assert session.commits == 1
+
+
+async def test_cancelled_success_finalization_recovers_the_running_row(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    case, trial = _single_trial()
+    experiment_id = uuid.uuid4()
+    run = QueryRun(
+        id=execute_evaluation.trial_run_id(experiment_id, trial.trial_id),
+        trace_id=uuid.uuid4().hex,
+        thread_id="cancelled-finalize",
+        api_key_id=uuid.uuid4(),
+        question=case.prompt,
+    )
+
+    async def created(*args: object, **kwargs: object) -> tuple[QueryRun, bool]:
+        del args, kwargs
+        return run, True
+
+    monkeypatch.setattr(execute_evaluation, "create_trial_run", created)
+    session = _RecordingSession(run)
+    executor = execute_evaluation.Executor(
+        cast(Any, _SuccessfulRunner()),
+        {},
+        Settings(),
+        experiment_id,
+        run.api_key_id,
+        {},
+    )
+    durable_finalize = executor.finalize
+
+    async def cancel_success(
+        current_session: AsyncSession,
+        current_run: QueryRun,
+        *,
+        latency: int,
+        result: Any = None,
+        failure_code: RunFailureCode | None = None,
+        evaluation_failure_code: str | None = None,
+    ) -> None:
+        if result is not None:
+            raise asyncio.CancelledError
+        await durable_finalize(
+            current_session,
+            current_run,
+            latency=latency,
+            failure_code=failure_code,
+            evaluation_failure_code=evaluation_failure_code,
+        )
+
+    monkeypatch.setattr(executor, "finalize", cancel_success)
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor.execute(cast(Any, session), case, trial)
+
+    assert run.error == execute_evaluation.EXECUTION_CANCELLED_FAILURE_CODE
+    assert run.failure_code == RunFailureCode.request_failed
+    assert session.rollbacks == 1
+    assert session.commits == 1
+
+
+@pytest.mark.parametrize("value", ["-1", "10001", "not-an-integer"])
+def test_evaluation_trial_limit_rejects_unsafe_values(value: str) -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        execute_evaluation.trial_limit(value)
+
+
+@pytest.mark.parametrize("value", ["0", "12", "10000"])
+def test_evaluation_trial_limit_accepts_bounded_values(value: str) -> None:
+    assert execute_evaluation.trial_limit(value) == int(value)
+
+
+class _EmptySessionContext:
+    async def __aenter__(self) -> object:
+        return object()
+
+    async def __aexit__(self, *args: object) -> None:
+        del args
+
+
+class _ConcurrentTestDatabase:
+    def session(self) -> _EmptySessionContext:
+        return _EmptySessionContext()
+
+
+class _ConcurrencyTracker:
+    def __init__(self) -> None:
+        self.active = 0
+        self.maximum = 0
+        self.executed: list[int] = []
+
+
+class _ConcurrentTestExecutor:
+    def __init__(
+        self,
+        tracker: _ConcurrencyTracker,
+        delays: dict[int, float],
+        *,
+        budget_sequence: int | None = None,
+    ) -> None:
+        self.tracker = tracker
+        self.delays = delays
+        self.budget_sequence = budget_sequence
+
+    async def execute(
+        self,
+        session: object,
+        case: object,
+        trial: EvaluationTrial,
+    ) -> tuple[Any, None]:
+        del session, case
+        self.tracker.active += 1
+        self.tracker.maximum = max(self.tracker.maximum, self.tracker.active)
+        self.tracker.executed.append(trial.sequence_number)
+        try:
+            await asyncio.sleep(self.delays[trial.sequence_number])
+        finally:
+            self.tracker.active -= 1
+        budget_denied = trial.sequence_number == self.budget_sequence
+        return (
+            execute_evaluation.EvaluationScore(
+                trial_id=trial.trial_id,
+                query_run_id=uuid.uuid4(),
+                failure_code=(ExperimentBudgetExceeded.failure_code if budget_denied else None),
+                included=not budget_denied,
+            ),
+            None,
+        )
+
+
+def _concurrent_trials(count: int) -> tuple[Any, list[EvaluationTrial]]:
+    case, template = _single_trial()
+    return (
+        case,
+        [
+            template.model_copy(
+                update={
+                    "trial_id": uuid.uuid4(),
+                    "sequence_number": sequence,
+                }
+            )
+            for sequence in range(count)
+        ],
+    )
+
+
+async def test_parallel_execution_is_bounded_and_writes_in_plan_order(tmp_path: Path) -> None:
+    case, trials = _concurrent_trials(6)
+    tracker = _ConcurrencyTracker()
+    delays = {0: 0.04, 1: 0.005, 2: 0.01, 3: 0.005, 4: 0.005, 5: 0.005}
+    executors = [_ConcurrentTestExecutor(tracker, delays) for _ in range(3)]
+    scores = tmp_path / "scores.jsonl"
+    judge = tmp_path / "judge.jsonl"
+    scores.touch()
+
+    exhausted = await execute_evaluation.execute_pending_trials(
+        cast(Any, _ConcurrentTestDatabase()),
+        cast(Any, executors),
+        trials,
+        {case.item_id: case},
+        scores,
+        judge,
+    )
+
+    written = [
+        execute_evaluation.EvaluationScore.model_validate_json(line)
+        for line in scores.read_text(encoding="utf-8").splitlines()
+    ]
+    assert exhausted is False
+    assert tracker.maximum == 3
+    assert [score.trial_id for score in written] == [trial.trial_id for trial in trials]
+    assert sorted(tracker.executed) == list(range(6))
+
+
+async def test_parallel_execution_stops_scheduling_after_budget_denial(
+    tmp_path: Path,
+) -> None:
+    case, trials = _concurrent_trials(8)
+    tracker = _ConcurrencyTracker()
+    delays = {sequence: (0.001 if sequence == 2 else 0.03) for sequence in range(8)}
+    executors = [_ConcurrentTestExecutor(tracker, delays, budget_sequence=2) for _ in range(3)]
+    scores = tmp_path / "scores.jsonl"
+    judge = tmp_path / "judge.jsonl"
+    scores.touch()
+
+    exhausted = await execute_evaluation.execute_pending_trials(
+        cast(Any, _ConcurrentTestDatabase()),
+        cast(Any, executors),
+        trials,
+        {case.item_id: case},
+        scores,
+        judge,
+    )
+
+    assert exhausted is True
+    assert sorted(tracker.executed) == [0, 1, 2]
+    assert len(scores.read_text(encoding="utf-8").splitlines()) == 3

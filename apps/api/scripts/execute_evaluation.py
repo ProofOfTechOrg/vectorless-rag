@@ -18,7 +18,7 @@ import hashlib
 import json
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any, cast
@@ -74,6 +74,8 @@ from vectorless_rag.usage import ExperimentBudgetExceeded, UsageOwner, usage_con
 # a retrieval outcome, measured by insufficient rather than by the route.
 EXPECTED_ROUTE = RunRoute.documents
 IMAGE_RELEASE_PATH = Path("/app/.release")
+EXECUTION_CANCELLED_FAILURE_CODE = "execution_cancelled"
+MAX_TRIAL_LIMIT = 10_000
 
 
 def options_for(
@@ -223,6 +225,44 @@ class Executor:
         case: EvaluationCase,
         trial: EvaluationTrial,
     ) -> tuple[EvaluationScore, dict[str, Any] | None]:
+        run_id = trial_run_id(self.experiment_id, trial.trial_id)
+        lifecycle_started = time.monotonic()
+        try:
+            return await self._execute(session, case, trial)
+        except asyncio.CancelledError:
+            latency = round((time.monotonic() - lifecycle_started) * 1000)
+
+            async def terminalize_cancelled_run() -> None:
+                await session.rollback()
+                durable_run = await session.get(QueryRun, run_id, populate_existing=True)
+                if durable_run is None or query_run_status(durable_run) != QueryRunStatus.running:
+                    return
+                await self.finalize(
+                    session,
+                    durable_run,
+                    latency=latency,
+                    failure_code=RunFailureCode.request_failed,
+                    evaluation_failure_code=EXECUTION_CANCELLED_FAILURE_CODE,
+                )
+
+            cleanup = asyncio.create_task(
+                terminalize_cancelled_run(),
+                name=f"terminalize-cancelled-evaluation-{trial.trial_id}",
+            )
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            await cleanup
+            raise
+
+    async def _execute(
+        self,
+        session: AsyncSession,
+        case: EvaluationCase,
+        trial: EvaluationTrial,
+    ) -> tuple[EvaluationScore, dict[str, Any] | None]:
         oracle = tuple(
             self.documents[target.arxiv_id]
             for target in case.target_documents
@@ -361,6 +401,108 @@ class Executor:
         return score, judge
 
 
+def append_trial_result(
+    scores_path: Path,
+    judge_path: Path,
+    score: EvaluationScore,
+    judge: dict[str, Any] | None,
+) -> None:
+    # The judge entry is written first because scores.jsonl is the resume ledger: a crash
+    # between the two writes leaves the trial pending and reconstructs it from the terminal
+    # QueryRun. The reverse order loses claim-recall input for a trial already marked done.
+    if judge is not None:
+        with judge_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(judge, ensure_ascii=False) + "\n")
+    with scores_path.open("a", encoding="utf-8") as handle:
+        handle.write(score.model_dump_json() + "\n")
+
+
+async def execute_pending_trials(
+    database: Database,
+    executors: Sequence[Executor],
+    pending: Sequence[EvaluationTrial],
+    cases: Mapping[uuid.UUID, EvaluationCase],
+    scores_path: Path,
+    judge_path: Path,
+) -> bool:
+    """Run a bounded trial window while one writer preserves plan order.
+
+    Each Executor owns a distinct LangGraph checkpointer connection and can have at most one
+    in-flight trial. Results may finish out of order, but only this coordinator appends the
+    ledgers, in frozen sequence order. If the database rejects a new reservation at the cost
+    ceiling, no more trials are scheduled and already-reserved work is allowed to finish.
+    """
+
+    async def execute_one(
+        executor: Executor,
+        trial: EvaluationTrial,
+    ) -> tuple[EvaluationScore, dict[str, Any] | None]:
+        async with database.session() as session:
+            return await executor.execute(session, cases[trial.item_id], trial)
+
+    inflight: dict[
+        asyncio.Task[tuple[EvaluationScore, dict[str, Any] | None]],
+        tuple[int, Executor],
+    ] = {}
+    completed: dict[
+        int,
+        tuple[EvaluationTrial, EvaluationScore, dict[str, Any] | None],
+    ] = {}
+    next_to_schedule = 0
+    next_to_write = 0
+    budget_exhausted = False
+
+    def schedule(executor: Executor) -> None:
+        nonlocal next_to_schedule
+        position = next_to_schedule
+        trial = pending[position]
+        task = asyncio.create_task(
+            execute_one(executor, trial),
+            name=f"evaluation-trial-{trial.trial_id}",
+        )
+        inflight[task] = (position, executor)
+        next_to_schedule += 1
+
+    for executor in executors[: len(pending)]:
+        schedule(executor)
+
+    try:
+        while inflight:
+            done, _ = await asyncio.wait(inflight, return_when=asyncio.FIRST_COMPLETED)
+            available: list[Executor] = []
+            for task in sorted(done, key=lambda item: inflight[item][0]):
+                position, executor = inflight.pop(task)
+                score, judge = task.result()
+                completed[position] = (pending[position], score, judge)
+                available.append(executor)
+                if score.failure_code == ExperimentBudgetExceeded.failure_code:
+                    budget_exhausted = True
+
+            while next_to_write in completed:
+                trial, score, judge = completed.pop(next_to_write)
+                append_trial_result(scores_path, judge_path, score, judge)
+                flag = "" if score.included else f" FAILED {score.failure_code}"
+                print(
+                    f"[{next_to_write + 1}/{len(pending)}] {trial.experiment_kind} "
+                    f"{score.latency_ms}ms{flag}",
+                    flush=True,
+                )
+                next_to_write += 1
+
+            if not budget_exhausted:
+                for executor in available:
+                    if next_to_schedule == len(pending):
+                        break
+                    schedule(executor)
+    except BaseException:
+        for task in inflight:
+            task.cancel()
+        await asyncio.gather(*inflight, return_exceptions=True)
+        raise
+
+    return budget_exhausted
+
+
 def scored_trials(path: Path) -> set[uuid.UUID]:
     """Read the resume ledger, tolerating a final line torn by an interrupted append.
 
@@ -396,6 +538,7 @@ def validate_frozen_inputs(
     dataset_sha256: str,
     corpus: EvaluationCorpusManifest,
     image_release: str,
+    execution_concurrency: int,
 ) -> None:
     if settings.release != manifest.release_sha:
         raise SystemExit("runtime RELEASE does not match the frozen manifest")
@@ -405,7 +548,15 @@ def validate_frozen_inputs(
         raise SystemExit("evaluation dataset does not match the frozen manifest")
     if corpus.corpus_snapshot_sha256 != manifest.corpus_sha256:
         raise SystemExit("evaluation corpus does not match the frozen manifest")
-    if evaluation_configuration_sha256(settings) != manifest.configuration_sha256:
+    if execution_concurrency != manifest.execution_concurrency:
+        raise SystemExit("execution concurrency does not match the frozen manifest")
+    if (
+        evaluation_configuration_sha256(
+            settings,
+            execution_concurrency=execution_concurrency,
+        )
+        != manifest.configuration_sha256
+    ):
         raise SystemExit("evaluation runtime configuration does not match the frozen manifest")
     try:
         current_prices = evaluation_price_snapshot(
@@ -454,7 +605,7 @@ async def create_trial_run(
     question: str,
     trial: EvaluationTrial,
 ) -> tuple[QueryRun, bool]:
-    run_id = uuid.uuid5(experiment_id, str(trial.trial_id))
+    run_id = trial_run_id(experiment_id, trial.trial_id)
     thread_id = f"eval-{experiment_id}-{trial.trial_id}"
     existing = await session.get(QueryRun, run_id)
     if existing is not None:
@@ -497,6 +648,20 @@ async def create_trial_run(
     )
     await session.commit()
     return run, True
+
+
+def trial_run_id(experiment_id: uuid.UUID, trial_id: uuid.UUID) -> uuid.UUID:
+    return uuid.uuid5(experiment_id, str(trial_id))
+
+
+def trial_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("limit must be an integer") from error
+    if not 0 <= limit <= MAX_TRIAL_LIMIT:
+        raise argparse.ArgumentTypeError(f"limit must be between 0 and {MAX_TRIAL_LIMIT}")
+    return limit
 
 
 async def ensure_experiment(
@@ -604,6 +769,7 @@ async def run(args: argparse.Namespace) -> None:
     case_list = load_cases(args.dataset)
     cases = {case.item_id: case for case in case_list}
     corpus = load_corpus_manifest(args.corpus)
+    execution_concurrency = args.concurrency or manifest.execution_concurrency
     try:
         image_release = (
             await asyncio.to_thread(IMAGE_RELEASE_PATH.read_text, encoding="utf-8")
@@ -618,6 +784,7 @@ async def run(args: argparse.Namespace) -> None:
         dataset_sha256=file_sha256(args.dataset),
         corpus=corpus,
         image_release=image_release,
+        execution_concurrency=execution_concurrency,
     )
     scores_path = args.run / "scores.jsonl"
     done = scored_trials(scores_path)
@@ -631,6 +798,7 @@ async def run(args: argparse.Namespace) -> None:
                 "planned": len(trials),
                 "already_scored": len(done),
                 "this_run": len(pending),
+                "concurrency": execution_concurrency,
             },
             indent=2,
         )
@@ -639,7 +807,10 @@ async def run(args: argparse.Namespace) -> None:
         return
 
     database = Database(settings)
-    sql_engine = make_engine(settings.sql_database_url, pool_size=5)
+    sql_engine = make_engine(
+        settings.sql_database_url,
+        pool_size=max(5, execution_concurrency),
+    )
     store = S3ObjectStore(settings)
     observability = Observability(settings)
     provider_gate = ProviderGate(settings)
@@ -700,47 +871,43 @@ async def run(args: argparse.Namespace) -> None:
             return
 
         async with AsyncExitStack() as stack:
-            checkpointer = await stack.enter_async_context(
-                AsyncPostgresSaver.from_conn_string(driver_free_url(settings.database_url))
-            )
-            await checkpointer.setup()
-            router = CorpusRouter(settings, llm)
-            pageindex = PageIndexRetriever(settings, store, llm)
-            runner = GraphRunner(
-                settings,
-                llm,
-                VectorlessRetriever(settings, router, pageindex),
-                PostgreSQLAdapter(sql_engine, settings),
-                observability,
-                checkpointer,
-            )
-            executor = Executor(
-                runner,
-                documents,
-                settings,
-                manifest.experiment_id,
-                api_key_id,
-                index_version_ids,
-            )
-            judge_path = args.run / "judge-queue.jsonl"
-            for index, trial in enumerate(pending, 1):
-                async with database.session() as session:
-                    score, judge = await executor.execute(session, cases[trial.item_id], trial)
-                # The judge entry is written first because scores.jsonl is the resume ledger:
-                # a crash between the two writes leaves the trial pending and re-runs it,
-                # which duplicates a judge line keyed by trial_id. The reverse order loses the
-                # claim-recall input for a trial already marked done, which nothing recovers.
-                if judge is not None:
-                    with judge_path.open("a", encoding="utf-8") as handle:
-                        handle.write(json.dumps(judge, ensure_ascii=False) + "\n")
-                with scores_path.open("a", encoding="utf-8") as handle:
-                    handle.write(score.model_dump_json() + "\n")
-                flag = "" if score.included else f" FAILED {score.failure_code}"
-                print(
-                    f"[{index}/{len(pending)}] {trial.experiment_kind} {score.latency_ms}ms{flag}"
+            executors: list[Executor] = []
+            for worker_number in range(execution_concurrency):
+                checkpointer = await stack.enter_async_context(
+                    AsyncPostgresSaver.from_conn_string(driver_free_url(settings.database_url))
                 )
-                if score.failure_code == ExperimentBudgetExceeded.failure_code:
-                    raise SystemExit(ExperimentBudgetExceeded.diagnostic)
+                if worker_number == 0:
+                    await checkpointer.setup()
+                router = CorpusRouter(settings, llm)
+                pageindex = PageIndexRetriever(settings, store, llm)
+                runner = GraphRunner(
+                    settings,
+                    llm,
+                    VectorlessRetriever(settings, router, pageindex),
+                    PostgreSQLAdapter(sql_engine, settings),
+                    observability,
+                    checkpointer,
+                )
+                executors.append(
+                    Executor(
+                        runner,
+                        documents,
+                        settings,
+                        manifest.experiment_id,
+                        api_key_id,
+                        index_version_ids,
+                    )
+                )
+            judge_path = args.run / "judge-queue.jsonl"
+            if await execute_pending_trials(
+                database,
+                executors,
+                pending,
+                cases,
+                scores_path,
+                judge_path,
+            ):
+                raise SystemExit(ExperimentBudgetExceeded.diagnostic)
     finally:
         observability.flush()
         await sql_engine.dispose()
@@ -755,14 +922,22 @@ def main() -> None:
     parser.add_argument("--corpus", type=Path, default=root / "pageindex-v2-corpus.json")
     parser.add_argument(
         "--limit",
-        type=int,
+        type=trial_limit,
         default=0,
+        metavar=f"0..{MAX_TRIAL_LIMIT}",
         help="execute at most this many trials (0 runs every pending trial)",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="resolve documents and print the plan without calling the provider",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        choices=range(1, 9),
+        metavar="1..8",
+        help="must match the frozen plan; defaults to the manifest value",
     )
     asyncio.run(run(parser.parse_args()))
 

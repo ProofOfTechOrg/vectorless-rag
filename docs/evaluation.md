@@ -47,7 +47,7 @@ After review:
 ```bash
 make evaluation-seed
 make evaluation-freeze
-make evaluation-run INDEX_HASH=<index_sha256 from evaluation-freeze> MAX_COST=25
+make evaluation-run INDEX_HASH=<index_sha256 from evaluation-freeze> MAX_COST=25 CONCURRENCY=4
 ```
 
 `MAX_COST` is the whole run's ceiling in US dollars. It is recorded in the frozen manifest and materialised as the experiment's database limit before the first trial, so execution stops with `experiment_cost_cap` rather than running past the number you chose. Resuming reuses the existing limit rather than raising it, so a resumed run cannot exceed what the plan was frozen with.
@@ -58,7 +58,7 @@ The digest covers the whole ready catalog rather than only the targeted document
 
 Seeding uses each case’s stable UUID as the Langfuse dataset item ID. The run preflight requires a clean worktree, exact release commit, complete provider price snapshot, reviewed dataset, tracked corpus hash, and explicit frozen index hash. It writes ignored local artifacts under `apps/api/evaluation/run/`:
 
-- `manifest.json`: release, configuration, corpus, index, dataset, prices, budgets, repetitions, seed, and cost ceiling
+- `manifest.json`: release, configuration, corpus, index, dataset, prices, budgets, repetitions, execution concurrency, seed, and cost ceiling
 - `trials.jsonl`: fixed-seed interleaving for route, corpus-routing, oracle-document retrieval, and forced-route end-to-end experiments
 - `scores.jsonl`: append-only local score input
 - `summary.json`: aggregate output
@@ -79,7 +79,21 @@ The dry run resolves every target arXiv ID to an indexed, ready document and fai
 
 Execution drives `GraphRunner` in process, because the protocol needs per-trial control of the forced route, the oracle document set, and the evidence budget, and none of those are fields on `ChatRequest`. Each experiment kind maps onto one override: `route` leaves the router free so its choice is measured; `corpus_routing` and `forced_route_end_to_end` pin the route so retrieval is measured without routing noise in front of it; `oracle_document_retrieval` additionally supplies the target documents so within-document node selection is isolated.
 
-`scores.jsonl` is append-only and keyed by trial ID, so an interrupted run resumes without repeating work. `LIMIT` caps how many trials a single invocation executes. Provider failures are recorded with `included: false` and a failure code rather than aborting the run, so one bad trial does not discard the rest.
+`scores.jsonl` is append-only and keyed by trial ID, so an interrupted run
+resumes without repeating provider work. The manifest freezes execution
+concurrency, which defaults to four and may be set from one through eight with
+`CONCURRENCY` when the plan is created. Each worker owns an isolated database
+session and LangGraph checkpointer connection. A single coordinator writes
+scores in frozen plan order, so parallel completion cannot interleave JSONL
+records. `LIMIT` caps how many pending trials a single invocation executes.
+Provider failures are recorded with `included: false` and a failure code rather
+than aborting the run, so one bad trial does not discard the rest.
+
+The database cost trigger serializes reservations against the experiment row.
+Once one worker reaches the ceiling, the coordinator schedules no new trials
+and lets only calls whose worst-case cost was already reserved finish.
+Cancellation terminalizes each in-flight query run before propagating, so a
+resume reconstructs its excluded score instead of repeating provider work.
 
 Route, document, support, and citation measurements are computed from the returned citations. Claim recall is not: judging whether an answer asserts each atomic claim requires reading both, so end-to-end trials are appended to `judge-queue.jsonl` and scored separately.
 

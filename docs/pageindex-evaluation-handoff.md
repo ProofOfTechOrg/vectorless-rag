@@ -5,7 +5,7 @@
 
 State, decisions, and findings for the PageIndex v2 evaluation as of branch
 `fix/pageindex-evaluation-dataset`, written against base commit
-`f6bbd7240211bab5a36a38b40e3401480ec76204`. Written so the work can continue
+`79b10f4037bc71892fe923dda3f35aadda15304c`. Written so the work can continue
 from the repository and this page alone. Reconfirm all anchors against the
 current checkout before editing.
 
@@ -16,31 +16,35 @@ current checkout before editing.
 | Evaluation dataset | 120/120 cases human-approved; `make evaluation-check` clean |
 | Corpus index | 104/104 documents indexed and ready |
 | Index recipe | 98 documents on `+vr5`, 6 on `+vr6` — deliberate, see below |
-| Trial executor | Live gate complete: 10/1,440 scored, 8 included, 2 deadline exclusions |
+| Trial executor | Bounded parallel execution implemented; verification in progress |
 | Cost ceiling | Implemented; `make evaluation-run` now requires `MAX_COST` |
 | Branch | No remote branch; not merged. Refresh `origin` before comparing refs |
 
 `make api-lint`, `make api-typecheck`, `make docs-check`, and `make compose-check`
-pass. The provider-free API suite is 398 passed; the disposable PostgreSQL
-integration stack is 9 passed.
+pass. The provider-free API suite is 409 passed; the disposable PostgreSQL
+integration stack is 10 passed.
 
 ## Do this next
 
-The frozen run is already prepared, armed, and resumable. Continuing it sends
-evaluation prompts and retrieved corpus excerpts to DeepSeek. Obtain explicit
-approval for that full 1,430-trial egress, then run:
+Finish verification and the three review lanes for the parallel executor, then
+commit it. The retired sequential manifest is release-pinned and must not be
+reused. Build and freeze a new release:
 
 ```bash
+make evaluation-restart
+make evaluation-freeze
+make evaluation-seed
+make evaluation-run INDEX_HASH=<index_sha256 from freeze> MAX_COST=25 CONCURRENCY=4
 make evaluation-execute DRY_RUN=1
+make evaluation-execute LIMIT=12
 make evaluation-execute
 make evaluation-report
 ```
 
-The dry run is safe to repeat and should report 10 already scored and 1,430
-pending without provider calls. Do not create a new manifest: that would create
-a different experiment rather than resume this one.
+Concurrency is part of the frozen configuration hash. Execution defaults to the
+manifest value and rejects a different `CONCURRENCY` override.
 
-## Current frozen run
+## Retired sequential run
 
 | Field | Value |
 | --- | --- |
@@ -51,15 +55,18 @@ a different experiment rather than resume this one.
 | Active index | `ae4a7407c9ec07b60ce580a2e547c4ebd3d40ecae7e4cb3f0bc0f76346a4ca5a` |
 | Dataset | `821e973c6362b105e899586cac9c9c189c6deb98cf0de047a8a9b3f754a9f872` |
 | Ceiling | `$25.000000` |
-| Progress | 10 scored: 8 included, 2 excluded as `TimeoutError` |
-| Model accounting | 47 calls, `$0.093061` measured, `$0` actively reserved |
+| Progress | 79 scores written; 80 durable memberships |
+| Model accounting | 422 calls, `$0.766011` measured, `$7.683858` held for unknown final usage |
+| State | Invalid: `replaced_by_parallel_execution` |
 
-Both exclusions are 12,800-token cross-document catalog workloads. They
-completed four to seven large document-selection calls, cancelled the next call
-at the exact 180-second production deadline, persisted
-`failure_code=deadline_exceeded` plus `error=TimeoutError`, reconciled every
-reservation, and allowed the next trial to continue. This is measured runtime
-behaviour, not an executor failure.
+The run was stopped after the sequential wall time proved operationally
+impractical. Most exclusions were full-catalog workloads that either reached
+the exact 180-second production deadline or received an HTTP-200 structured
+response the provider adapter could not validate. Failed or cancelled calls
+without final token telemetry remain `review_required`; the cost trigger
+correctly charges their worst-case reservation against the ceiling. The local
+run directory, including all 79 scores, is preserved at
+`/tmp/pageindex-evaluation-run-4b1098f7`.
 
 The earlier experiment `b2c2c14a-d9d3-4b96-9894-cf48eee427cf` failed executor
 preflight before any provider call. It is preserved in PostgreSQL as invalid
@@ -186,10 +193,12 @@ rebuild rather than the whole corpus.
   groups duplicated work — do not reuse it.
 - The corpus is 2,350 pages across 104 documents, so a full re-index is roughly
   **$4–5 and two hours** at four worker replicas.
-- **Trials: $0.009306/trial over the 10-trial live gate** — 47 model calls cost
-  $0.093061. A straight-line projection is about $13.40 for 1,440 trials, but
-  this small shuffled sample includes two expensive deadline cases and is not a
-  forecast. `MAX_COST=25` remains the authoritative bound.
+- **Trials: $0.766011 measured plus $7.683858 conservatively held over 80
+  durable trials** — failed or cancelled provider calls often lack final token
+  telemetry, so the budget retains their worst-case reservation. Measured spend
+  alone projects below $25, but committed budget exposure does not. If the same
+  failure rate persists, the database will stop the new run well before 1,440
+  trials; `MAX_COST=25` remains the authoritative bound.
 
 ## Operating recipes
 
@@ -274,8 +283,8 @@ Verify with `git apply --check` against a pristine copy, and bump `+vrN` in both
 
 ```bash
 make api-lint && make api-typecheck && make docs-check && make compose-check
-cd apps/api && uv run pytest          # expect 398 passed, 9 skipped
-TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 9 passed
+cd apps/api && uv run pytest          # expect 409 passed, 10 skipped
+TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 10 passed
 make pageindex-patch-test PAGEINDEX_SOURCE=/opt/pageindex
 ```
 
