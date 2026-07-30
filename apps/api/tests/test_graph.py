@@ -14,6 +14,7 @@ from vectorless_rag.graph import (
     CAPABILITY_HELP_ANSWER,
     GraphRunner,
     _normalize_regex_boundary_escapes,  # pyright: ignore[reportPrivateUsage]
+    _normalize_short_regex_terms,  # pyright: ignore[reportPrivateUsage]
     _strip_sql_comments,  # pyright: ignore[reportPrivateUsage]
     bounded_history,
     format_inline_citations,
@@ -768,6 +769,84 @@ def test_normalize_regex_boundary_escapes_enables_guarded_short_term_match() -> 
     assert r"\yrag\y" in validated.normalized
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* 'text[-\s]+to[-\s]+image|AI'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* $$text[-\s]+to[-\s]+image|AI$$",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* N'text[-\s]+to[-\s]+image|AI'",
+    ],
+)
+def test_normalize_short_regex_terms_adds_postgres_word_boundaries(sql: str) -> None:
+    normalized = _normalize_short_regex_terms(sql)
+
+    assert r"text[-\s]+\mto\M[-\s]+image|\mAI\M" in normalized
+    validate_sql(normalized)
+
+
+def test_normalize_short_regex_terms_is_idempotent() -> None:
+    sql = (
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* 'text[-\s]+to[-\s]+image|AI'"
+    )
+
+    once = _normalize_short_regex_terms(sql)
+    twice = _normalize_short_regex_terms(once)
+
+    assert once == twice
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        (
+            r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?im)^ai$'",
+            r"(?im)^\mai\M$",
+        ),
+        (
+            r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '***:(?im)^ai$'",
+            r"***:(?im)^\mai\M$",
+        ),
+    ],
+)
+def test_normalize_short_regex_terms_preserves_postgres_option_prefix(
+    sql: str, expected: str
+) -> None:
+    normalized = _normalize_short_regex_terms(sql)
+
+    assert expected in normalized
+    validate_sql(normalized)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?b)ai'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?e)ai'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?q)ai'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '***=ai'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?b)\\mai\\M'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?e)\\mai\\M'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?q)\\mai\\M'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '***=\\mai\\M'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '***:(?q)\\mai\\M'",
+    ],
+)
+def test_normalize_short_regex_terms_leaves_non_are_modes_for_rejection(sql: str) -> None:
+    assert _normalize_short_regex_terms(sql) == sql
+    with pytest.raises(SQLRejected, match="short term 'ai'"):
+        validate_sql(sql)
+
+
+def test_normalize_short_regex_terms_leaves_character_classes_unchanged() -> None:
+    sql = r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '[RAG]'"
+
+    assert _normalize_short_regex_terms(sql) == sql
+
+
 async def test_sql_route_normalizes_doubled_regex_boundaries_before_execution() -> None:
     doubled_sql = r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '\\mdistillation\\M'"
     current = _current("how many papers deal with distillation", "thread-sql-regex")
@@ -802,6 +881,39 @@ async def test_sql_route_normalizes_doubled_regex_boundaries_before_execution() 
     assert r"\\mdistillation\\M" not in audits[0].normalized_sql
     assert (current.trace_id, "sql-regex-normalized", 1.0, None) in observability.scores
     assert all(score[1] != "sql-comment-stripped" for score in observability.scores)
+
+
+async def test_sql_route_bounds_short_regex_terms_before_validation() -> None:
+    generated_sql = (
+        r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* 'text[-\s]+to[-\s]+image|AI'"
+    )
+    current = _current("list text-to-image or AI papers", "thread-sql-short-regex")
+    llm = _SQLLLM(sql=generated_sql)
+    adapter = _SQLAdapter()
+    session = _Session([])
+    observability = _Observability()
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
+        adapter,  # pyright: ignore[reportArgumentType]
+        observability,  # pyright: ignore[reportArgumentType]
+    )
+
+    await runner.run(
+        session,  # pyright: ignore[reportArgumentType]
+        ChatRequest(message=current.question, thread_id=current.thread_id),
+        current,
+    )
+
+    assert adapter.calls == 1
+    assert r"text[-\s]+\mto\M[-\s]+image|\mAI\M" in adapter.queries[0].normalized
+    audits = [item for item in session.added if isinstance(item, SqlAudit)]
+    assert len(audits) == 1
+    assert audits[0].generated_sql == generated_sql
+    assert audits[0].normalized_sql == adapter.queries[0].normalized
+    assert (current.trace_id, "sql-regex-normalized", 1.0, None) in observability.scores
 
 
 async def test_hybrid_non_empty_sql_rows_bypass_document_insufficiency() -> None:

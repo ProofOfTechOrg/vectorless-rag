@@ -68,6 +68,8 @@ FUNCTION_NAME_ALIASES = {
     "timestamptrunc": "date_trunc",
 }
 SHORT_REGEX_TERM = re.compile(r"(?<![A-Za-z\\])([A-Za-z]{2,3})(?![A-Za-z])")
+POSTGRES_REGEX_OPTION_PREFIX = re.compile(r"^(?:\*\*\*:)?\(\?([bceimnpqstwx]+)\)")
+POSTGRES_NON_ARE_REGEX_OPTIONS = frozenset({"b", "e", "q"})
 # Numeric / code-point escapes -- \xHH (hex), \ooo (octal), \uHHHH, \UHHHHHHHH -- that decode
 # to a character the AST text never shows. TWO independent decoders reach them: PostgreSQL's
 # E-string escape processor (any E'...' literal, verifiable=False), and -- separately -- the
@@ -145,7 +147,7 @@ def _scope_relations(statement: exp.Query) -> set[str]:
     return relations
 
 
-def _match_pattern_text(node: exp.Condition | None) -> tuple[str, bool] | None:
+def match_pattern_text(node: exp.Expr | None) -> tuple[str, bool] | None:
     # (text, verifiable). standard_conforming_strings=on, so the three text-string literal
     # forms that PostgreSQL does NOT escape-process store their exact executed text and are
     # verifiable=True: a plain Literal, a dollar-quoted RawString, and a National string
@@ -171,13 +173,22 @@ def _match_pattern_text(node: exp.Condition | None) -> tuple[str, bool] | None:
     return None
 
 
+def postgres_regex_supports_word_boundaries(value: str) -> bool:
+    if value.startswith("***="):
+        return False
+    option_prefix = POSTGRES_REGEX_OPTION_PREFIX.match(value)
+    return option_prefix is None or POSTGRES_NON_ARE_REGEX_OPTIONS.isdisjoint(
+        option_prefix.group(1)
+    )
+
+
 def _escaped_short_term(content: str) -> str | None:
     # An escape-processed string cannot be trusted to bound a short term: regex
     # word-boundary escapes (\m, \M, \y) dissolve into bare letters, hiding an interior
     # short token from a direct scan (E'\yrag\y' executes as yragy). Probe the raw text and
     # the text with those boundary escapes removed, and treat any short standalone token
     # found either way as unverifiable.
-    for candidate in (content, re.sub(r"\\[mMy]", "", content)):
+    for candidate in (content, re.sub(r"\\+[mMy]", "", content)):
         match = SHORT_REGEX_TERM.search(candidate)
         if match is not None:
             return match.group(1)
@@ -233,7 +244,7 @@ def _reject_codepoint_escape(value: str) -> None:
 def _reject_computed_match_pattern(operand: exp.Condition | None) -> None:
     # Reject a match predicate whose RIGHT-HAND pattern operand is a function call or a ||
     # concatenation. Such an operand is computed at run time, never a static string literal,
-    # so _match_pattern_text returns None and every short-term scan above is skipped:
+    # so match_pattern_text returns None and every short-term scan above is skipped:
     # lower('RAG'), concat('r','a','g'), array_to_string(ARRAY[...], '') and '%' || 'rag' || '%'
     # each rebuild a short term the guard can no longer see. RHS-only by construction -- a
     # computed LHS with a literal RHS (lower(title) ~* '\mrag\M') keeps a literal here and stays
@@ -263,7 +274,7 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
     # control-character check for the unverifiable (E-string) branch, whose decoded text is the
     # only place a sqlglot-vs-PostgreSQL escape divergence can appear.
     for predicate in statement.find_all(exp.Like, exp.ILike):
-        extracted = _match_pattern_text(predicate.expression)
+        extracted = match_pattern_text(predicate.expression)
         if extracted is None:
             _reject_computed_match_pattern(predicate.expression)
             continue
@@ -288,7 +299,7 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
     # anchored exact match and is safe ('rag' -> pass). Its regex engine also decodes
     # code-point escapes, so reject those up-front (before verifiability, for both classes).
     for predicate in statement.find_all(exp.SimilarTo):
-        extracted = _match_pattern_text(predicate.expression)
+        extracted = match_pattern_text(predicate.expression)
         if extracted is None:
             _reject_computed_match_pattern(predicate.expression)
             continue
@@ -331,7 +342,7 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
     # letters), so an ILIKE '%ραγ%' short term is still rejected; only this word-boundary path is
     # ASCII-scoped. (A test pins the current pass so a future closure visibly flips.)
     for predicate in statement.find_all(exp.RegexpLike, exp.RegexpILike):
-        extracted = _match_pattern_text(predicate.expression)
+        extracted = match_pattern_text(predicate.expression)
         if extracted is None:
             _reject_computed_match_pattern(predicate.expression)
             continue
@@ -340,7 +351,22 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
         if not verifiable:
             _reject_unverifiable_pattern(value)
             continue
+        option_prefix = POSTGRES_REGEX_OPTION_PREFIX.match(value)
+        if not postgres_regex_supports_word_boundaries(value):
+            pattern_body = (
+                value[option_prefix.end() :]
+                if option_prefix is not None
+                else value.removeprefix("***=")
+            )
+            unsafe = _escaped_short_term(pattern_body)
+            if unsafe is not None:
+                raise SQLRejected(
+                    f"short term {unsafe!r} cannot use ARE word boundaries in this regex mode"
+                )
+            continue
         for match in SHORT_REGEX_TERM.finditer(value):
+            if option_prefix is not None and match.start() < option_prefix.end():
+                continue
             prefix = value[: match.start()]
             suffix = value[match.end() :]
             left_bounded = r"\m" in prefix or r"\y" in prefix

@@ -215,6 +215,52 @@ def test_short_regex_terms_require_explicit_word_boundaries() -> None:
 
 
 @pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        (
+            r"SELECT count(*) FROM agent.paper_catalog_v1 "
+            r"WHERE abstract ~* '(?im)^\mai\M$'",
+            r"(?im)^\mai\M$",
+        ),
+        (
+            r"SELECT count(*) FROM agent.paper_catalog_v1 "
+            r"WHERE abstract ~* '***:(?im)^\mai\M$'",
+            r"***:(?im)^\mai\M$",
+        ),
+    ],
+)
+def test_regex_option_prefix_is_not_treated_as_a_search_term(sql: str, expected: str) -> None:
+    validated = validate_sql(sql)
+
+    assert expected in validated.normalized
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?im)^ai$'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***:(?im)^ai$'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?b)ai'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?e)ai'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?q)ai'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***=ai'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?b)\mai\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?e)\mai\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?q)\mai\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***=\mai\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?b)\\mai\\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?e)\\mai\\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?q)\\mai\\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***=\\mai\\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***:(?q)\\mai\\M'",
+    ],
+)
+def test_regex_mode_prefix_does_not_hide_an_unbounded_search_term(sql: str) -> None:
+    with pytest.raises(SQLRejected, match="short term 'ai'"):
+        validate_sql(sql)
+
+
+@pytest.mark.parametrize(
     "sql",
     [
         r"SELECT count(*) FROM agent.paper_catalog_v1 "
@@ -457,7 +503,7 @@ def test_like_similar_to_escape_clause_is_rejected(sql: str) -> None:
     "sql",
     [
         # FINDING B -- a computed / non-literal RIGHT-HAND pattern operand skips every short-term
-        # scan (_match_pattern_text returns None), so a function call or || concatenation rebuilds
+        # scan (match_pattern_text returns None), so a function call or || concatenation rebuilds
         # a short term the guard never sees. Each executed as an over-broad match on the reader DB
         # ('storage' ~* lower('RAG') -> rag -> TRUE) before this guard.
         "SELECT 1 FROM agent.paper_catalog_v1 WHERE title ~* lower('RAG')",

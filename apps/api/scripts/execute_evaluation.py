@@ -73,7 +73,7 @@ from vectorless_rag.retrieval import (
     VectorlessRetriever,
 )
 from vectorless_rag.schemas import ChatRequest, MetadataConstraints
-from vectorless_rag.sql_guard import PostgreSQLAdapter
+from vectorless_rag.sql_guard import PostgreSQLAdapter, SQLRejected
 from vectorless_rag.storage import S3ObjectStore
 from vectorless_rag.usage import ExperimentBudgetExceeded, UsageOwner, usage_context
 
@@ -84,6 +84,7 @@ EXPECTED_ROUTE = RunRoute.documents
 IMAGE_RELEASE_PATH = Path("/app/.release")
 EXECUTION_CANCELLED_FAILURE_CODE = "execution_cancelled"
 EXECUTION_FAILED_FAILURE_CODE = "execution_failed"
+GENERATED_SQL_REJECTED_FAILURE_CODE = "generated_sql_rejected"
 MAX_TRIAL_LIMIT = 10_000
 
 
@@ -348,9 +349,12 @@ class Executor:
                     )
                 ):
                     result = await self.runner.run(session, request, run, options=options)
-        except (ExperimentBudgetExceeded, LLMError, TimeoutError) as error:
-            await session.rollback()
-            code = getattr(error, "failure_code", type(error).__name__)
+        except (ExperimentBudgetExceeded, LLMError, SQLRejected, TimeoutError) as error:
+            if isinstance(error, SQLRejected):
+                code = GENERATED_SQL_REJECTED_FAILURE_CODE
+            else:
+                await session.rollback()
+                code = getattr(error, "failure_code", type(error).__name__)
             latency = round((time.monotonic() - started) * 1000)
             await self.finalize(
                 session,

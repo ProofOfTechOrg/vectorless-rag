@@ -32,7 +32,16 @@ from vectorless_rag.schemas import (
     SQLPlan,
     SynthesisResult,
 )
-from vectorless_rag.sql_guard import DatabaseAdapter, SQLRejected, SQLResult, validate_sql
+from vectorless_rag.sql_guard import (
+    POSTGRES_REGEX_OPTION_PREFIX,
+    SHORT_REGEX_TERM,
+    DatabaseAdapter,
+    SQLRejected,
+    SQLResult,
+    match_pattern_text,
+    postgres_regex_supports_word_boundaries,
+    validate_sql,
+)
 
 CATALOG_FALLBACK_SQL = """SELECT document_id, arxiv_id, title, authors, topics, submitted_date,
 page_count
@@ -86,6 +95,17 @@ _REGEX_BOUNDARY_ESCAPE = re.compile(r"\\\\([mMyYAZ])")
 _ANONYMOUS_REGEX_MATCH_FUNCTIONS = frozenset({"regexp_like", "regexp_ilike"})
 
 
+def _regex_match_patterns(statement: exp.Expr) -> list[exp.Expr]:
+    patterns = [node.expression for node in statement.find_all(exp.RegexpLike, exp.RegexpILike)]
+    for anonymous in statement.find_all(exp.Anonymous):
+        if anonymous.name.lower() not in _ANONYMOUS_REGEX_MATCH_FUNCTIONS:
+            continue
+        arguments = anonymous.expressions
+        if len(arguments) >= 2:
+            patterns.append(arguments[1])
+    return patterns
+
+
 def _normalize_regex_boundary_escapes(sql: str) -> str:
     try:
         statements = sqlglot.parse(sql, read="postgres")
@@ -94,22 +114,75 @@ def _normalize_regex_boundary_escapes(sql: str) -> str:
     if len(statements) != 1 or statements[0] is None:
         return sql
     statement = statements[0]
-    patterns = [node.expression for node in statement.find_all(exp.RegexpLike, exp.RegexpILike)]
-    for anonymous in statement.find_all(exp.Anonymous):
-        if anonymous.name.lower() not in _ANONYMOUS_REGEX_MATCH_FUNCTIONS:
-            continue
-        arguments = anonymous.expressions
-        if len(arguments) >= 2:
-            patterns.append(arguments[1])
     changed = False
-    for pattern in patterns:
-        if not isinstance(pattern, exp.Literal) or not pattern.is_string:
+    for pattern in _regex_match_patterns(statement):
+        extracted = match_pattern_text(pattern)
+        if extracted is None or not extracted[1]:
             continue
-        value = str(pattern.this)
+        value = extracted[0]
+        if not postgres_regex_supports_word_boundaries(value):
+            continue
         collapsed = _REGEX_BOUNDARY_ESCAPE.sub(r"\\\1", value)
         if collapsed != value:
             pattern.set("this", collapsed)
             changed = True
+    if not changed:
+        return sql
+    return statement.sql(dialect="postgres")
+
+
+def _inside_regex_character_class(pattern: str, index: int) -> bool:
+    inside = False
+    escaped = False
+    for position, char in enumerate(pattern):
+        if position == index:
+            return inside
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "[":
+            inside = True
+        elif char == "]":
+            inside = False
+    return inside
+
+
+def _normalize_short_regex_terms(sql: str) -> str:
+    try:
+        statements = sqlglot.parse(sql, read="postgres")
+    except SqlglotError:
+        return sql
+    if len(statements) != 1 or statements[0] is None:
+        return sql
+    statement = statements[0]
+    changed = False
+    for pattern in _regex_match_patterns(statement):
+        extracted = match_pattern_text(pattern)
+        if extracted is None or not extracted[1]:
+            continue
+        value = extracted[0]
+        parts: list[str] = []
+        cursor = 0
+        option_prefix = POSTGRES_REGEX_OPTION_PREFIX.match(value)
+        supports_word_boundaries = postgres_regex_supports_word_boundaries(value)
+        for match in SHORT_REGEX_TERM.finditer(value):
+            parts.append(value[cursor : match.start()])
+            term = match.group(1)
+            if (
+                option_prefix is not None
+                and match.start() < option_prefix.end()
+                or _inside_regex_character_class(value, match.start())
+                or not supports_word_boundaries
+            ):
+                parts.append(term)
+            else:
+                parts.append(rf"\m{term}\M")
+                changed = True
+            cursor = match.end()
+        if cursor:
+            parts.append(value[cursor:])
+            pattern.set("this", "".join(parts))
     if not changed:
         return sql
     return statement.sql(dialect="postgres")
@@ -610,6 +683,7 @@ not answer the question. Treat prior assistant text as conversation context, not
                 if stripped != plan.sql:
                     self.observability.score(run.trace_id, "sql-comment-stripped", 1.0)
                 sanitized = _normalize_regex_boundary_escapes(stripped)
+                sanitized = _normalize_short_regex_terms(sanitized)
                 if sanitized != stripped:
                     self.observability.score(run.trace_id, "sql-regex-normalized", 1.0)
                 validated = validate_sql(sanitized, self.settings.sql_row_limit)

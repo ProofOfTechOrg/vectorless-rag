@@ -67,9 +67,11 @@ from vectorless_rag.models import (  # noqa: E402
     QueryRun,
     RunFailureCode,
     RunRoute,
+    SqlAudit,
 )
 from vectorless_rag.retrieval import CorpusRouter  # noqa: E402
 from vectorless_rag.schemas import DocumentMetadata, MetadataConstraints  # noqa: E402
+from vectorless_rag.sql_guard import SQLRejected  # noqa: E402
 from vectorless_rag.usage import ExperimentBudgetExceeded  # noqa: E402
 
 OWNER_URL = os.getenv("TEST_OWNER_DATABASE_URL")
@@ -1269,6 +1271,36 @@ class _FailedRunner:
         raise RuntimeError("unexpected execution failure")
 
 
+class _RejectedSQLRunner:
+    async def run(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise SQLRejected("short term must use explicit regex word boundaries")
+
+
+class _RejectedSQLWithAuditsRunner:
+    async def run(
+        self,
+        session: AsyncSession,
+        request: object,
+        run: QueryRun,
+        **kwargs: object,
+    ) -> None:
+        del request, kwargs
+        session.add_all(
+            [
+                SqlAudit(
+                    run_id=run.id,
+                    generated_sql=f"SELECT {attempt}",
+                    allowed=False,
+                    rejection_reason="short term must use explicit regex word boundaries",
+                )
+                for attempt in range(2)
+            ]
+        )
+        await session.flush()
+        raise SQLRejected("short term must use explicit regex word boundaries")
+
+
 class _SuccessfulRunner:
     async def run(self, *args: object, **kwargs: object) -> Any:
         del args, kwargs
@@ -1455,6 +1487,133 @@ async def test_denied_budget_terminalizes_with_recoverable_failure_code(
     assert run.error == ExperimentBudgetExceeded.failure_code
     assert session.rollbacks == 1
     assert session.commits == 1
+
+
+async def test_rejected_generated_sql_preserves_audits_and_terminalizes(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    case, trial = _single_trial()
+    run = QueryRun(
+        id=uuid.uuid4(),
+        trace_id=uuid.uuid4().hex,
+        thread_id="rejected-generated-sql",
+        api_key_id=uuid.uuid4(),
+        question=case.prompt,
+    )
+
+    async def created(*args: object, **kwargs: object) -> tuple[QueryRun, bool]:
+        del args, kwargs
+        return run, True
+
+    monkeypatch.setattr(execute_evaluation, "create_trial_run", created)
+    session = _RecordingSession()
+    executor = execute_evaluation.Executor(
+        cast(Any, _RejectedSQLRunner()),
+        {},
+        Settings(),
+        uuid.uuid4(),
+        run.api_key_id,
+        {},
+    )
+
+    score, judge = await executor.execute(cast(Any, session), case, trial)
+
+    assert score.failure_code == execute_evaluation.GENERATED_SQL_REJECTED_FAILURE_CODE
+    assert score.included is False
+    assert judge is None
+    assert run.error == execute_evaluation.GENERATED_SQL_REJECTED_FAILURE_CODE
+    assert run.failure_code == RunFailureCode.request_failed
+    assert session.rollbacks == 0
+    assert session.commits == 1
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not OWNER_URL, reason="PostgreSQL owner URL not set")
+async def test_rejected_generated_sql_commits_audits_with_terminal_run(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    assert OWNER_URL is not None
+    case, trial = _single_trial()
+    engine = make_engine(OWNER_URL)
+    api_key_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    async with engine.connect() as connection:
+        transaction = await connection.begin()
+        sessions = async_sessionmaker(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
+        try:
+            async with sessions() as session:
+                session.add(
+                    ApiKey(
+                        id=api_key_id,
+                        name="rejected-sql-test",
+                        prefix=f"eval-{api_key_id.hex[:8]}",
+                        key_hash=hashlib.sha256(api_key_id.bytes).hexdigest(),
+                        scopes=[],
+                    )
+                )
+                session.add(
+                    QueryRun(
+                        id=run_id,
+                        trace_id=uuid.uuid4().hex,
+                        thread_id="rejected-generated-sql-integration",
+                        api_key_id=api_key_id,
+                        question=case.prompt,
+                    )
+                )
+                await session.commit()
+
+            async def created(
+                current_session: AsyncSession,
+                *args: object,
+                **kwargs: object,
+            ) -> tuple[QueryRun, bool]:
+                del args, kwargs
+                run = await current_session.get(QueryRun, run_id)
+                assert run is not None
+                return run, True
+
+            monkeypatch.setattr(execute_evaluation, "create_trial_run", created)
+            executor = execute_evaluation.Executor(
+                cast(Any, _RejectedSQLWithAuditsRunner()),
+                {},
+                Settings(),
+                uuid.uuid4(),
+                api_key_id,
+                {},
+            )
+            async with sessions() as session:
+                score, judge = await executor.execute(session, case, trial)
+
+            assert score.failure_code == execute_evaluation.GENERATED_SQL_REJECTED_FAILURE_CODE
+            assert score.included is False
+            assert judge is None
+            async with sessions() as session:
+                stored_run = await session.get(QueryRun, run_id)
+                audits = list(
+                    await session.scalars(
+                        select(SqlAudit)
+                        .where(SqlAudit.run_id == run_id)
+                        .order_by(SqlAudit.generated_sql)
+                    )
+                )
+                assert stored_run is not None
+                assert stored_run.failure_code == RunFailureCode.request_failed
+                assert stored_run.error == execute_evaluation.GENERATED_SQL_REJECTED_FAILURE_CODE
+                assert [audit.generated_sql for audit in audits] == [
+                    "SELECT 0",
+                    "SELECT 1",
+                ]
+                assert all(
+                    audit.rejection_reason == "short term must use explicit regex word boundaries"
+                    for audit in audits
+                )
+        finally:
+            await transaction.rollback()
+    await engine.dispose()
 
 
 async def test_cancelled_execution_terminalizes_before_propagating(

@@ -30,6 +30,9 @@ from vectorless_rag.db import (
     make_engine,
     set_ingestion_provider_admission,
 )
+from vectorless_rag.graph import (
+    _normalize_short_regex_terms,  # pyright: ignore[reportPrivateUsage]
+)
 from vectorless_rag.models import (
     Document,
     DocumentStatus,
@@ -47,7 +50,7 @@ from vectorless_rag.models import (
 from vectorless_rag.provider import DEEPSEEK_MAX_INPUT_TOKENS, DEEPSEEK_MAX_OUTPUT_TOKENS
 from vectorless_rag.retrieval import CorpusRouter
 from vectorless_rag.schemas import MetadataConstraints
-from vectorless_rag.sql_guard import PostgreSQLAdapter, validate_sql
+from vectorless_rag.sql_guard import PostgreSQLAdapter, SQLRejected, validate_sql
 from vectorless_rag.telemetry_classification import classification_report
 from vectorless_rag.usage import (
     RECONCILE_MODEL_CALL_RESERVATION_SQL,
@@ -1065,9 +1068,14 @@ def test_reservation_guard_migration_allows_inflight_schema_0007_finish(
         with ThreadPoolExecutor(max_workers=1) as executor:
             migration = executor.submit(command.upgrade, config, "head")
             try:
-                deadline = time.monotonic() + 2
+                deadline = time.monotonic() + 10
                 with psycopg.connect(owner_sync) as observer:
                     while time.monotonic() < deadline:
+                        if migration.done():
+                            migration.result()
+                            pytest.fail(
+                                "migration completed without entering the ledger lock retry"
+                            )
                         lock_retry_active = observer.execute(
                             """SELECT EXISTS (
                                  SELECT 1
@@ -2082,7 +2090,8 @@ async def test_migration_search_reader_permissions_and_guarded_execution() -> No
                 """INSERT INTO agent.documents
                    (id, sha256, original_filename, pdf_object_key, title, abstract, topics, status)
                    VALUES (%s, %s, 'test.pdf', 'pdf/test', 'Vectorless Retrieval',
-                           'Reasoning based search', ARRAY['rag', 'pageindex'], 'ready')""",
+                           'Text to image reasoning based search',
+                           ARRAY['rag', 'pageindex'], 'ready')""",
                 (identifier, digest),
             )
         with psycopg.connect(reader_sync, autocommit=True) as connection:
@@ -2096,6 +2105,15 @@ async def test_migration_search_reader_permissions_and_guarded_execution() -> No
                 connection.execute("SELECT * FROM agent.documents").fetchall()
             with pytest.raises(errors.InsufficientPrivilege):
                 connection.execute("DELETE FROM agent.paper_catalog_v1")
+            regex_modes = connection.execute(
+                """SELECT
+                     'AI' ~ '(?b)AI',
+                     'AI' ~ '(?e)AI',
+                     'AI' ~ '(?q)AI',
+                     'AI' ~ '***:(?im)^ai$',
+                     'AI' ~ '***=AI'"""
+            ).fetchone()
+            assert regex_modes == (True, True, True, True, True)
         settings = Settings(sql_database_url=READER_URL)
         engine = make_engine(READER_URL, pool_size=2)
         try:
@@ -2123,6 +2141,52 @@ async def test_migration_search_reader_permissions_and_guarded_execution() -> No
                 )
             )
             assert percent_literal.rows == [
+                {"document_id": identifier, "title": "Vectorless Retrieval"}
+            ]
+            bounded_short_term = await PostgreSQLAdapter(engine, settings).execute(
+                validate_sql(
+                    _normalize_short_regex_terms(
+                        "SELECT document_id, title FROM agent.paper_catalog_v1 "
+                        r"WHERE abstract ~* 'text[-\s]+to[-\s]+image'"
+                    )
+                )
+            )
+            assert bounded_short_term.rows == [
+                {"document_id": identifier, "title": "Vectorless Retrieval"}
+            ]
+            for unsafe_sql in (
+                r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE title ~* '(?b)\mai\M'",
+                r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE title ~* '(?e)\mai\M'",
+                r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE title ~* '(?q)\mai\M'",
+                r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE title ~* '***=\mai\M'",
+                r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE title ~* '(?b)\\mai\\M'",
+                r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE title ~* '(?e)\\mai\\M'",
+                r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE title ~* '(?q)\\mai\\M'",
+                r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE title ~* '***=\\mai\\M'",
+                r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE title ~* '***:(?q)\\mai\\M'",
+            ):
+                assert _normalize_short_regex_terms(unsafe_sql) == unsafe_sql
+                with pytest.raises(SQLRejected, match="cannot use ARE word boundaries"):
+                    validate_sql(unsafe_sql)
+            embedded_options = await PostgreSQLAdapter(engine, settings).execute(
+                validate_sql(
+                    _normalize_short_regex_terms(
+                        "SELECT document_id, title FROM agent.paper_catalog_v1 "
+                        r"WHERE title = 'Vectorless Retrieval' "
+                        r"AND 'AI' ~ '***:(?im)^ai$'"
+                    )
+                )
+            )
+            assert embedded_options.rows == [
                 {"document_id": identifier, "title": "Vectorless Retrieval"}
             ]
         finally:
