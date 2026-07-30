@@ -90,6 +90,7 @@ test-unit: ## Run Python tests that require no external infrastructure.
 	cd $(API_DIR) && $(UV) run pytest tests -m 'not integration'
 test-integration: ## Run PostgreSQL integration tests with TEST_*_DATABASE_URL.
 	@test -n "$${TEST_OWNER_DATABASE_URL:-}" || { echo "TEST_OWNER_DATABASE_URL is required" >&2; exit 2; }
+	@test -n "$${TEST_APP_DATABASE_URL:-}" || { echo "TEST_APP_DATABASE_URL is required" >&2; exit 2; }
 	@test -n "$${TEST_DATABASE_URL:-}" || { echo "TEST_DATABASE_URL is required" >&2; exit 2; }
 	cd $(API_DIR) && $(UV) run pytest tests -m integration
 test-integration-stack: ## Run integration tests against an isolated disposable PostgreSQL project.

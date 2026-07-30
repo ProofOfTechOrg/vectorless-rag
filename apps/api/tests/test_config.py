@@ -33,6 +33,7 @@ def test_ingestion_operational_defaults_are_bounded_and_patch_versioned() -> Non
     assert settings.pageindex_version.endswith("+vr6")
     assert settings.query_node_selection_max_output_tokens == 4_096
     assert settings.request_deadline_seconds == 180
+    assert settings.catalog_routing_concurrency == 4
 
 
 def test_query_runtime_limits_must_be_positive() -> None:
@@ -40,6 +41,8 @@ def test_query_runtime_limits_must_be_positive() -> None:
         Settings(query_node_selection_max_output_tokens=0)
     with pytest.raises(ValidationError):
         Settings(request_deadline_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(catalog_routing_concurrency=0)
 
 
 @pytest.mark.parametrize("price", [-1, float("inf"), float("nan")])

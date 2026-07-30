@@ -352,6 +352,7 @@ Run integration tests against the migrated local database:
 
 ```bash
 TEST_OWNER_DATABASE_URL=postgresql+psycopg://rag_owner:rag-owner-change-me@127.0.0.1:55432/rag \
+TEST_APP_DATABASE_URL=postgresql+psycopg://rag_app:rag-app-change-me@127.0.0.1:55432/rag \
 TEST_DATABASE_URL=postgresql+psycopg://rag_reader:rag-reader-change-me@127.0.0.1:55432/rag \
 make test-integration
 ```

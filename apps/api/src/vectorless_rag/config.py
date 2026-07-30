@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     upload_max_bytes: int = 200 * 1024 * 1024
     candidate_limit: int = 50
     catalog_batch_token_limit: int = 24_000
+    catalog_routing_concurrency: int = 4
     document_limit: int = 8
     page_ranges_per_document: int = 4
     fetched_page_limit: int = 24
@@ -95,6 +96,7 @@ class Settings(BaseSettings):
         "ingestion_heartbeat_seconds",
         "ingestion_stale_grace_seconds",
         "catalog_batch_token_limit",
+        "catalog_routing_concurrency",
         "request_deadline_seconds",
     )
     @classmethod

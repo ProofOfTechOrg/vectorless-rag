@@ -60,6 +60,7 @@ EVALUATION_RUNTIME_SETTING_NAMES = (
     "request_deadline_seconds",
     "candidate_limit",
     "catalog_batch_token_limit",
+    "catalog_routing_concurrency",
     "document_limit",
     "page_ranges_per_document",
     "fetched_page_limit",

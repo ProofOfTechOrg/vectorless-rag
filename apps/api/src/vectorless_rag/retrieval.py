@@ -7,7 +7,7 @@ import re
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
@@ -51,17 +51,70 @@ CATALOG_MAP_DETAIL_LIMIT = 256
 CATALOG_MAP_OUTLINE_LIMIT = 16
 
 
+@dataclass(frozen=True)
+class CatalogRoutingLimiter:
+    maximum_concurrency: int
+    semaphore: asyncio.Semaphore = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.maximum_concurrency < 1:
+            raise ValueError("catalog routing concurrency must be positive")
+        object.__setattr__(
+            self,
+            "semaphore",
+            asyncio.Semaphore(self.maximum_concurrency),
+        )
+
+
 async def _gather_or_cancel[ResultT](
-    coroutines: Sequence[Coroutine[Any, Any, ResultT]],
+    operations: Sequence[Callable[[], Awaitable[ResultT]]],
+    limiter: CatalogRoutingLimiter,
 ) -> list[ResultT]:
-    tasks = [asyncio.create_task(coroutine) for coroutine in coroutines]
+    missing = object()
+    results: list[ResultT | object] = [missing] * len(operations)
+    next_index = 0
+    failure: BaseException | None = None
+    stopped = asyncio.Event()
+    workers: list[asyncio.Task[None]] = []
+
+    async def work() -> None:
+        nonlocal failure, next_index
+        while not stopped.is_set() and next_index < len(operations):
+            index = next_index
+            next_index += 1
+            async with limiter.semaphore:
+                if stopped.is_set():
+                    return
+                try:
+                    results[index] = await operations[index]()
+                except BaseException as error:
+                    if failure is None:
+                        failure = error
+                        stopped.set()
+                        current = asyncio.current_task()
+                        for worker in workers:
+                            if worker is not current:
+                                worker.cancel()
+                    raise
+
+    workers.extend(
+        asyncio.create_task(work())
+        for _ in range(min(limiter.maximum_concurrency, len(operations)))
+    )
+    joined = asyncio.gather(*workers, return_exceptions=True)
     try:
-        return list(await asyncio.gather(*tasks))
+        await asyncio.shield(joined)
     except BaseException:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        stopped.set()
+        for worker in workers:
+            worker.cancel()
+        await joined
         raise
+    if failure is not None:
+        raise failure
+    if any(result is missing for result in results):
+        raise AssertionError("catalog routing operation did not produce a result")
+    return [cast(ResultT, result) for result in results]
 
 
 def _canonical_json(value: object) -> str:
@@ -187,10 +240,19 @@ class Retriever(Protocol):
 
 
 class CorpusRouter:
-    def __init__(self, settings: Settings, llm: StructuredLLM) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        llm: StructuredLLM,
+        *,
+        catalog_routing_limiter: CatalogRoutingLimiter | None = None,
+    ) -> None:
         self.settings = settings
         self.llm = llm
         self.encoding = tiktoken.get_encoding("cl100k_base")
+        self.catalog_routing_limiter = catalog_routing_limiter or CatalogRoutingLimiter(
+            settings.catalog_routing_concurrency
+        )
 
     async def candidates(
         self,
@@ -679,14 +741,15 @@ class CorpusRouter:
             item
             for batch_result in await _gather_or_cancel(
                 [
-                    self._select_batch(
+                    lambda batch=batch: self._select_batch(
                         question,
                         batch,
                         phase="map",
                         selection_limit=self.settings.document_limit,
                     )
                     for batch in self._batches(candidates)
-                ]
+                ],
+                self.catalog_routing_limiter,
             )
             for item in batch_result
         ]
@@ -699,7 +762,7 @@ class CorpusRouter:
                 item
                 for batch_result in await _gather_or_cancel(
                     [
-                        self._select_batch(
+                        lambda batch=batch: self._select_batch(
                             question,
                             batch,
                             phase="reduce",
@@ -709,7 +772,8 @@ class CorpusRouter:
                             ),
                         )
                         for batch in self._comparison_batches(pool)
-                    ]
+                    ],
+                    self.catalog_routing_limiter,
                 )
                 for item in batch_result
             ]

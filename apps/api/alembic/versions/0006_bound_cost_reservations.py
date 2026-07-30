@@ -228,6 +228,19 @@ def upgrade() -> None:
         CREATE TRIGGER ingestion_job_experiment_immutable_trigger
         BEFORE UPDATE OF experiment_id ON agent.ingestion_jobs
         FOR EACH ROW EXECUTE FUNCTION agent.ingestion_job_experiment_immutable();
+
+        CREATE FUNCTION agent.ingestion_attempt_job_immutable() RETURNS trigger AS $$
+        BEGIN
+          IF NEW.job_id IS DISTINCT FROM OLD.job_id THEN
+            RAISE EXCEPTION 'ingestion attempt job binding is immutable';
+          END IF;
+          RETURN NEW;
+        END
+        $$ LANGUAGE plpgsql;
+
+        CREATE TRIGGER ingestion_attempt_job_immutable_trigger
+        BEFORE UPDATE OF job_id ON agent.ingestion_attempts
+        FOR EACH ROW EXECUTE FUNCTION agent.ingestion_attempt_job_immutable();
         """
     )
 
@@ -235,6 +248,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(
         """
+        DROP TRIGGER IF EXISTS ingestion_attempt_job_immutable_trigger
+          ON agent.ingestion_attempts;
+        DROP FUNCTION IF EXISTS agent.ingestion_attempt_job_immutable();
         DROP TRIGGER IF EXISTS ingestion_job_experiment_immutable_trigger
           ON agent.ingestion_jobs;
         DROP FUNCTION IF EXISTS agent.ingestion_job_experiment_immutable();

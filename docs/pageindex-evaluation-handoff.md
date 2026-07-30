@@ -20,8 +20,8 @@ This reference records the PageIndex v2 evaluation state, the defects found in i
 | Branch | No remote branch; 23 commits ahead of refreshed `origin/master`, plus the uncommitted fixes described here |
 
 `make api-lint`, `make api-typecheck`, `make docs-check`, and `make compose-check`
-pass. The provider-free API suite is 426 passed, 12 skipped; the disposable
-PostgreSQL integration stack is 12 passed.
+pass. The provider-free API suite is 430 passed, 13 skipped; the disposable
+PostgreSQL integration stack is 13 passed.
 
 ## Do this next
 
@@ -362,8 +362,8 @@ Verify with `git apply --check` against a pristine copy, and bump `+vrN` in both
 
 ```bash
 make api-lint && make api-typecheck && make docs-check && make compose-check
-make api-test                         # expect 426 passed, 12 skipped
-TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 12 passed
+make api-test                         # expect 430 passed, 13 skipped
+TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 13 passed
 make pageindex-patch-test PAGEINDEX_SOURCE=/opt/pageindex
 ```
 

@@ -157,6 +157,22 @@ def test_pilot_decimal_cost_is_json_serializable() -> None:
     assert json.loads(json.dumps({"cost": reported})) == {"cost": 1.234568}
 
 
+def test_pilot_price_snapshot_covers_pageindex_and_metadata_retry_bounds() -> None:
+    for pageindex_attempts, expected in (
+        (1, MAX_PROVIDER_ATTEMPTS),
+        (MAX_PROVIDER_ATTEMPTS, MAX_PROVIDER_ATTEMPTS),
+        (MAX_PROVIDER_ATTEMPTS + 1, MAX_PROVIDER_ATTEMPTS + 1),
+    ):
+        assert (
+            run_pageindex_pilot.pilot_price_snapshot(
+                Settings(
+                    pageindex_llm_max_attempts=pageindex_attempts,
+                )
+            )["max_attempts"]
+            == expected
+        )
+
+
 def test_explicit_pageindex_suite_does_not_depend_on_stdin_filename(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -573,6 +589,7 @@ def test_evaluation_configuration_hash_covers_every_result_affecting_setting() -
         "request_deadline_seconds",
         "candidate_limit",
         "catalog_batch_token_limit",
+        "catalog_routing_concurrency",
         "document_limit",
         "page_ranges_per_document",
         "fetched_page_limit",

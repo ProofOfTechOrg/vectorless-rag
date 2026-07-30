@@ -112,6 +112,7 @@ spec:
 - {name: INGESTION_HEARTBEAT_SECONDS, value: {{ .Values.ingestionHeartbeatSeconds | quote }}}
 - {name: INGESTION_STALE_GRACE_SECONDS, value: {{ .Values.ingestionStaleGraceSeconds | quote }}}
 - {name: CATALOG_BATCH_TOKEN_LIMIT, value: {{ .Values.catalogBatchTokenLimit | quote }}}
+- {name: CATALOG_ROUTING_CONCURRENCY, value: {{ .Values.catalogRoutingConcurrency | quote }}}
 - {name: DOCUMENT_LIMIT, value: {{ .Values.documentLimit | quote }}}
 - {name: EVIDENCE_TOKEN_LIMIT, value: {{ .Values.evidenceTokenLimit | quote }}}
 - {name: REQUEST_DEADLINE_SECONDS, value: {{ .Values.requestDeadlineSeconds | quote }}}

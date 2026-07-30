@@ -66,7 +66,12 @@ from vectorless_rag.models import (
 )
 from vectorless_rag.observability import Observability
 from vectorless_rag.provider import ProviderGate
-from vectorless_rag.retrieval import CorpusRouter, PageIndexRetriever, VectorlessRetriever
+from vectorless_rag.retrieval import (
+    CatalogRoutingLimiter,
+    CorpusRouter,
+    PageIndexRetriever,
+    VectorlessRetriever,
+)
 from vectorless_rag.schemas import ChatRequest, MetadataConstraints
 from vectorless_rag.sql_guard import PostgreSQLAdapter
 from vectorless_rag.storage import S3ObjectStore
@@ -917,13 +922,18 @@ async def run(args: argparse.Namespace) -> None:
 
         async with AsyncExitStack() as stack:
             executors: list[Executor] = []
+            catalog_routing_limiter = CatalogRoutingLimiter(settings.catalog_routing_concurrency)
             for worker_number in range(execution_concurrency):
                 checkpointer = await stack.enter_async_context(
                     AsyncPostgresSaver.from_conn_string(driver_free_url(settings.database_url))
                 )
                 if worker_number == 0:
                     await checkpointer.setup()
-                router = CorpusRouter(settings, llm)
+                router = CorpusRouter(
+                    settings,
+                    llm,
+                    catalog_routing_limiter=catalog_routing_limiter,
+                )
                 pageindex = PageIndexRetriever(settings, store, llm)
                 runner = GraphRunner(
                     settings,

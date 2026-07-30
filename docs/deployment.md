@@ -63,6 +63,7 @@ Keep these values aligned across `.env`, Compose, and Helm:
 | `INGESTION_LEASE_SECONDS` | 120 | Renewable job lease |
 | `INGESTION_HEARTBEAT_SECONDS` | 30 | Lease renewal interval |
 | `CATALOG_BATCH_TOKEN_LIMIT` | 24,000 | Complete-catalog map batch size |
+| `CATALOG_ROUTING_CONCURRENCY` | 4 | Process-wide concurrent catalog-routing provider calls |
 | `DOCUMENT_LIMIT` | 8 | Maximum selected documents |
 | `EVIDENCE_TOKEN_LIMIT` | 40,000 | Public evidence ceiling |
 | `REQUEST_DEADLINE_SECONDS` | 180 | Complete chat request deadline |

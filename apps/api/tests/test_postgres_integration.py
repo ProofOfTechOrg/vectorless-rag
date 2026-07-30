@@ -53,6 +53,7 @@ from vectorless_rag.usage import (
 )
 
 OWNER_URL = os.getenv("TEST_OWNER_DATABASE_URL")
+APP_URL = os.getenv("TEST_APP_DATABASE_URL")
 READER_URL = os.getenv("TEST_DATABASE_URL")
 StructuredT = TypeVar("StructuredT", bound=BaseModel)
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +86,9 @@ def test_0006_migration_backfills_historical_reservation_bounds() -> None:
     explicit_reservation = uuid.uuid4()
     legacy_reservation = uuid.uuid4()
     with psycopg.connect(owner_sync) as connection:
+        assert connection.execute(
+            "SELECT to_regprocedure('agent.ingestion_attempt_job_immutable()')"
+        ).fetchone() == (None,)
         for experiment_id, snapshot in (
             (
                 explicit_experiment,
@@ -1124,7 +1128,130 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                 (job_id,),
             )
         connection.execute("ROLLBACK TO SAVEPOINT mutate_ingestion_experiment")
+
         connection.rollback()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL,
+    reason="PostgreSQL owner and application URLs not set",
+)
+def test_application_role_cannot_reparent_an_ingestion_attempt() -> None:
+    assert OWNER_URL is not None
+    assert APP_URL is not None
+    owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
+    app_sync = APP_URL.replace("postgresql+psycopg://", "postgresql://")
+    document_id = uuid.uuid4()
+    experiment_id = uuid.uuid4()
+    bound_job_id = uuid.uuid4()
+    unbound_job_id = uuid.uuid4()
+    attempt_id = uuid.uuid4()
+    digest = document_id.hex + document_id.hex
+
+    try:
+        with psycopg.connect(owner_sync) as connection:
+            connection.execute(
+                """INSERT INTO agent.documents
+                   (id, sha256, original_filename, pdf_object_key, status)
+                   VALUES (%s, %s, 'attempt-owner.pdf', %s, 'indexing')""",
+                (document_id, digest, f"pdf/{document_id}"),
+            )
+            connection.execute(
+                """INSERT INTO agent.experiments
+                   (id, name, release_sha, configuration_hash, corpus_hash, index_hash,
+                    dataset_hash, price_snapshot, repetitions, evidence_token_budget,
+                    seed, maximum_cost_usd, frozen_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, 1, 6400,
+                           1, 10, now())""",
+                (
+                    experiment_id,
+                    f"attempt-owner-{experiment_id}",
+                    "a" * 40,
+                    "b" * 64,
+                    "c" * 64,
+                    "d" * 64,
+                    "e" * 64,
+                    json.dumps(
+                        {
+                            "input_per_million_usd": 1,
+                            "cache_hit_input_per_million_usd": 0.1,
+                            "output_per_million_usd": 2,
+                            "max_input_tokens": 100,
+                            "max_output_tokens": 100,
+                            "max_attempts": 3,
+                        }
+                    ),
+                ),
+            )
+            connection.execute(
+                """INSERT INTO agent.ingestion_jobs
+                   (id, document_id, status, force, mode, attempts, retry_budget_consumed,
+                    is_active, metrics, experiment_id)
+                   VALUES (%s, %s, 'running', true, 'reextract_all', 1, 0, true,
+                           '{}'::jsonb, %s),
+                          (%s, %s, 'failed', true, 'reextract_all', 1, 1, false,
+                           '{}'::jsonb, NULL)""",
+                (
+                    bound_job_id,
+                    document_id,
+                    experiment_id,
+                    unbound_job_id,
+                    document_id,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO agent.ingestion_attempts
+                   (id, job_id, attempt_number, trace_id, worker_id, status,
+                    artifact_action, telemetry_complete, retry_budget_consumed)
+                   VALUES (%s, %s, 1, %s, 'attempt-owner-worker', 'running',
+                           'none', false, false)""",
+                (attempt_id, bound_job_id, uuid.uuid4().hex),
+            )
+            connection.commit()
+
+        with psycopg.connect(app_sync) as connection:
+            assert connection.execute(
+                """UPDATE agent.ingestion_attempts
+                   SET job_id = job_id WHERE id = %s
+                   RETURNING job_id""",
+                (attempt_id,),
+            ).fetchone() == (bound_job_id,)
+            connection.execute("SAVEPOINT reparent_ingestion_attempt")
+            with pytest.raises(
+                psycopg.errors.RaiseException,
+                match="ingestion attempt job binding is immutable",
+            ):
+                connection.execute(
+                    "UPDATE agent.ingestion_attempts SET job_id = %s WHERE id = %s",
+                    (unbound_job_id, attempt_id),
+                )
+            connection.execute("ROLLBACK TO SAVEPOINT reparent_ingestion_attempt")
+            connection.commit()
+
+        with psycopg.connect(owner_sync) as connection:
+            assert connection.execute(
+                "SELECT job_id FROM agent.ingestion_attempts WHERE id = %s",
+                (attempt_id,),
+            ).fetchone() == (bound_job_id,)
+    finally:
+        with psycopg.connect(owner_sync, autocommit=True) as connection:
+            connection.execute(
+                "DELETE FROM agent.ingestion_attempts WHERE id = %s",
+                (attempt_id,),
+            )
+            connection.execute(
+                "DELETE FROM agent.ingestion_jobs WHERE id = ANY(%s)",
+                ([bound_job_id, unbound_job_id],),
+            )
+            connection.execute(
+                "DELETE FROM agent.experiments WHERE id = %s",
+                (experiment_id,),
+            )
+            connection.execute(
+                "DELETE FROM agent.documents WHERE id = %s",
+                (document_id,),
+            )
 
 
 @pytest.mark.integration

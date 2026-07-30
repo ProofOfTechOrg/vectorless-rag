@@ -29,6 +29,7 @@ ingestionLeaseSeconds: 120
 ingestionHeartbeatSeconds: 30
 ingestionStaleGraceSeconds: 300
 catalogBatchTokenLimit: 24000
+catalogRoutingConcurrency: 4
 documentLimit: 8
 evidenceTokenLimit: 40000
 requestDeadlineSeconds: 180

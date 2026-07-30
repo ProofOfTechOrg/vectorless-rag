@@ -59,7 +59,12 @@ from vectorless_rag.models import (
 from vectorless_rag.observability import Observability
 from vectorless_rag.operational_logging import emit_event
 from vectorless_rag.provider import ProviderGate
-from vectorless_rag.retrieval import CorpusRouter, PageIndexRetriever, VectorlessRetriever
+from vectorless_rag.retrieval import (
+    CatalogRoutingLimiter,
+    CorpusRouter,
+    PageIndexRetriever,
+    VectorlessRetriever,
+)
 from vectorless_rag.schemas import (
     ChatRequest,
     ChatResponse,
@@ -104,6 +109,7 @@ class Runtime:
     provider_gate: ProviderGate
     observability: Observability
     checkpointer: Any
+    catalog_routing_limiter: CatalogRoutingLimiter
 
 
 @asynccontextmanager
@@ -135,6 +141,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
             provider_gate,
             observability,
             checkpointer,
+            CatalogRoutingLimiter(settings.catalog_routing_concurrency),
         )
         yield
         observability.flush()
@@ -199,7 +206,11 @@ async def provider_status(
 def _runner(runtime: Runtime) -> GraphRunner:
     if runtime.llm is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "DeepSeek is not configured")
-    router = CorpusRouter(runtime.settings, runtime.llm)
+    router = CorpusRouter(
+        runtime.settings,
+        runtime.llm,
+        catalog_routing_limiter=runtime.catalog_routing_limiter,
+    )
     pageindex = PageIndexRetriever(runtime.settings, runtime.store, runtime.llm)
     retriever = VectorlessRetriever(runtime.settings, router, pageindex)
     return GraphRunner(

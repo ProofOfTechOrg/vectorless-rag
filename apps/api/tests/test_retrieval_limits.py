@@ -11,9 +11,11 @@ from vectorless_rag.config import Settings
 from vectorless_rag.models import Document, DocumentStatus, ModelCallStage
 from vectorless_rag.retrieval import (
     CandidateDocument,
+    CatalogRoutingLimiter,
     CorpusRouter,
     PageIndexRetriever,
     _ArtifactView,  # pyright: ignore[reportPrivateUsage]
+    _gather_or_cancel,  # pyright: ignore[reportPrivateUsage]
     _NodeView,  # pyright: ignore[reportPrivateUsage]
     candidate_search_text,
     fallback_search_tokens,
@@ -367,11 +369,55 @@ async def test_full_catalog_uses_compact_parallel_map_batches() -> None:
     assert len(selected) == 8
 
 
+async def test_catalog_routing_limiter_is_shared_and_preserves_result_order() -> None:
+    limiter = CatalogRoutingLimiter(2)
+    active = 0
+    peak_active = 0
+    release = asyncio.Event()
+    starts: list[int] = []
+
+    async def operation(value: int) -> int:
+        nonlocal active, peak_active
+        active += 1
+        starts.append(value)
+        peak_active = max(peak_active, active)
+        if peak_active == 2:
+            release.set()
+        try:
+            await release.wait()
+            await asyncio.sleep((8 - value) / 1_000)
+            return value
+        finally:
+            active -= 1
+
+    first, second = await asyncio.wait_for(
+        asyncio.gather(
+            _gather_or_cancel(
+                [lambda value=value: operation(value) for value in range(4)],
+                limiter,
+            ),
+            _gather_or_cancel(
+                [lambda value=value: operation(value) for value in range(4, 8)],
+                limiter,
+            ),
+        ),
+        timeout=1,
+    )
+
+    assert first == [0, 1, 2, 3]
+    assert second == [4, 5, 6, 7]
+    assert peak_active == 2
+    assert starts.index(4) < starts.index(2)
+    assert starts.index(5) < starts.index(2)
+    assert await _gather_or_cancel([], limiter) == []
+    assert await _gather_or_cancel([lambda: operation(8)], limiter) == [8]
+
+
 async def test_catalog_batch_failure_cancels_and_joins_siblings() -> None:
     candidates = [_candidate(index, fts_match=False) for index in range(104)]
     started = 0
     cancelled = 0
-    all_started = asyncio.Event()
+    both_started = asyncio.Event()
     never = asyncio.Event()
     failed_document_id = str(candidates[0].document.id)
 
@@ -391,9 +437,9 @@ async def test_catalog_batch_failure_cancels_and_joins_siblings() -> None:
             if schema is not CandidateSelection or "Catalog map batch" not in user:
                 raise AssertionError("expected only catalog map calls")
             started += 1
-            if started == 4:
-                all_started.set()
-            await asyncio.wait_for(all_started.wait(), timeout=1)
+            if started == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=1)
             _, payload_text = _wrapped_payload(user)
             document_ids = [item["id"] for item in json.loads(payload_text)]
             if failed_document_id in document_ids:
@@ -402,16 +448,102 @@ async def test_catalog_batch_failure_cancels_and_joins_siblings() -> None:
                 await never.wait()
             except asyncio.CancelledError:
                 cancelled += 1
-                raise
+                return schema.model_validate({"document_ids": []})
             raise AssertionError("sibling map call was not cancelled")
 
-    router = CorpusRouter(Settings(), FailingMapLLM())
+    router = CorpusRouter(Settings(catalog_routing_concurrency=2), FailingMapLLM())
 
     with raises(RuntimeError, match="map failed"):
         await router.select_ranked("question", candidates)
 
-    assert started == 4
-    assert cancelled == 3
+    assert started == 2
+    assert cancelled == 1
+
+
+async def test_catalog_routing_caller_cancellation_joins_active_and_queued_work() -> None:
+    limiter = CatalogRoutingLimiter(2)
+    started = 0
+    cancelled = 0
+    both_started = asyncio.Event()
+    never = asyncio.Event()
+
+    async def operation(*, suppress_cancellation: bool) -> None:
+        nonlocal started, cancelled
+        started += 1
+        if started == 2:
+            both_started.set()
+        try:
+            await never.wait()
+        except asyncio.CancelledError:
+            cancelled += 1
+            if suppress_cancellation:
+                return
+            raise
+
+    gathering = asyncio.create_task(
+        _gather_or_cancel(
+            [
+                lambda suppress=index == 0: operation(suppress_cancellation=suppress)
+                for index in range(4)
+            ],
+            limiter,
+        )
+    )
+    await asyncio.wait_for(both_started.wait(), timeout=1)
+    gathering.cancel()
+
+    with raises(asyncio.CancelledError):
+        await asyncio.wait_for(gathering, timeout=1)
+
+    assert started == 2
+    assert cancelled == 2
+
+
+async def test_catalog_routing_failure_does_not_cancel_another_limiter_group() -> None:
+    limiter = CatalogRoutingLimiter(2)
+    failing_starts: list[str] = []
+    both_started = asyncio.Event()
+    never = asyncio.Event()
+    cancelled = 0
+
+    async def failing_operation(name: str) -> str:
+        nonlocal cancelled
+        failing_starts.append(name)
+        if len(failing_starts) == 2:
+            both_started.set()
+        await both_started.wait()
+        if name == "failure":
+            raise RuntimeError("group failed")
+        try:
+            await never.wait()
+        except asyncio.CancelledError:
+            cancelled += 1
+            raise
+        raise AssertionError("failed sibling was not cancelled")
+
+    failing_group = asyncio.create_task(
+        _gather_or_cancel(
+            [
+                lambda: failing_operation("failure"),
+                lambda: failing_operation("active-sibling"),
+                lambda: failing_operation("queued-sibling"),
+            ],
+            limiter,
+        )
+    )
+    healthy_group = asyncio.create_task(
+        _gather_or_cancel(
+            [lambda value=value: asyncio.sleep(0, result=value) for value in range(2)],
+            limiter,
+        )
+    )
+
+    with raises(RuntimeError, match="group failed"):
+        await asyncio.wait_for(failing_group, timeout=1)
+
+    assert await asyncio.wait_for(healthy_group, timeout=1) == [0, 1]
+    assert failing_starts == ["failure", "active-sibling"]
+    assert cancelled == 1
 
 
 def test_catalog_batch_search_reuses_one_token_cache_per_window(
