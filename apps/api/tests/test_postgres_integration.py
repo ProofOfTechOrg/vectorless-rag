@@ -54,7 +54,6 @@ from vectorless_rag.sql_guard import PostgreSQLAdapter, SQLRejected, validate_sq
 from vectorless_rag.telemetry_classification import classification_report
 from vectorless_rag.usage import (
     RECONCILE_MODEL_CALL_RESERVATION_SQL,
-    RESERVE_MODEL_CALL_SQL,
     ExperimentBudgetExceeded,
     ModelCallLedger,
     StartedModelCall,
@@ -70,6 +69,25 @@ READER_URL = os.getenv("TEST_DATABASE_URL")
 DISPOSABLE_DATABASE = os.getenv("TEST_DATABASE_DISPOSABLE") == "1"
 StructuredT = TypeVar("StructuredT", bound=BaseModel)
 API_ROOT = Path(__file__).resolve().parents[1]
+_RESERVE_MODEL_CALL_SQL = """
+SELECT *
+FROM agent.reserve_model_call(
+    %(query_run_id)s::uuid,
+    %(ingestion_attempt_id)s::uuid,
+    %(reservation_id)s::uuid,
+    %(logical_call_id)s::uuid,
+    %(input_token_limit)s::bigint,
+    %(output_token_limit)s::integer,
+    %(attempt_limit)s::integer,
+    %(legacy_max_input_tokens)s::bigint,
+    %(legacy_max_output_tokens)s::integer,
+    %(legacy_query_max_attempts)s::integer
+)
+"""
+
+
+def _starts_model_call(query: object) -> bool:
+    return "agent.start_model_call" in str(query)
 
 
 class _PauseAfterCommitContext:
@@ -183,7 +201,7 @@ class _PauseBeforeCallInsertConnection:
         self.release = release
 
     async def execute(self, query: object, parameters: object) -> Any:
-        if "INSERT INTO agent.model_calls" in str(query) and not self.release.is_set():
+        if _starts_model_call(query) and not self.release.is_set():
             self.blocked.set()
             try:
                 await self.release.wait()
@@ -259,7 +277,7 @@ class _PauseAfterCallInsertConnection:
 
     async def execute(self, query: object, parameters: object) -> Any:
         result = await self.connection.execute(query, parameters)
-        if "INSERT INTO agent.model_calls" in str(query):
+        if _starts_model_call(query):
             self.inserted.set()
             await self.release.wait()
         return result
@@ -335,7 +353,7 @@ class _PauseCleanupAfterReservationConnection:
 
     async def execute(self, query: object, parameters: object) -> Any:
         statement = str(query)
-        if "INSERT INTO agent.model_calls" in statement and not self.insert_release.is_set():
+        if _starts_model_call(query) and not self.insert_release.is_set():
             self.insert_blocked.set()
             try:
                 await self.insert_release.wait()
@@ -770,7 +788,7 @@ def test_cost_migrations_backfill_reservation_bounds_and_call_ownership(
             "review_required",
         )
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0008_reservation_state_guard",
+            "0009_atomic_model_call_start",
         )
         assert connection.execute(
             "SELECT experiment_id FROM agent.model_calls WHERE id = %s",
@@ -889,7 +907,7 @@ def test_reservation_guard_migration_rejects_race_corrupted_state(
 
     with psycopg.connect(owner_sync) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0008_reservation_state_guard",
+            "0009_atomic_model_call_start",
         )
 
 
@@ -942,7 +960,7 @@ def test_reservation_guard_migration_blocks_schema_0007_writer(
             migration = executor.submit(command.upgrade, config, "head")
             try:
                 deadline = time.monotonic() + 2
-                with psycopg.connect(owner_sync) as observer:
+                with psycopg.connect(owner_sync, autocommit=True) as observer:
                     while time.monotonic() < deadline:
                         locks_held = observer.execute(
                             """SELECT EXISTS (
@@ -999,7 +1017,7 @@ def test_reservation_guard_migration_blocks_schema_0007_writer(
 
     with psycopg.connect(owner_sync) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0008_reservation_state_guard",
+            "0009_atomic_model_call_start",
         )
 
 
@@ -1069,7 +1087,7 @@ def test_reservation_guard_migration_allows_inflight_schema_0007_finish(
             migration = executor.submit(command.upgrade, config, "head")
             try:
                 deadline = time.monotonic() + 10
-                with psycopg.connect(owner_sync) as observer:
+                with psycopg.connect(owner_sync, autocommit=True) as observer:
                     while time.monotonic() < deadline:
                         if migration.done():
                             migration.result()
@@ -1084,7 +1102,10 @@ def test_reservation_guard_migration_allows_inflight_schema_0007_finish(
                                    AND application_name =
                                      'reservation-guard-lock-retry-test'
                                    AND state = 'active'
-                                   AND wait_event = 'PgSleep'
+                                   AND (
+                                     wait_event = 'PgSleep'
+                                     OR wait_event_type = 'Lock'
+                                   )
                                )"""
                         ).fetchone()
                         if lock_retry_active == (True,):
@@ -1121,7 +1142,7 @@ def test_reservation_guard_migration_allows_inflight_schema_0007_finish(
 
     with psycopg.connect(owner_sync) as connection:
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0008_reservation_state_guard",
+            "0009_atomic_model_call_start",
         )
 
 
@@ -1207,6 +1228,149 @@ def test_application_role_enforces_reservation_bounds_and_call_ownership(
                FROM agent.model_calls WHERE id = %s""",
             (unreserved_call.id,),
         ).fetchone() == (None, None)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL or not DISPOSABLE_DATABASE,
+    reason="disposable PostgreSQL owner and application URLs not set",
+)
+async def test_terminal_owner_recovery_abandons_only_interrupted_calls(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+    other_experiment_id = uuid.UUID(int=reservation_test_state.experiment_id.int - 1)
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        connection.execute(
+            """INSERT INTO agent.experiment_memberships
+               (id, experiment_id, query_run_id, trial_key, repetition,
+                sequence_number, included)
+               VALUES (%s, %s, %s, %s, 1, 0, false)""",
+            (
+                uuid.uuid4(),
+                reservation_test_state.experiment_id,
+                reservation_test_state.query_run_id,
+                str(uuid.uuid4()),
+            ),
+        )
+        connection.commit()
+
+    with usage_context(
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            query_run_id=reservation_test_state.query_run_id,
+            require_cost_reservation=True,
+        )
+    ):
+        interrupted_call = await ledger.astart(
+            ModelCallStage.query_document_select,
+            "provider/model",
+            1,
+            input_token_limit=100,
+            output_token_limit=1,
+        )
+    with usage_context(
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            ingestion_attempt_id=reservation_test_state.attempt_id,
+        )
+    ):
+        running_owner_call = await ledger.astart(
+            ModelCallStage.pageindex_generation,
+            "provider/model",
+            1,
+            input_token_limit=100,
+            output_token_limit=1,
+        )
+    assert interrupted_call is not None
+    assert running_owner_call is not None
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        _insert_reservation_test_experiment(
+            connection,
+            other_experiment_id,
+            "other-recovery-experiment",
+        )
+        connection.execute(
+            """INSERT INTO agent.experiment_memberships
+               (id, experiment_id, query_run_id, trial_key, repetition,
+                sequence_number, included)
+               VALUES (%s, %s, %s, %s, 1, 0, false)""",
+            (
+                uuid.uuid4(),
+                other_experiment_id,
+                reservation_test_state.query_run_id,
+                str(uuid.uuid4()),
+            ),
+        )
+        connection.commit()
+
+    with usage_context(
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            query_run_id=reservation_test_state.query_run_id,
+            require_cost_reservation=True,
+        )
+    ):
+        other_experiment_call = await ledger.astart(
+            ModelCallStage.query_document_select,
+            "provider/model",
+            1,
+            input_token_limit=100,
+            output_token_limit=1,
+        )
+    assert other_experiment_call is not None
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        connection.execute(
+            """UPDATE agent.query_runs
+               SET error = 'execution_cancelled', failure_code = 'request_failed'
+               WHERE id = %s""",
+            (reservation_test_state.query_run_id,),
+        )
+        connection.commit()
+
+    assert await ledger.arecover_terminal_owner_calls(reservation_test_state.experiment_id) == 1
+    assert await ledger.arecover_terminal_owner_calls(reservation_test_state.experiment_id) == 0
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        assert connection.execute(
+            """SELECT c.outcome, c.failure_code, c.retryable, c.cancelled,
+                      c.usage_available, c.completed_at IS NOT NULL,
+                      r.status, r.reserved_cost_usd, r.measured_cost_usd
+               FROM agent.model_calls c
+               JOIN agent.model_call_cost_reservations r
+                 ON r.id = c.cost_reservation_id
+               WHERE c.id = %s""",
+            (interrupted_call.id,),
+        ).fetchone() == (
+            "abandoned",
+            "execution_interrupted",
+            False,
+            False,
+            False,
+            True,
+            "review_required",
+            Decimal("0.000102"),
+            None,
+        )
+        assert connection.execute(
+            """SELECT c.outcome, r.status
+               FROM agent.model_calls c
+               JOIN agent.model_call_cost_reservations r
+                 ON r.id = c.cost_reservation_id
+               WHERE c.id = %s""",
+            (running_owner_call.id,),
+        ).fetchone() == ("started", "reserved")
+        assert connection.execute(
+            """SELECT c.experiment_id, c.outcome, r.status
+               FROM agent.model_calls c
+               JOIN agent.model_call_cost_reservations r
+                 ON r.id = c.cost_reservation_id
+               WHERE c.id = %s""",
+            (other_experiment_call.id,),
+        ).fetchone() == (other_experiment_id, "started", "reserved")
 
 
 @pytest.mark.integration
@@ -1325,6 +1489,111 @@ async def test_cancelled_async_start_while_reservation_is_locked_rolls_back_prom
                WHERE experiment_id = %s""",
             (reservation_test_state.experiment_id,),
         ).fetchone() == (0,)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL or not DISPOSABLE_DATABASE,
+    reason="disposable PostgreSQL owner and application URLs not set",
+)
+async def test_cancelled_atomic_start_rolls_back_server_side_reservation(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    advisory_lock_id = 8_675_309
+    trace_id = uuid.uuid4().hex
+    logical_call_id = uuid.uuid4()
+    blocker = psycopg.connect(reservation_test_state.owner_sync)
+    blocked: asyncio.Task[None] | None = None
+    try:
+        blocker.execute("SELECT pg_advisory_lock(%s)", (advisory_lock_id,))
+        with psycopg.connect(reservation_test_state.owner_sync) as connection:
+            connection.execute(
+                """
+                CREATE FUNCTION agent.test_pause_atomic_model_call_start()
+                RETURNS trigger AS $$
+                BEGIN
+                  PERFORM pg_advisory_xact_lock(8675309);
+                  RETURN NEW;
+                END
+                $$ LANGUAGE plpgsql;
+
+                CREATE TRIGGER aaa_test_pause_atomic_model_call_start
+                BEFORE INSERT ON agent.model_calls
+                FOR EACH ROW EXECUTE FUNCTION agent.test_pause_atomic_model_call_start();
+                """
+            )
+            connection.commit()
+
+        ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=1)
+
+        async def start_while_call_insert_is_blocked() -> None:
+            with usage_context(
+                UsageOwner(
+                    trace_id=trace_id,
+                    ingestion_attempt_id=reservation_test_state.attempt_id,
+                )
+            ):
+                await ledger.astart(
+                    ModelCallStage.pageindex_generation,
+                    "provider/model",
+                    1,
+                    logical_call_id=logical_call_id,
+                    input_token_limit=100,
+                    output_token_limit=1,
+                )
+
+        blocked = asyncio.create_task(start_while_call_insert_is_blocked())
+        with psycopg.connect(
+            reservation_test_state.owner_sync,
+            autocommit=True,
+        ) as observer:
+            for _ in range(200):
+                waiting = observer.execute(
+                    """SELECT EXISTS (
+                         SELECT 1
+                         FROM pg_locks
+                         WHERE locktype = 'advisory'
+                           AND NOT granted
+                       )"""
+                ).fetchone()
+                if waiting == (True,):
+                    break
+                if blocked.done():
+                    await blocked
+                    pytest.fail("model-call start completed before the test lock was released")
+                await asyncio.sleep(0.01)
+            else:
+                pytest.fail("model-call start did not block after reserving cost")
+
+        blocked.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(blocked, timeout=2)
+
+        with psycopg.connect(reservation_test_state.owner_sync) as connection:
+            assert connection.execute(
+                "SELECT count(*) FROM agent.model_calls WHERE trace_id = %s",
+                (trace_id,),
+            ).fetchone() == (0,)
+            assert connection.execute(
+                """SELECT count(*) FROM agent.model_call_cost_reservations
+                   WHERE experiment_id = %s AND logical_call_id = %s""",
+                (reservation_test_state.experiment_id, logical_call_id),
+            ).fetchone() == (0,)
+    finally:
+        blocker.execute("SELECT pg_advisory_unlock(%s)", (advisory_lock_id,))
+        blocker.close()
+        if blocked is not None and not blocked.done():
+            blocked.cancel()
+            await asyncio.gather(blocked, return_exceptions=True)
+        with psycopg.connect(reservation_test_state.owner_sync) as connection:
+            connection.execute(
+                """DROP TRIGGER IF EXISTS aaa_test_pause_atomic_model_call_start
+                   ON agent.model_calls;
+                   DROP FUNCTION IF EXISTS agent.test_pause_atomic_model_call_start();
+                """
+            )
+            connection.commit()
 
 
 @pytest.mark.integration
@@ -2666,7 +2935,7 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
             "legacy_max_output_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
             "legacy_query_max_attempts": 3,
         }
-        row = connection.execute(RESERVE_MODEL_CALL_SQL, parameters).fetchone()
+        row = connection.execute(_RESERVE_MODEL_CALL_SQL, parameters).fetchone()
         assert row == (
             reservation_id,
             DEEPSEEK_MAX_INPUT_TOKENS,
@@ -2682,7 +2951,7 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
         connection.execute("SAVEPOINT over_cap")
         with pytest.raises(psycopg.errors.RaiseException, match="experiment cost cap exceeded"):
             connection.execute(
-                RESERVE_MODEL_CALL_SQL,
+                _RESERVE_MODEL_CALL_SQL,
                 {
                     **parameters,
                     "reservation_id": uuid.uuid4(),
@@ -2731,7 +3000,7 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
             "output_token_limit": 100,
         }
         assert connection.execute(
-            RESERVE_MODEL_CALL_SQL,
+            _RESERVE_MODEL_CALL_SQL,
             uncertain_parameters,
         ).fetchone() == (uncertain_reservation_id, 1_000, 100, 3)
         connection.execute(
@@ -2967,7 +3236,7 @@ def test_application_role_cannot_reparent_ledger_ownership() -> None:
                 reservation_ids, logical_call_ids, strict=True
             ):
                 assert connection.execute(
-                    RESERVE_MODEL_CALL_SQL,
+                    _RESERVE_MODEL_CALL_SQL,
                     {
                         "query_run_id": None,
                         "ingestion_attempt_id": attempt_id,
@@ -3171,7 +3440,7 @@ def test_concurrent_reservations_serialize_at_the_experiment_cap() -> None:
         with psycopg.connect(owner_sync) as connection:
             start.wait(timeout=10)
             try:
-                row = connection.execute(RESERVE_MODEL_CALL_SQL, parameters).fetchone()
+                row = connection.execute(_RESERVE_MODEL_CALL_SQL, parameters).fetchone()
             except psycopg.errors.RaiseException as error:
                 connection.rollback()
                 assert "experiment cost cap exceeded" in str(error)
@@ -3290,7 +3559,7 @@ def test_query_experiment_reservations_are_non_null_capped_and_valid_only() -> N
             "legacy_max_output_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
             "legacy_query_max_attempts": 3,
         }
-        assert connection.execute(RESERVE_MODEL_CALL_SQL, parameters).fetchone() == (
+        assert connection.execute(_RESERVE_MODEL_CALL_SQL, parameters).fetchone() == (
             first_reservation_id,
             DEEPSEEK_MAX_INPUT_TOKENS,
             DEEPSEEK_MAX_OUTPUT_TOKENS,
@@ -3305,7 +3574,7 @@ def test_query_experiment_reservations_are_non_null_capped_and_valid_only() -> N
         connection.execute("SAVEPOINT over_cap")
         with pytest.raises(psycopg.errors.RaiseException, match="experiment cost cap exceeded"):
             connection.execute(
-                RESERVE_MODEL_CALL_SQL,
+                _RESERVE_MODEL_CALL_SQL,
                 {
                     **parameters,
                     "reservation_id": uuid.uuid4(),
@@ -3321,7 +3590,7 @@ def test_query_experiment_reservations_are_non_null_capped_and_valid_only() -> N
             (experiment_id,),
         )
         assert connection.execute(
-            RESERVE_MODEL_CALL_SQL,
+            _RESERVE_MODEL_CALL_SQL,
             {
                 **parameters,
                 "reservation_id": uuid.uuid4(),

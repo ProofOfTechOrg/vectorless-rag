@@ -659,14 +659,16 @@ def provider_input_token_limit(payload: str | bytes) -> int:
     )
 ```
 
-`RESERVE_MODEL_CALL_SQL` stores that input limit, the configured output limit,
-and the retry limit on the reservation. Reusing a logical call with different
-bounds raises `UsagePersistenceError`. A call attached to an invalid experiment
-or incompatible reservation returns a rejection sentinel, so ingestion cannot
-silently continue unreserved. Terminal reconciliation uses measured usage where
-available and retains one immutable per-attempt bound for each attempt without
-usage. Reserved and measured costs round upward to the schema’s micro-dollar
-precision, so quantization cannot understate cap exposure.
+`agent.reserve_model_call` stores that input limit, the configured output
+limit, and the retry limit on the reservation. `agent.start_model_call` invokes
+that allocator and inserts the call inside one server-side transaction.
+Reusing a logical call with different bounds raises `UsagePersistenceError`. A
+call attached to an invalid experiment or incompatible reservation returns a
+rejection sentinel, so ingestion cannot silently continue unreserved. Terminal
+reconciliation uses measured usage where available and retains one immutable
+per-attempt bound for each attempt without usage. Reserved and measured costs
+round upward to the schema’s micro-dollar precision, so quantization cannot
+understate cap exposure.
 
 Migration `0006_bound_cost_reservations` backfills historical rows from their
 experiment snapshots. It does not rewrite historical `reserved_cost_usd`,

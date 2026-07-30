@@ -292,133 +292,32 @@ class StartedModelCall:
     cost_reservation_id: uuid.UUID | None = None
 
 
-RESERVE_MODEL_CALL_SQL = """
-WITH owner_experiment AS (
-    SELECT j.experiment_id, 'ingestion' AS owner_kind
-    FROM agent.ingestion_attempts a
-    JOIN agent.ingestion_jobs j ON j.id = a.job_id
-    WHERE a.id = %(ingestion_attempt_id)s::uuid
-      AND j.experiment_id IS NOT NULL
-    UNION ALL
-    SELECT m.experiment_id, 'query' AS owner_kind
-    FROM agent.experiment_memberships m
-    WHERE m.query_run_id = %(query_run_id)s::uuid
-    ORDER BY 1
-    LIMIT 1
-),
-experiment AS (
-    SELECT e.*, o.owner_kind
-    FROM agent.experiments e
-    JOIN owner_experiment o ON o.experiment_id = e.id
-    WHERE e.valid
-),
-inserted AS (
-    INSERT INTO agent.model_call_cost_reservations (
-        id, experiment_id, logical_call_id, reserved_cost_usd,
-        input_token_limit, output_token_limit, attempt_limit, status
-    )
-    SELECT
-        %(reservation_id)s::uuid,
-        e.id,
-        %(logical_call_id)s::uuid,
-        ceil(
-            (
-                %(input_token_limit)s
-                * greatest(
-                    (e.price_snapshot->>'input_per_million_usd')::numeric,
-                    (e.price_snapshot->>'cache_hit_input_per_million_usd')::numeric
-                )
-                + %(output_token_limit)s
-                * (e.price_snapshot->>'output_per_million_usd')::numeric
-            )
-            * %(attempt_limit)s
-        ) / 1000000,
-        %(input_token_limit)s,
-        %(output_token_limit)s,
-        %(attempt_limit)s,
-        'reserved'
-    FROM experiment e
-    WHERE %(input_token_limit)s > 0
-      AND %(output_token_limit)s > 0
-      AND %(attempt_limit)s > 0
-      AND %(input_token_limit)s <= coalesce(
-        (e.price_snapshot->>'max_input_tokens')::numeric,
-        %(legacy_max_input_tokens)s
-      )
-      AND %(output_token_limit)s <= coalesce(
-        (e.price_snapshot->>'max_output_tokens')::numeric,
-        %(legacy_max_output_tokens)s
-      )
-      AND %(attempt_limit)s <= coalesce(
-        (e.price_snapshot->>'max_attempts')::numeric,
-        CASE
-            WHEN e.owner_kind = 'query' THEN %(legacy_query_max_attempts)s
-        END
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM agent.model_call_cost_reservations r
-        WHERE r.experiment_id = e.id
-          AND r.logical_call_id = %(logical_call_id)s::uuid
-    )
-    RETURNING id, input_token_limit, output_token_limit, attempt_limit
-),
-existing AS (
-    SELECT r.id, r.input_token_limit, r.output_token_limit, r.attempt_limit
-    FROM agent.model_call_cost_reservations r
-    JOIN experiment e ON e.id = r.experiment_id
-    WHERE r.logical_call_id = %(logical_call_id)s::uuid
-    FOR UPDATE OF r
-),
-resolved AS (
-    SELECT id, input_token_limit, output_token_limit, attempt_limit FROM inserted
-    UNION ALL
-    SELECT id, input_token_limit, output_token_limit, attempt_limit FROM existing
+_START_MODEL_CALL_SQL = """
+SELECT *
+FROM agent.start_model_call(
+    %(id)s::uuid,
+    %(query_run_id)s::uuid,
+    %(ingestion_attempt_id)s::uuid,
+    %(trace_id)s::text,
+    %(stage)s::agent.model_call_stage,
+    %(model)s::text,
+    %(provider_attempt)s::integer,
+    %(logical_call_id)s::uuid,
+    %(operation)s::text,
+    %(retry_delay_ms)s::integer,
+    %(prompt_sha256)s::text,
+    %(prompt_bytes)s::bigint,
+    %(release)s::text,
+    %(configuration_hash)s::text,
+    %(reservation_id)s::uuid,
+    %(input_token_limit)s::bigint,
+    %(output_token_limit)s::integer,
+    %(attempt_limit)s::integer,
+    %(legacy_max_input_tokens)s::bigint,
+    %(legacy_max_output_tokens)s::integer,
+    %(legacy_query_max_attempts)s::integer,
+    %(require_cost_reservation)s::boolean
 )
-SELECT id, input_token_limit, output_token_limit, attempt_limit FROM resolved
-UNION ALL
-SELECT NULL::uuid, NULL::bigint, NULL::integer, NULL::integer
-FROM owner_experiment
-WHERE NOT EXISTS (SELECT 1 FROM resolved)
-LIMIT 1
-"""
-
-_INSERT_CALL = """
-INSERT INTO agent.model_calls (
-    id, query_run_id, ingestion_attempt_id, trace_id, stage, model, provider_attempt,
-    logical_call_id, operation, retry_delay_ms, prompt_sha256, prompt_bytes,
-    release, configuration_hash, experiment_id, cost_reservation_id,
-    outcome, usage_available, cache_attribution_complete
-)
-SELECT
-    %(id)s::uuid, %(query_run_id)s::uuid, %(ingestion_attempt_id)s::uuid, %(trace_id)s,
-    %(stage)s::agent.model_call_stage, %(model)s, %(provider_attempt)s,
-    %(logical_call_id)s::uuid, %(operation)s, %(retry_delay_ms)s,
-    %(prompt_sha256)s, %(prompt_bytes)s, %(release)s, %(configuration_hash)s,
-    (
-      SELECT experiment_id
-      FROM agent.model_call_cost_reservations
-      WHERE id = %(cost_reservation_id)s::uuid
-    ),
-    %(cost_reservation_id)s::uuid,
-    'started'::agent.model_call_outcome, false, false
-WHERE
-    (
-      %(query_run_id)s::uuid IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM agent.query_runs WHERE id = %(query_run_id)s::uuid
-      )
-    )
-    OR
-    (
-      %(ingestion_attempt_id)s::uuid IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM agent.ingestion_attempts
-        WHERE id = %(ingestion_attempt_id)s::uuid
-          AND status = 'running'::agent.ingestion_attempt_status
-      )
-    )
-RETURNING id
 """
 
 _FINALIZE_CALL = """
@@ -507,6 +406,60 @@ reservation AS (
 )
 SELECT id FROM reservation
 LIMIT 1
+"""
+
+_ABANDON_TERMINAL_OWNER_CALLS = """
+WITH candidates AS (
+    SELECT c.id
+    FROM agent.model_calls c
+    WHERE c.outcome = 'started'::agent.model_call_outcome
+      AND c.experiment_id = %(experiment_id)s::uuid
+      AND (
+        (
+          c.query_run_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM agent.experiment_memberships m
+            JOIN agent.query_runs q ON q.id = m.query_run_id
+            WHERE m.experiment_id = %(experiment_id)s::uuid
+              AND m.query_run_id = c.query_run_id
+              AND (
+                q.answer IS NOT NULL
+                OR q.error IS NOT NULL
+                OR q.failure_code IS NOT NULL
+              )
+          )
+        )
+        OR
+        (
+          c.ingestion_attempt_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM agent.ingestion_attempts a
+            JOIN agent.ingestion_jobs j ON j.id = a.job_id
+            WHERE j.experiment_id = %(experiment_id)s::uuid
+              AND a.id = c.ingestion_attempt_id
+              AND a.status <> 'running'::agent.ingestion_attempt_status
+          )
+        )
+      )
+    ORDER BY c.id
+    FOR UPDATE OF c
+),
+abandoned AS (
+    UPDATE agent.model_calls c
+    SET outcome = 'abandoned'::agent.model_call_outcome,
+        failure_code = 'execution_interrupted',
+        retryable = false,
+        completed_at = now(),
+        updated_at = now()
+    FROM candidates
+    WHERE c.id = candidates.id
+      AND c.outcome = 'started'::agent.model_call_outcome
+    RETURNING c.id, c.cost_reservation_id
+)
+SELECT id, cost_reservation_id
+FROM abandoned
 """
 
 _LOCK_MODEL_CALL_RESERVATION_SQL = """
@@ -772,6 +725,45 @@ class ModelCallLedger:
             "legacy_query_max_attempts": self.maximum_provider_attempts,
         }
 
+    def _started_call(
+        self,
+        row: tuple[object, ...] | None,
+        *,
+        call_id: uuid.UUID,
+        owner: UsageOwner,
+        stage: ModelCallStage,
+        model: str,
+        provider_attempt: int,
+        logical_call_id: uuid.UUID,
+        input_token_limit: int,
+        output_token_limit: int,
+    ) -> StartedModelCall:
+        if row is None:
+            raise UsagePersistenceError
+        if row[0] is None:
+            raise ExperimentBudgetExceeded
+        if uuid.UUID(str(row[0])) != call_id:
+            raise UsagePersistenceError
+        cost_reservation_id = uuid.UUID(str(row[1])) if row[1] is not None else None
+        if cost_reservation_id is None:
+            if owner.require_cost_reservation or any(value is not None for value in row[2:]):
+                raise UsagePersistenceError
+        elif tuple(row[2:]) != (
+            input_token_limit,
+            output_token_limit,
+            self.maximum_provider_attempts,
+        ):
+            raise UsagePersistenceError
+        return StartedModelCall(
+            call_id,
+            owner,
+            stage,
+            model,
+            provider_attempt,
+            logical_call_id,
+            cost_reservation_id,
+        )
+
     def start(
         self,
         stage: ModelCallStage,
@@ -808,43 +800,29 @@ class ModelCallLedger:
             configuration_hash=configuration_hash,
             retry_delay_ms=retry_delay_ms,
         )
+        parameters.update(
+            self._reservation_parameters(
+                owner,
+                reservation_id,
+                logical_call_id,
+                input_token_limit,
+                output_token_limit,
+            )
+        )
+        parameters["require_cost_reservation"] = owner.require_cost_reservation
         try:
             with self._pool.connection() as connection:
-                reservation = connection.execute(
-                    RESERVE_MODEL_CALL_SQL,
-                    self._reservation_parameters(
-                        owner,
-                        reservation_id,
-                        logical_call_id,
-                        input_token_limit,
-                        output_token_limit,
-                    ),
-                ).fetchone()
-                if owner.require_cost_reservation and reservation is None:
-                    raise ExperimentBudgetExceeded
-                if reservation is not None and reservation[0] is None:
-                    raise ExperimentBudgetExceeded
-                if reservation is not None and tuple(reservation[1:]) != (
-                    input_token_limit,
-                    output_token_limit,
-                    self.maximum_provider_attempts,
-                ):
-                    raise UsagePersistenceError
-                cost_reservation_id = (
-                    uuid.UUID(str(reservation[0])) if reservation is not None else None
-                )
-                parameters["cost_reservation_id"] = cost_reservation_id
-                inserted = connection.execute(_INSERT_CALL, parameters).fetchone()
-                if inserted is None:
-                    raise UsagePersistenceError
-                call = StartedModelCall(
-                    call_id,
-                    owner,
-                    stage,
-                    model,
-                    provider_attempt,
-                    logical_call_id,
-                    cost_reservation_id,
+                row = connection.execute(_START_MODEL_CALL_SQL, parameters).fetchone()
+                call = self._started_call(
+                    row,
+                    call_id=call_id,
+                    owner=owner,
+                    stage=stage,
+                    model=model,
+                    provider_attempt=provider_attempt,
+                    logical_call_id=logical_call_id,
+                    input_token_limit=input_token_limit,
+                    output_token_limit=output_token_limit,
                 )
         except Exception as error:
             if "experiment cost cap exceeded" in str(error):
@@ -892,49 +870,33 @@ class ModelCallLedger:
             configuration_hash=configuration_hash,
             retry_delay_ms=retry_delay_ms,
         )
+        parameters.update(
+            self._reservation_parameters(
+                owner,
+                reservation_id,
+                logical_call_id,
+                input_token_limit,
+                output_token_limit,
+            )
+        )
+        parameters["require_cost_reservation"] = owner.require_cost_reservation
 
         async def persist() -> StartedModelCall:
             async with self._async_open_lock:
                 if self._async_pool.closed:
                     await self._async_pool.open()
             async with self._async_pool.connection() as connection:
-                reservation_cursor = await connection.execute(
-                    RESERVE_MODEL_CALL_SQL,
-                    self._reservation_parameters(
-                        owner,
-                        reservation_id,
-                        logical_call_id,
-                        input_token_limit,
-                        output_token_limit,
-                    ),
-                )
-                reservation = await reservation_cursor.fetchone()
-                if owner.require_cost_reservation and reservation is None:
-                    raise ExperimentBudgetExceeded
-                if reservation is not None and reservation[0] is None:
-                    raise ExperimentBudgetExceeded
-                if reservation is not None and tuple(reservation[1:]) != (
-                    input_token_limit,
-                    output_token_limit,
-                    self.maximum_provider_attempts,
-                ):
-                    raise UsagePersistenceError
-                cost_reservation_id = (
-                    uuid.UUID(str(reservation[0])) if reservation is not None else None
-                )
-                parameters["cost_reservation_id"] = cost_reservation_id
-                cursor = await connection.execute(_INSERT_CALL, parameters)
-                inserted = await cursor.fetchone()
-                if inserted is None:
-                    raise UsagePersistenceError
-                return StartedModelCall(
-                    call_id,
-                    owner,
-                    stage,
-                    model,
-                    provider_attempt,
-                    logical_call_id,
-                    cost_reservation_id,
+                cursor = await connection.execute(_START_MODEL_CALL_SQL, parameters)
+                return self._started_call(
+                    await cursor.fetchone(),
+                    call_id=call_id,
+                    owner=owner,
+                    stage=stage,
+                    model=model,
+                    provider_attempt=provider_attempt,
+                    logical_call_id=logical_call_id,
+                    input_token_limit=input_token_limit,
+                    output_token_limit=output_token_limit,
                 )
 
         try:
@@ -1021,6 +983,33 @@ class ModelCallLedger:
             except asyncio.CancelledError:
                 continue
         await cleanup
+
+    async def arecover_terminal_owner_calls(self, experiment_id: uuid.UUID) -> int:
+        try:
+            async with self._async_open_lock:
+                if self._async_pool.closed:
+                    await self._async_pool.open()
+            async with self._async_pool.connection() as connection:
+                cursor = await connection.execute(
+                    _ABANDON_TERMINAL_OWNER_CALLS,
+                    {"experiment_id": experiment_id},
+                )
+                rows = await cursor.fetchall()
+                reservation_ids = sorted(
+                    {uuid.UUID(str(row[1])) for row in rows if row[1] is not None},
+                    key=str,
+                )
+                for reservation_id in reservation_ids:
+                    await self._areconcile_reservation(
+                        connection,
+                        reservation_id,
+                        terminal=True,
+                    )
+            return len(rows)
+        except UsagePersistenceError:
+            raise
+        except Exception as error:
+            raise UsagePersistenceError from error
 
     async def _persist_unissued_cancellation(
         self,

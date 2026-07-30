@@ -887,9 +887,6 @@ async def run(args: argparse.Namespace) -> None:
             indent=2,
         )
     )
-    if not pending:
-        return
-
     database = Database(settings)
     sql_engine = make_engine(
         settings.sql_database_url,
@@ -952,6 +949,15 @@ async def run(args: argparse.Namespace) -> None:
                     f"{case.stratum} {str(trial.trial_id)[:8]}"
                 )
             print("dry run: no provider calls issued")
+            return
+
+        recovered_calls = await llm.ledger.arecover_terminal_owner_calls(manifest.experiment_id)
+        if recovered_calls:
+            print(
+                f"reconciled {recovered_calls} interrupted model call(s) "
+                "owned by terminal experiment work"
+            )
+        if not pending:
             return
 
         async with AsyncExitStack() as stack:

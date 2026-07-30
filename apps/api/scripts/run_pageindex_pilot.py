@@ -45,7 +45,7 @@ TERMINAL = {
     JobStatus.cancelled,
 }
 RELEASE_SHA = re.compile(r"^[0-9a-f]{40}$")
-MEASUREMENT_SCHEMA_REVISION = "0008_reservation_state_guard"
+MEASUREMENT_SCHEMA_REVISION = "0009_atomic_model_call_start"
 
 
 def report_cost(value: Decimal | float | int) -> float:

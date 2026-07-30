@@ -256,7 +256,7 @@ async def test_concurrent_usage_contexts_keep_attempt_and_trace_ownership() -> N
 
 
 async def test_required_cost_reservation_stops_before_model_call_insert() -> None:
-    connection = _ReservationlessAsyncConnection()
+    connection = _ReservationlessAsyncConnection((None, None, None, None, None))
     ledger = object.__new__(ModelCallLedger)
     cast(Any, ledger)._async_pool = _OpenReservationlessAsyncPool(connection)
     cast(Any, ledger)._async_open_lock = asyncio.Lock()
@@ -282,7 +282,7 @@ async def test_required_cost_reservation_stops_before_model_call_insert() -> Non
 
 
 async def test_attached_experiment_rejection_stops_without_owner_flag() -> None:
-    connection = _ReservationlessAsyncConnection((None, None, None, None))
+    connection = _ReservationlessAsyncConnection((None, None, None, None, None))
     ledger = object.__new__(ModelCallLedger)
     cast(Any, ledger)._async_pool = _OpenReservationlessAsyncPool(connection)
     cast(Any, ledger)._async_open_lock = asyncio.Lock()
