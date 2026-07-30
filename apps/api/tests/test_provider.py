@@ -41,6 +41,21 @@ def test_http_200_response_validation_failure_is_retryable() -> None:
     assert not failure.blocks_provider
 
 
+def test_openai_connection_failures_are_retryable_network_errors() -> None:
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+
+    for error in (
+        openai.APIConnectionError(request=request),
+        openai.APITimeoutError(request),
+    ):
+        failure = classify_provider_failure(error)
+
+        assert failure.code == "network_error"
+        assert failure.retryable
+        assert failure.http_status is None
+        assert not failure.blocks_provider
+
+
 class _Rows:
     def __init__(self, rows: Sequence[object]) -> None:
         self.rows = list(rows)

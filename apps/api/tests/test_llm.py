@@ -38,6 +38,9 @@ class _Runnable:
         before_response = self.calls.get("before_response")
         if callable(before_response):
             before_response()
+        provider_error = self.calls.get("provider_error")
+        if isinstance(provider_error, BaseException):
+            raise provider_error
         parsed = RouteDecision(
             route=RunRoute.sql,
             reason="catalog inventory",
@@ -97,10 +100,11 @@ class _Ledger:
         outcome: ModelCallOutcome,
         finish_reason: str | None,
         usage: TokenUsage,
-        **_: object,
+        **finish_details: object,
     ) -> None:
         if self.fail_finalize:
             raise UsagePersistenceError
+        self.calls["finish_details"] = finish_details
         events: list[tuple[object, ...]] = self.calls.setdefault("ledger_events", [])
         events.append(("finished", call, outcome, finish_reason, usage))
 
@@ -292,6 +296,74 @@ async def test_http_200_response_validation_failure_is_retried(
 
     assert result.route == RunRoute.sql
     assert attempts == [1, 2]
+
+
+async def test_openai_connection_failure_is_retried(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    llm = DeepSeekLLM(Settings(deepseek_api_key=SecretStr("test-key")))
+    attempts: list[int] = []
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+
+    async def invoke(*args: object, attempt: int = 1, **kwargs: object) -> RouteDecision:
+        del args, kwargs
+        attempts.append(attempt)
+        if attempt == 1:
+            raise openai.APIConnectionError(request=request)
+        return RouteDecision(
+            route=RunRoute.sql,
+            reason="catalog inventory",
+            standalone_question="List every paper title",
+        )
+
+    async def no_sleep(delay: float) -> None:
+        del delay
+
+    monkeypatch.setattr(llm, "_invoke", invoke)
+    monkeypatch.setattr(llm_module.asyncio, "sleep", no_sleep)
+
+    result = await llm.structured(
+        RouteDecision,
+        "system",
+        "user",
+        thinking=False,
+        stage=ModelCallStage.query_route,
+    )
+
+    assert result.route == RunRoute.sql
+    assert attempts == [1, 2]
+
+
+async def test_openai_connection_failure_persists_retryable_network_classification(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    calls: dict[str, Any] = {
+        "provider_error": openai.APIConnectionError(request=request),
+    }
+    llm = DeepSeekLLM(
+        Settings(deepseek_api_key=SecretStr("test-key")),
+        ledger=_Ledger(calls),  # pyright: ignore[reportArgumentType]
+    )
+
+    def client(thinking: bool, max_output_tokens: int | None = None) -> _Client:
+        del thinking, max_output_tokens
+        return _Client(calls)
+
+    monkeypatch.setattr(llm, "_client", client)
+
+    with raises(openai.APIConnectionError):
+        await llm._invoke(  # pyright: ignore[reportPrivateUsage]
+            RouteDecision,
+            "system",
+            "user",
+            thinking=False,
+            stage=ModelCallStage.query_route,
+        )
+
+    assert calls["finish_details"]["failure_code"] == "network_error"
+    assert calls["finish_details"]["retryable"] is True
+    assert calls["ledger_events"][1][2] == ModelCallOutcome.failed
 
 
 async def test_usage_row_starts_before_provider_and_same_row_is_finalized(

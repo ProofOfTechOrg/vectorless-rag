@@ -7,8 +7,6 @@ import time
 import uuid
 from typing import Protocol, TypeVar, cast
 
-import httpx
-import openai
 from langchain_deepseek import ChatDeepSeek
 from pydantic import BaseModel, SecretStr
 
@@ -68,21 +66,6 @@ class StructuredLLM(Protocol):
         stage: ModelCallStage,
         max_output_tokens: int | None = None,
     ) -> StructuredT: ...
-
-
-def _is_transient(error: Exception) -> bool:
-    return isinstance(
-        error,
-        (
-            TimeoutError,
-            ConnectionError,
-            httpx.TimeoutException,
-            httpx.NetworkError,
-            openai.APIConnectionError,
-            openai.RateLimitError,
-            openai.InternalServerError,
-        ),
-    )
 
 
 def _finish_reason(raw: object) -> str | None:
@@ -410,7 +393,7 @@ class DeepSeekLLM:
                         retryable=False,
                         http_status=failure.http_status,
                     ) from error
-                if not (_is_transient(error) or failure.retryable):
+                if not failure.retryable:
                     raise LLMError(
                         failure.code,
                         "The model provider rejected the request.",

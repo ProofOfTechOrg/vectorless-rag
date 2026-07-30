@@ -87,6 +87,7 @@ def classify_provider_failure(error: BaseException) -> ProviderFailure:
             ConnectionError,
             httpx.TimeoutException,
             httpx.NetworkError,
+            openai.APIConnectionError,
         ),
     ):
         return ProviderFailure("network_error", True, status, False)
