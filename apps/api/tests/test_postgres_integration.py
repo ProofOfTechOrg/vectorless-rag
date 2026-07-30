@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
+import time
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
 import psycopg
 import pytest
@@ -17,6 +20,7 @@ from alembic.config import Config
 from psycopg import errors
 from pydantic import BaseModel
 from sqlalchemy import Numeric, delete, select, update
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from alembic import command
@@ -37,6 +41,7 @@ from vectorless_rag.models import (
     IngestionJob,
     JobStatus,
     ModelCallCostReservation,
+    ModelCallOutcome,
     ModelCallStage,
 )
 from vectorless_rag.provider import DEEPSEEK_MAX_INPUT_TOKENS, DEEPSEEK_MAX_OUTPUT_TOKENS
@@ -49,7 +54,10 @@ from vectorless_rag.usage import (
     RESERVE_MODEL_CALL_SQL,
     ExperimentBudgetExceeded,
     ModelCallLedger,
+    StartedModelCall,
+    TokenUsage,
     UsageOwner,
+    UsagePersistenceError,
     usage_context,
 )
 
@@ -61,12 +69,532 @@ StructuredT = TypeVar("StructuredT", bound=BaseModel)
 API_ROOT = Path(__file__).resolve().parents[1]
 
 
+class _PauseAfterCommitContext:
+    def __init__(
+        self,
+        context: Any,
+        committed: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self.context = context
+        self.committed = committed
+        self.release = release
+
+    async def __aenter__(self) -> Any:
+        return await self.context.__aenter__()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> Any:
+        result = await self.context.__aexit__(exc_type, exc, traceback)
+        self.committed.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.release.set()
+            raise
+        return result
+
+
+class _SignalExecuteConnection:
+    def __init__(self, connection: Any, executing: asyncio.Event) -> None:
+        self.connection = connection
+        self.executing = executing
+
+    async def execute(self, query: object, parameters: object) -> Any:
+        self.executing.set()
+        return await self.connection.execute(query, parameters)
+
+
+class _SignalExecuteContext:
+    def __init__(self, context: Any, executing: asyncio.Event) -> None:
+        self.context = context
+        self.executing = executing
+
+    async def __aenter__(self) -> _SignalExecuteConnection:
+        return _SignalExecuteConnection(await self.context.__aenter__(), self.executing)
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> Any:
+        return await self.context.__aexit__(exc_type, exc, traceback)
+
+
+class _PauseAfterCommitPool:
+    def __init__(
+        self,
+        pool: Any,
+        committed: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self.pool = pool
+        self.committed = committed
+        self.release = release
+
+    @property
+    def closed(self) -> bool:
+        return bool(self.pool.closed)
+
+    async def open(self) -> None:
+        await self.pool.open()
+
+    def connection(self) -> Any:
+        return _PauseAfterCommitContext(
+            self.pool.connection(),
+            self.committed,
+            self.release,
+        )
+
+
+class _SignalExecutePool:
+    def __init__(self, pool: Any, executing: asyncio.Event) -> None:
+        self.pool = pool
+        self.executing = executing
+
+    @property
+    def closed(self) -> bool:
+        return bool(self.pool.closed)
+
+    async def open(self) -> None:
+        await self.pool.open()
+
+    def connection(self) -> Any:
+        return _SignalExecuteContext(self.pool.connection(), self.executing)
+
+
+class _PauseBeforeCallInsertConnection:
+    def __init__(
+        self,
+        connection: Any,
+        blocked: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self.connection = connection
+        self.blocked = blocked
+        self.release = release
+
+    async def execute(self, query: object, parameters: object) -> Any:
+        if "INSERT INTO agent.model_calls" in str(query) and not self.release.is_set():
+            self.blocked.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.release.set()
+                raise
+        return await self.connection.execute(query, parameters)
+
+
+class _PauseBeforeCallInsertContext:
+    def __init__(
+        self,
+        context: Any,
+        blocked: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self.context = context
+        self.blocked = blocked
+        self.release = release
+
+    async def __aenter__(self) -> _PauseBeforeCallInsertConnection:
+        return _PauseBeforeCallInsertConnection(
+            await self.context.__aenter__(),
+            self.blocked,
+            self.release,
+        )
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> Any:
+        return await self.context.__aexit__(exc_type, exc, traceback)
+
+
+class _PauseBeforeCallInsertPool:
+    def __init__(
+        self,
+        pool: Any,
+        blocked: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self.pool = pool
+        self.blocked = blocked
+        self.release = release
+
+    @property
+    def closed(self) -> bool:
+        return bool(self.pool.closed)
+
+    async def open(self) -> None:
+        await self.pool.open()
+
+    def connection(self) -> Any:
+        return _PauseBeforeCallInsertContext(
+            self.pool.connection(),
+            self.blocked,
+            self.release,
+        )
+
+
+class _PauseAfterCallInsertConnection:
+    def __init__(
+        self,
+        connection: Any,
+        inserted: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self.connection = connection
+        self.inserted = inserted
+        self.release = release
+
+    async def execute(self, query: object, parameters: object) -> Any:
+        result = await self.connection.execute(query, parameters)
+        if "INSERT INTO agent.model_calls" in str(query):
+            self.inserted.set()
+            await self.release.wait()
+        return result
+
+
+class _PauseAfterCallInsertContext:
+    def __init__(
+        self,
+        context: Any,
+        inserted: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self.context = context
+        self.inserted = inserted
+        self.release = release
+
+    async def __aenter__(self) -> _PauseAfterCallInsertConnection:
+        return _PauseAfterCallInsertConnection(
+            await self.context.__aenter__(),
+            self.inserted,
+            self.release,
+        )
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> Any:
+        return await self.context.__aexit__(exc_type, exc, traceback)
+
+
+class _PauseAfterCallInsertPool:
+    def __init__(
+        self,
+        pool: Any,
+        inserted: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self.pool = pool
+        self.inserted = inserted
+        self.release = release
+
+    @property
+    def closed(self) -> bool:
+        return bool(self.pool.closed)
+
+    async def open(self) -> None:
+        await self.pool.open()
+
+    def connection(self) -> Any:
+        return _PauseAfterCallInsertContext(
+            self.pool.connection(),
+            self.inserted,
+            self.release,
+        )
+
+
+class _PauseCleanupAfterReservationConnection:
+    def __init__(
+        self,
+        connection: Any,
+        insert_blocked: asyncio.Event,
+        insert_release: asyncio.Event,
+        cleanup_locked: asyncio.Event,
+        cleanup_release: asyncio.Event,
+    ) -> None:
+        self.connection = connection
+        self.insert_blocked = insert_blocked
+        self.insert_release = insert_release
+        self.cleanup_locked = cleanup_locked
+        self.cleanup_release = cleanup_release
+
+    async def execute(self, query: object, parameters: object) -> Any:
+        statement = str(query)
+        if "INSERT INTO agent.model_calls" in statement and not self.insert_release.is_set():
+            self.insert_blocked.set()
+            try:
+                await self.insert_release.wait()
+            except asyncio.CancelledError:
+                self.insert_release.set()
+                raise
+        result = await self.connection.execute(query, parameters)
+        if statement.lstrip().startswith("WITH cancelled AS"):
+            self.cleanup_locked.set()
+            await self.cleanup_release.wait()
+        return result
+
+
+class _PauseCleanupAfterReservationContext:
+    def __init__(
+        self,
+        context: Any,
+        insert_blocked: asyncio.Event,
+        insert_release: asyncio.Event,
+        cleanup_locked: asyncio.Event,
+        cleanup_release: asyncio.Event,
+    ) -> None:
+        self.context = context
+        self.insert_blocked = insert_blocked
+        self.insert_release = insert_release
+        self.cleanup_locked = cleanup_locked
+        self.cleanup_release = cleanup_release
+
+    async def __aenter__(self) -> _PauseCleanupAfterReservationConnection:
+        return _PauseCleanupAfterReservationConnection(
+            await self.context.__aenter__(),
+            self.insert_blocked,
+            self.insert_release,
+            self.cleanup_locked,
+            self.cleanup_release,
+        )
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> Any:
+        return await self.context.__aexit__(exc_type, exc, traceback)
+
+
+class _PauseCleanupAfterReservationPool:
+    def __init__(
+        self,
+        pool: Any,
+        insert_blocked: asyncio.Event,
+        insert_release: asyncio.Event,
+        cleanup_locked: asyncio.Event,
+        cleanup_release: asyncio.Event,
+    ) -> None:
+        self.pool = pool
+        self.insert_blocked = insert_blocked
+        self.insert_release = insert_release
+        self.cleanup_locked = cleanup_locked
+        self.cleanup_release = cleanup_release
+
+    @property
+    def closed(self) -> bool:
+        return bool(self.pool.closed)
+
+    async def open(self) -> None:
+        await self.pool.open()
+
+    def connection(self) -> Any:
+        return _PauseCleanupAfterReservationContext(
+            self.pool.connection(),
+            self.insert_blocked,
+            self.insert_release,
+            self.cleanup_locked,
+            self.cleanup_release,
+        )
+
+
+@dataclass(frozen=True)
+class _ReservationTestState:
+    owner_sync: str
+    experiment_id: uuid.UUID
+    attempt_id: uuid.UUID
+    query_run_id: uuid.UUID
+
+
+def _insert_reservation_test_experiment(
+    connection: psycopg.Connection[tuple[Any, ...]],
+    experiment_id: uuid.UUID,
+    name: str,
+) -> None:
+    connection.execute(
+        """INSERT INTO agent.experiments
+           (id, name, release_sha, configuration_hash, corpus_hash, index_hash,
+            dataset_hash, price_snapshot, repetitions, evidence_token_budget,
+            seed, maximum_cost_usd, frozen_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, 1, 6400, 1, 10, now())""",
+        (
+            experiment_id,
+            name,
+            "a" * 40,
+            "b" * 64,
+            "c" * 64,
+            "d" * 64,
+            "e" * 64,
+            json.dumps(
+                {
+                    "input_per_million_usd": 1,
+                    "cache_hit_input_per_million_usd": 0.1,
+                    "output_per_million_usd": 2,
+                    "max_input_tokens": 100,
+                    "max_output_tokens": 100,
+                    "max_attempts": 3,
+                }
+            ),
+        ),
+    )
+
+
 @pytest.fixture
-def downgraded_measurement_schema() -> Iterator[Config]:
+def reservation_test_state() -> Iterator[_ReservationTestState]:
+    assert OWNER_URL is not None
+    owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
+    document_id = uuid.uuid4()
+    job_id = uuid.uuid4()
+    attempt_id = uuid.uuid4()
+    experiment_id = uuid.uuid4()
+    api_key_id = uuid.uuid4()
+    query_run_id = uuid.uuid4()
+    with psycopg.connect(owner_sync) as connection:
+        connection.execute(
+            """INSERT INTO agent.documents
+               (id, sha256, original_filename, pdf_object_key, status)
+               VALUES (%s, %s, 'reservation.pdf', 'pdf/reservation', 'indexing')""",
+            (document_id, uuid.uuid4().hex + uuid.uuid4().hex),
+        )
+        _insert_reservation_test_experiment(
+            connection,
+            experiment_id,
+            "ingestion-reservation-test",
+        )
+        connection.execute(
+            """INSERT INTO agent.ingestion_jobs
+               (id, document_id, status, force, mode, attempts, retry_budget_consumed,
+                is_active, metrics, experiment_id)
+               VALUES (%s, %s, 'running', true, 'reextract_all', 1, 0, true,
+                       '{}'::jsonb, %s)""",
+            (job_id, document_id, experiment_id),
+        )
+        connection.execute(
+            """INSERT INTO agent.ingestion_attempts
+               (id, job_id, attempt_number, trace_id, worker_id, status, artifact_action,
+                telemetry_complete, retry_budget_consumed)
+               VALUES (%s, %s, 1, %s, 'reservation-worker', 'running', 'none',
+                       false, false)""",
+            (attempt_id, job_id, uuid.uuid4().hex),
+        )
+        connection.execute(
+            """INSERT INTO agent.api_keys
+               (id, name, prefix, key_hash, scopes, disabled)
+               VALUES (%s, 'unreserved-call-owner', %s, %s, '{}'::text[], true)""",
+            (api_key_id, f"t{api_key_id.hex[:8]}", api_key_id.hex + api_key_id.hex),
+        )
+        connection.execute(
+            """INSERT INTO agent.query_runs
+               (id, trace_id, thread_id, api_key_id, question)
+               VALUES (%s, %s, 'unreserved-call-owner', %s, 'question')""",
+            (query_run_id, uuid.uuid4().hex, api_key_id),
+        )
+        connection.commit()
+
+    try:
+        yield _ReservationTestState(
+            owner_sync=owner_sync,
+            experiment_id=experiment_id,
+            attempt_id=attempt_id,
+            query_run_id=query_run_id,
+        )
+    finally:
+        with psycopg.connect(owner_sync) as connection:
+            memberships = connection.execute(
+                """SELECT count(*) FROM agent.experiment_memberships
+                   WHERE query_run_id = %s""",
+                (query_run_id,),
+            ).fetchone()
+            if memberships == (0,):
+                connection.execute(
+                    """DELETE FROM agent.model_calls
+                       WHERE ingestion_attempt_id = %s OR query_run_id = %s""",
+                    (attempt_id, query_run_id),
+                )
+                connection.execute(
+                    """DELETE FROM agent.model_call_cost_reservations
+                       WHERE experiment_id = %s""",
+                    (experiment_id,),
+                )
+                connection.execute(
+                    "DELETE FROM agent.query_runs WHERE id = %s",
+                    (query_run_id,),
+                )
+                connection.execute("DELETE FROM agent.api_keys WHERE id = %s", (api_key_id,))
+                connection.execute(
+                    "DELETE FROM agent.ingestion_attempts WHERE id = %s",
+                    (attempt_id,),
+                )
+                connection.execute(
+                    "DELETE FROM agent.ingestion_jobs WHERE id = %s",
+                    (job_id,),
+                )
+                connection.execute(
+                    "DELETE FROM agent.experiments WHERE id = %s",
+                    (experiment_id,),
+                )
+                connection.execute(
+                    "DELETE FROM agent.documents WHERE id = %s",
+                    (document_id,),
+                )
+                connection.commit()
+            else:
+                assert DISPOSABLE_DATABASE
+
+
+async def _create_retryable_reserved_call(
+    ledger: ModelCallLedger,
+    owner: UsageOwner,
+    logical_call_id: uuid.UUID,
+    *,
+    stage: ModelCallStage = ModelCallStage.pageindex_generation,
+) -> StartedModelCall:
+    with usage_context(owner):
+        call = await ledger.astart(
+            stage,
+            "provider/model",
+            1,
+            logical_call_id=logical_call_id,
+            input_token_limit=100,
+            output_token_limit=1,
+        )
+    assert call is not None
+    await ledger.afinish(
+        call,
+        ModelCallOutcome.failed,
+        None,
+        TokenUsage.unavailable(),
+        failure_code="provider_rejected",
+        retryable=True,
+    )
+    return call
+
+
+def _alembic_config() -> Config:
     assert OWNER_URL is not None
     config = Config(str(API_ROOT / "alembic.ini"))
+    config.set_main_option("path_separator", "os")
     config.set_main_option("script_location", str(API_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", OWNER_URL)
+    return config
+
+
+@pytest.fixture
+def downgraded_measurement_schema() -> Iterator[Config]:
+    config = _alembic_config()
     command.downgrade(config, "0005_measurement_experiments")
     try:
         yield config
@@ -239,7 +767,7 @@ def test_cost_migrations_backfill_reservation_bounds_and_call_ownership(
             "review_required",
         )
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0007_model_call_experiment",
+            "0008_reservation_state_guard",
         )
         assert connection.execute(
             "SELECT experiment_id FROM agent.model_calls WHERE id = %s",
@@ -259,84 +787,353 @@ def test_cost_migrations_backfill_reservation_bounds_and_call_ownership(
 
 @pytest.mark.integration
 @pytest.mark.skipif(
+    not OWNER_URL or not DISPOSABLE_DATABASE,
+    reason="disposable PostgreSQL owner URL not set",
+)
+def test_reservation_guard_migration_rejects_race_corrupted_state(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert OWNER_URL is not None
+    config = _alembic_config()
+    owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
+    terminal_reservation_id = uuid.uuid4()
+    underfunded_reservation_id = uuid.uuid4()
+    model_call_id = uuid.uuid4()
+    logical_call_id = uuid.uuid4()
+
+    command.downgrade(config, "0007_model_call_experiment")
+    try:
+        with psycopg.connect(owner_sync) as connection:
+            connection.execute(
+                """INSERT INTO agent.model_call_cost_reservations
+                   (id, experiment_id, logical_call_id, reserved_cost_usd,
+                    measured_cost_usd, input_token_limit, output_token_limit,
+                    attempt_limit, status)
+                   VALUES (%s, %s, %s, 0.000306, 0, 100, 1, 3, 'finalized')""",
+                (
+                    terminal_reservation_id,
+                    reservation_test_state.experiment_id,
+                    logical_call_id,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO agent.model_calls
+                   (id, ingestion_attempt_id, trace_id, stage, model, provider_attempt,
+                    logical_call_id, operation, experiment_id, cost_reservation_id,
+                    outcome, usage_available, cache_attribution_complete)
+                   VALUES (%s, %s, %s, 'pageindex_generation', 'provider/model', 1,
+                           %s, 'pageindex_generation', %s, %s, 'started', false, false)""",
+                (
+                    model_call_id,
+                    reservation_test_state.attempt_id,
+                    uuid.uuid4().hex,
+                    logical_call_id,
+                    reservation_test_state.experiment_id,
+                    terminal_reservation_id,
+                ),
+            )
+            connection.commit()
+
+        with pytest.raises(
+            ProgrammingError,
+            match="started model call has terminal cost reservation",
+        ):
+            command.upgrade(config, "head")
+
+        with psycopg.connect(owner_sync) as connection:
+            assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+                "0007_model_call_experiment",
+            )
+            connection.execute(
+                "DELETE FROM agent.model_calls WHERE id = %s",
+                (model_call_id,),
+            )
+            connection.execute(
+                "DELETE FROM agent.model_call_cost_reservations WHERE id = %s",
+                (terminal_reservation_id,),
+            )
+            connection.execute(
+                """INSERT INTO agent.model_call_cost_reservations
+                   (id, experiment_id, logical_call_id, reserved_cost_usd,
+                    input_token_limit, output_token_limit, attempt_limit, status)
+                   VALUES (%s, %s, %s, 0.000001, 100, 1, 3, 'reserved')""",
+                (
+                    underfunded_reservation_id,
+                    reservation_test_state.experiment_id,
+                    uuid.uuid4(),
+                ),
+            )
+            connection.commit()
+
+        with pytest.raises(
+            ProgrammingError,
+            match="reserved model call cost reservation is underfunded",
+        ):
+            command.upgrade(config, "head")
+    finally:
+        with psycopg.connect(owner_sync) as connection:
+            connection.execute(
+                "DELETE FROM agent.model_calls WHERE id = %s",
+                (model_call_id,),
+            )
+            connection.execute(
+                """DELETE FROM agent.model_call_cost_reservations
+                   WHERE id IN (%s, %s)""",
+                (terminal_reservation_id, underfunded_reservation_id),
+            )
+            connection.commit()
+        command.upgrade(config, "head")
+
+    with psycopg.connect(owner_sync) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0008_reservation_state_guard",
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not DISPOSABLE_DATABASE,
+    reason="disposable PostgreSQL owner URL not set",
+)
+def test_reservation_guard_migration_blocks_schema_0007_writer(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert OWNER_URL is not None
+    config = _alembic_config()
+    owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
+    model_call_id = uuid.uuid4()
+    blocker = psycopg.connect(owner_sync)
+
+    command.downgrade(config, "0007_model_call_experiment")
+    try:
+        with psycopg.connect(owner_sync) as connection:
+            connection.execute(
+                """INSERT INTO agent.model_calls
+                   (id, query_run_id, trace_id, stage, model, provider_attempt,
+                    logical_call_id, operation, outcome, usage_available,
+                    cache_attribution_complete)
+                   VALUES (%s, %s, %s, 'query_route', 'provider/model', 1, %s,
+                           'query_route', 'started', false, false)""",
+                (
+                    model_call_id,
+                    reservation_test_state.query_run_id,
+                    uuid.uuid4().hex,
+                    uuid.uuid4(),
+                ),
+            )
+            connection.commit()
+
+        blocker.execute("LOCK TABLE agent.experiments IN ACCESS EXCLUSIVE MODE")
+        writer_started = threading.Event()
+
+        def update_model_call() -> None:
+            with psycopg.connect(owner_sync) as connection:
+                writer_started.set()
+                connection.execute(
+                    "UPDATE agent.model_calls SET updated_at = now() WHERE id = %s",
+                    (model_call_id,),
+                )
+                connection.commit()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            migration = executor.submit(command.upgrade, config, "head")
+            try:
+                deadline = time.monotonic() + 2
+                with psycopg.connect(owner_sync) as observer:
+                    while time.monotonic() < deadline:
+                        locks_held = observer.execute(
+                            """SELECT EXISTS (
+                                 SELECT 1
+                                 FROM pg_locks calls
+                                 WHERE calls.relation = 'agent.model_calls'::regclass
+                                   AND calls.mode = 'ShareRowExclusiveLock'
+                                   AND calls.granted
+                                   AND EXISTS (
+                                     SELECT 1
+                                     FROM pg_locks reservations
+                                     WHERE reservations.pid = calls.pid
+                                       AND reservations.relation =
+                                         'agent.model_call_cost_reservations'::regclass
+                                       AND reservations.mode = 'ShareRowExclusiveLock'
+                                       AND reservations.granted
+                                   )
+                                   AND EXISTS (
+                                     SELECT 1
+                                     FROM pg_locks experiments
+                                     WHERE experiments.pid = calls.pid
+                                       AND experiments.relation =
+                                         'agent.experiments'::regclass
+                                       AND experiments.mode = 'AccessShareLock'
+                                       AND NOT experiments.granted
+                                   )
+                               )"""
+                        ).fetchone()
+                        if locks_held == (True,):
+                            break
+                        time.sleep(0.01)
+                    else:
+                        pytest.fail("migration did not hold both ledger table locks")
+
+                writer = executor.submit(update_model_call)
+                assert writer_started.wait(timeout=2)
+                time.sleep(0.05)
+                assert not writer.done()
+            finally:
+                blocker.rollback()
+
+            migration.result(timeout=5)
+            writer.result(timeout=5)
+    finally:
+        blocker.rollback()
+        blocker.close()
+        with psycopg.connect(owner_sync) as connection:
+            connection.execute(
+                "DELETE FROM agent.model_calls WHERE id = %s",
+                (model_call_id,),
+            )
+            connection.commit()
+        command.upgrade(config, "head")
+
+    with psycopg.connect(owner_sync) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0008_reservation_state_guard",
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not DISPOSABLE_DATABASE,
+    reason="disposable PostgreSQL owner URL not set",
+)
+def test_reservation_guard_migration_allows_inflight_schema_0007_finish(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert OWNER_URL is not None
+    config = _alembic_config()
+    separator = "&" if "?" in OWNER_URL else "?"
+    config.set_main_option(
+        "sqlalchemy.url",
+        f"{OWNER_URL}{separator}application_name=reservation-guard-lock-retry-test",
+    )
+    owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
+    reservation_id = uuid.uuid4()
+    model_call_id = uuid.uuid4()
+    logical_call_id = uuid.uuid4()
+    old_finish = psycopg.connect(owner_sync)
+
+    command.downgrade(config, "0007_model_call_experiment")
+    try:
+        with psycopg.connect(owner_sync) as connection:
+            connection.execute(
+                """INSERT INTO agent.model_call_cost_reservations
+                   (id, experiment_id, logical_call_id, reserved_cost_usd,
+                    input_token_limit, output_token_limit, attempt_limit, status)
+                   VALUES (%s, %s, %s, 0.000306, 100, 1, 3, 'reserved')""",
+                (
+                    reservation_id,
+                    reservation_test_state.experiment_id,
+                    logical_call_id,
+                ),
+            )
+            connection.execute(
+                """INSERT INTO agent.model_calls
+                   (id, ingestion_attempt_id, trace_id, stage, model, provider_attempt,
+                    logical_call_id, operation, experiment_id, cost_reservation_id,
+                    outcome, usage_available, cache_attribution_complete)
+                   VALUES (%s, %s, %s, 'pageindex_generation', 'provider/model', 1,
+                           %s, 'pageindex_generation', %s, %s, 'started', false, false)""",
+                (
+                    model_call_id,
+                    reservation_test_state.attempt_id,
+                    uuid.uuid4().hex,
+                    logical_call_id,
+                    reservation_test_state.experiment_id,
+                    reservation_id,
+                ),
+            )
+            connection.commit()
+
+        old_finish.execute("SET LOCAL lock_timeout = '2s'")
+        old_finish.execute(
+            """UPDATE agent.model_calls
+               SET outcome = 'failed', failure_code = 'provider_rejected',
+                   retryable = false, completed_at = now(), updated_at = now()
+               WHERE id = %s""",
+            (model_call_id,),
+        )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            migration = executor.submit(command.upgrade, config, "head")
+            try:
+                deadline = time.monotonic() + 2
+                with psycopg.connect(owner_sync) as observer:
+                    while time.monotonic() < deadline:
+                        lock_retry_active = observer.execute(
+                            """SELECT EXISTS (
+                                 SELECT 1
+                                 FROM pg_stat_activity
+                                 WHERE pid <> pg_backend_pid()
+                                   AND application_name =
+                                     'reservation-guard-lock-retry-test'
+                                   AND state = 'active'
+                                   AND wait_event = 'PgSleep'
+                               )"""
+                        ).fetchone()
+                        if lock_retry_active == (True,):
+                            break
+                        time.sleep(0.01)
+                    else:
+                        pytest.fail("migration did not enter the ledger lock retry")
+
+                old_finish.execute(
+                    """UPDATE agent.model_call_cost_reservations
+                       SET status = 'review_required', updated_at = now()
+                       WHERE id = %s""",
+                    (reservation_id,),
+                )
+                old_finish.commit()
+            finally:
+                old_finish.rollback()
+
+            migration.result(timeout=5)
+    finally:
+        old_finish.rollback()
+        old_finish.close()
+        with psycopg.connect(owner_sync) as connection:
+            connection.execute(
+                "DELETE FROM agent.model_calls WHERE id = %s",
+                (model_call_id,),
+            )
+            connection.execute(
+                "DELETE FROM agent.model_call_cost_reservations WHERE id = %s",
+                (reservation_id,),
+            )
+            connection.commit()
+        command.upgrade(config, "head")
+
+    with psycopg.connect(owner_sync) as connection:
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0008_reservation_state_guard",
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
     not OWNER_URL or not APP_URL,
     reason="PostgreSQL owner and application URLs not set",
 )
-def test_application_role_inserts_reserved_and_unreserved_call_ownership() -> None:
-    assert OWNER_URL is not None
+def test_application_role_enforces_reservation_bounds_and_call_ownership(
+    reservation_test_state: _ReservationTestState,
+) -> None:
     assert APP_URL is not None
-    owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
-    document_id = uuid.uuid4()
-    job_id = uuid.uuid4()
-    attempt_id = uuid.uuid4()
-    experiment_id = uuid.uuid4()
-    api_key_id = uuid.uuid4()
-    query_run_id = uuid.uuid4()
-    with psycopg.connect(owner_sync) as connection:
-        connection.execute(
-            """INSERT INTO agent.documents
-               (id, sha256, original_filename, pdf_object_key, status)
-               VALUES (%s, %s, 'reservation.pdf', 'pdf/reservation', 'indexing')""",
-            (document_id, uuid.uuid4().hex + uuid.uuid4().hex),
-        )
-        connection.execute(
-            """INSERT INTO agent.experiments
-               (id, name, release_sha, configuration_hash, corpus_hash, index_hash,
-                dataset_hash, price_snapshot, repetitions, evidence_token_budget,
-                seed, maximum_cost_usd, frozen_at)
-               VALUES (%s, 'ingestion-reservation-test', %s, %s, %s, %s, %s,
-                       %s::jsonb, 1, 6400, 1, 10, now())""",
-            (
-                experiment_id,
-                "a" * 40,
-                "b" * 64,
-                "c" * 64,
-                "d" * 64,
-                "e" * 64,
-                json.dumps(
-                    {
-                        "input_per_million_usd": 1,
-                        "cache_hit_input_per_million_usd": 0.1,
-                        "output_per_million_usd": 2,
-                        "max_input_tokens": 100,
-                        "max_output_tokens": 100,
-                        "max_attempts": 1,
-                    }
-                ),
-            ),
-        )
-        connection.execute(
-            """INSERT INTO agent.ingestion_jobs
-               (id, document_id, status, force, mode, attempts, retry_budget_consumed,
-                is_active, metrics, experiment_id)
-               VALUES (%s, %s, 'running', true, 'reextract_all', 1, 0, true,
-                       '{}'::jsonb, %s)""",
-            (job_id, document_id, experiment_id),
-        )
-        connection.execute(
-            """INSERT INTO agent.ingestion_attempts
-               (id, job_id, attempt_number, trace_id, worker_id, status, artifact_action,
-                telemetry_complete, retry_budget_consumed)
-               VALUES (%s, %s, 1, %s, 'reservation-worker', 'running', 'none',
-                       false, false)""",
-            (attempt_id, job_id, uuid.uuid4().hex),
-        )
-        connection.execute(
-            """INSERT INTO agent.api_keys
-               (id, name, prefix, key_hash, scopes, disabled)
-               VALUES (%s, 'unreserved-call-owner', %s, %s, '{}'::text[], true)""",
-            (api_key_id, f"t{api_key_id.hex[:8]}", api_key_id.hex + api_key_id.hex),
-        )
-        connection.execute(
-            """INSERT INTO agent.query_runs
-               (id, trace_id, thread_id, api_key_id, question)
-               VALUES (%s, %s, 'unreserved-call-owner', %s, 'question')""",
-            (query_run_id, uuid.uuid4().hex, api_key_id),
-        )
-        connection.commit()
 
     ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=1)
-    with usage_context(UsageOwner(trace_id=uuid.uuid4().hex, ingestion_attempt_id=attempt_id)):
+    with usage_context(
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            ingestion_attempt_id=reservation_test_state.attempt_id,
+        )
+    ):
         with pytest.raises(ExperimentBudgetExceeded):
             ledger.start(
                 ModelCallStage.pageindex_generation,
@@ -346,19 +1143,24 @@ def test_application_role_inserts_reserved_and_unreserved_call_ownership() -> No
                 output_token_limit=1,
             )
 
-    with psycopg.connect(owner_sync) as connection:
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
         assert connection.execute(
             """SELECT count(*) FROM agent.model_calls
                WHERE ingestion_attempt_id = %s""",
-            (attempt_id,),
+            (reservation_test_state.attempt_id,),
         ).fetchone() == (0,)
         assert connection.execute(
             """SELECT count(*) FROM agent.model_call_cost_reservations
                WHERE experiment_id = %s""",
-            (experiment_id,),
+            (reservation_test_state.experiment_id,),
         ).fetchone() == (0,)
 
-    with usage_context(UsageOwner(trace_id=uuid.uuid4().hex, ingestion_attempt_id=attempt_id)):
+    with usage_context(
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            ingestion_attempt_id=reservation_test_state.attempt_id,
+        )
+    ):
         call = ledger.start(
             ModelCallStage.pageindex_generation,
             "provider/model",
@@ -368,7 +1170,12 @@ def test_application_role_inserts_reserved_and_unreserved_call_ownership() -> No
         )
     assert call is not None
 
-    with usage_context(UsageOwner(trace_id=uuid.uuid4().hex, query_run_id=query_run_id)):
+    with usage_context(
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            query_run_id=reservation_test_state.query_run_id,
+        )
+    ):
         unreserved_call = ledger.start(
             ModelCallStage.query_route,
             "provider/model",
@@ -378,32 +1185,749 @@ def test_application_role_inserts_reserved_and_unreserved_call_ownership() -> No
         )
     assert unreserved_call is not None
 
-    with psycopg.connect(owner_sync) as connection:
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
         assert connection.execute(
             """SELECT experiment_id, cost_reservation_id
                FROM agent.model_calls WHERE id = %s""",
             (call.id,),
-        ).fetchone() == (experiment_id, call.cost_reservation_id)
+        ).fetchone() == (
+            reservation_test_state.experiment_id,
+            call.cost_reservation_id,
+        )
         assert connection.execute(
             """SELECT experiment_id, cost_reservation_id
                FROM agent.model_calls WHERE id = %s""",
             (unreserved_call.id,),
         ).fetchone() == (None, None)
-        connection.execute(
-            "DELETE FROM agent.model_calls WHERE id = ANY(%s)",
-            ([call.id, unreserved_call.id],),
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL,
+    reason="PostgreSQL owner and application URLs not set",
+)
+async def test_cancelled_async_start_after_commit_finalizes_zero_cost_reservation(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    committed = asyncio.Event()
+    release = asyncio.Event()
+    cancellation_trace = uuid.uuid4().hex
+    cancellation_ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=1)
+    cancellation_pool = cast(Any, cancellation_ledger)._async_pool
+    cast(Any, cancellation_ledger)._async_pool = _PauseAfterCommitPool(
+        cancellation_pool,
+        committed,
+        release,
+    )
+
+    async def start_at_commit_boundary() -> None:
+        with usage_context(
+            UsageOwner(
+                trace_id=cancellation_trace,
+                ingestion_attempt_id=reservation_test_state.attempt_id,
+            )
+        ):
+            await cancellation_ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                1,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    cancellation = asyncio.create_task(start_at_commit_boundary())
+    await asyncio.wait_for(committed.wait(), timeout=2)
+    cancellation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(cancellation, timeout=2)
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        assert connection.execute(
+            """SELECT c.outcome, c.cancelled, c.usage_available,
+                      c.cache_attribution_complete, c.input_tokens, c.output_tokens,
+                      r.status, r.measured_cost_usd
+               FROM agent.model_calls c
+               JOIN agent.model_call_cost_reservations r
+                 ON r.id = c.cost_reservation_id
+               WHERE c.trace_id = %s""",
+            (cancellation_trace,),
+        ).fetchone() == (
+            "cancelled",
+            True,
+            True,
+            True,
+            0,
+            0,
+            "finalized",
+            Decimal("0.000000"),
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL,
+    reason="PostgreSQL owner and application URLs not set",
+)
+async def test_cancelled_async_start_while_reservation_is_locked_rolls_back_promptly(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    executing = asyncio.Event()
+    blocked_trace = uuid.uuid4().hex
+    blocked_ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=1)
+    blocked_pool = cast(Any, blocked_ledger)._async_pool
+    cast(Any, blocked_ledger)._async_pool = _SignalExecutePool(blocked_pool, executing)
+
+    async def start_while_locked() -> None:
+        with usage_context(
+            UsageOwner(
+                trace_id=blocked_trace,
+                ingestion_attempt_id=reservation_test_state.attempt_id,
+            )
+        ):
+            await blocked_ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                1,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    with psycopg.connect(reservation_test_state.owner_sync) as blocker:
+        blocker.execute(
+            "SELECT id FROM agent.experiments WHERE id = %s FOR UPDATE",
+            (reservation_test_state.experiment_id,),
+        )
+        blocked = asyncio.create_task(start_while_locked())
+        await asyncio.wait_for(executing.wait(), timeout=2)
+        await asyncio.sleep(0.05)
+        assert not blocked.done()
+        blocked.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(blocked, timeout=1)
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM agent.model_calls WHERE trace_id = %s",
+            (blocked_trace,),
+        ).fetchone() == (0,)
+        assert connection.execute(
+            """SELECT count(*) FROM agent.model_call_cost_reservations
+               WHERE experiment_id = %s""",
+            (reservation_test_state.experiment_id,),
+        ).fetchone() == (0,)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL,
+    reason="PostgreSQL owner and application URLs not set",
+)
+async def test_cancelled_retry_reconciles_existing_reservation(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    logical_call_id = uuid.uuid4()
+    ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+    first_call = await _create_retryable_reserved_call(
+        ledger,
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            ingestion_attempt_id=reservation_test_state.attempt_id,
+        ),
+        logical_call_id,
+    )
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        assert connection.execute(
+            """SELECT status FROM agent.model_call_cost_reservations
+               WHERE id = %s""",
+            (first_call.cost_reservation_id,),
+        ).fetchone() == ("reserved",)
+
+    blocked = asyncio.Event()
+    release = asyncio.Event()
+    retry_trace = uuid.uuid4().hex
+    ledger_pool = cast(Any, ledger)._async_pool
+    cast(Any, ledger)._async_pool = _PauseBeforeCallInsertPool(
+        ledger_pool,
+        blocked,
+        release,
+    )
+
+    async def start_retry() -> None:
+        with usage_context(
+            UsageOwner(
+                trace_id=retry_trace,
+                ingestion_attempt_id=reservation_test_state.attempt_id,
+            )
+        ):
+            await ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                2,
+                logical_call_id=logical_call_id,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    retry = asyncio.create_task(start_retry())
+    await asyncio.wait_for(blocked.wait(), timeout=2)
+    retry.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(retry, timeout=2)
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        assert connection.execute(
+            """SELECT count(*) FROM agent.model_calls
+               WHERE logical_call_id = %s""",
+            (logical_call_id,),
+        ).fetchone() == (1,)
+        assert connection.execute(
+            """SELECT status FROM agent.model_call_cost_reservations
+               WHERE id = %s""",
+            (first_call.cost_reservation_id,),
+        ).fetchone() == ("review_required",)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL,
+    reason="PostgreSQL owner and application URLs not set",
+)
+async def test_retry_start_serializes_with_cancellation_cleanup(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    logical_call_id = uuid.uuid4()
+    cancelled_ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+    first_call = await _create_retryable_reserved_call(
+        cancelled_ledger,
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            ingestion_attempt_id=reservation_test_state.attempt_id,
+        ),
+        logical_call_id,
+    )
+    insert_blocked = asyncio.Event()
+    insert_release = asyncio.Event()
+    cleanup_locked = asyncio.Event()
+    cleanup_release = asyncio.Event()
+    cancelled_pool = cast(Any, cancelled_ledger)._async_pool
+    cast(Any, cancelled_ledger)._async_pool = _PauseCleanupAfterReservationPool(
+        cancelled_pool,
+        insert_blocked,
+        insert_release,
+        cleanup_locked,
+        cleanup_release,
+    )
+
+    async def start_cancelled_retry() -> None:
+        with usage_context(
+            UsageOwner(
+                trace_id=uuid.uuid4().hex,
+                ingestion_attempt_id=reservation_test_state.attempt_id,
+            )
+        ):
+            await cancelled_ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                2,
+                logical_call_id=logical_call_id,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    cancelled_retry = asyncio.create_task(start_cancelled_retry())
+    await asyncio.wait_for(insert_blocked.wait(), timeout=2)
+    cancelled_retry.cancel()
+    await asyncio.wait_for(cleanup_locked.wait(), timeout=2)
+
+    competing_ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+
+    async def start_competing_retry() -> None:
+        with usage_context(
+            UsageOwner(
+                trace_id=uuid.uuid4().hex,
+                ingestion_attempt_id=reservation_test_state.attempt_id,
+            )
+        ):
+            await competing_ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                2,
+                logical_call_id=logical_call_id,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    competing_retry = asyncio.create_task(start_competing_retry())
+    try:
+        await asyncio.sleep(0.05)
+        assert not competing_retry.done()
+    finally:
+        cleanup_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(cancelled_retry, timeout=2)
+    with pytest.raises(UsagePersistenceError):
+        await asyncio.wait_for(competing_retry, timeout=2)
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        assert connection.execute(
+            """SELECT count(*) FROM agent.model_calls
+               WHERE logical_call_id = %s""",
+            (logical_call_id,),
+        ).fetchone() == (1,)
+        assert connection.execute(
+            """SELECT status FROM agent.model_call_cost_reservations
+               WHERE id = %s""",
+            (first_call.cost_reservation_id,),
+        ).fetchone() == ("review_required",)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL,
+    reason="PostgreSQL owner and application URLs not set",
+)
+async def test_cancellation_cleanup_preserves_competing_started_retry(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    logical_call_id = uuid.uuid4()
+    competing_ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+    first_call = await _create_retryable_reserved_call(
+        competing_ledger,
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            ingestion_attempt_id=reservation_test_state.attempt_id,
+        ),
+        logical_call_id,
+    )
+    competitor_inserted = asyncio.Event()
+    competitor_release = asyncio.Event()
+    competing_pool = cast(Any, competing_ledger)._async_pool
+    cast(Any, competing_ledger)._async_pool = _PauseAfterCallInsertPool(
+        competing_pool,
+        competitor_inserted,
+        competitor_release,
+    )
+
+    async def start_competing_retry() -> StartedModelCall | None:
+        with usage_context(
+            UsageOwner(
+                trace_id=uuid.uuid4().hex,
+                ingestion_attempt_id=reservation_test_state.attempt_id,
+            )
+        ):
+            return await competing_ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                2,
+                logical_call_id=logical_call_id,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    competing_retry = asyncio.create_task(start_competing_retry())
+    await asyncio.wait_for(competitor_inserted.wait(), timeout=2)
+
+    cancelled_ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+    reservation_started = asyncio.Event()
+    cancelled_pool = cast(Any, cancelled_ledger)._async_pool
+    cast(Any, cancelled_ledger)._async_pool = _SignalExecutePool(
+        cancelled_pool,
+        reservation_started,
+    )
+
+    async def start_cancelled_retry() -> None:
+        with usage_context(
+            UsageOwner(
+                trace_id=uuid.uuid4().hex,
+                ingestion_attempt_id=reservation_test_state.attempt_id,
+            )
+        ):
+            await cancelled_ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                3,
+                logical_call_id=logical_call_id,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    cancelled_retry = asyncio.create_task(start_cancelled_retry())
+    await asyncio.wait_for(reservation_started.wait(), timeout=2)
+    await asyncio.sleep(0.05)
+    assert not cancelled_retry.done()
+    cancelled_retry.cancel()
+    await asyncio.sleep(0.05)
+    assert not cancelled_retry.done()
+
+    competitor_release.set()
+    competing_call = await asyncio.wait_for(competing_retry, timeout=2)
+    assert competing_call is not None
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(cancelled_retry, timeout=2)
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        assert connection.execute(
+            """SELECT count(*) FROM agent.model_calls
+               WHERE logical_call_id = %s AND outcome = 'started'""",
+            (logical_call_id,),
+        ).fetchone() == (1,)
+        assert connection.execute(
+            """SELECT status FROM agent.model_call_cost_reservations
+               WHERE id = %s""",
+            (first_call.cost_reservation_id,),
+        ).fetchone() == ("reserved",)
+
+    await competing_ledger.afinish(
+        competing_call,
+        ModelCallOutcome.failed,
+        None,
+        TokenUsage.unavailable(),
+        failure_code="provider_rejected",
+        retryable=False,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL,
+    reason="PostgreSQL owner and application URLs not set",
+)
+async def test_terminal_finish_preserves_competing_started_retry(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    logical_call_id = uuid.uuid4()
+    finishing_ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+    first_call = await _create_retryable_reserved_call(
+        finishing_ledger,
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            ingestion_attempt_id=reservation_test_state.attempt_id,
+        ),
+        logical_call_id,
+    )
+    with usage_context(
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            ingestion_attempt_id=reservation_test_state.attempt_id,
+        )
+    ):
+        finishing_call = await finishing_ledger.astart(
+            ModelCallStage.pageindex_generation,
+            "provider/model",
+            2,
+            logical_call_id=logical_call_id,
+            input_token_limit=100,
+            output_token_limit=1,
+        )
+    assert finishing_call is not None
+
+    competitor_inserted = asyncio.Event()
+    competitor_release = asyncio.Event()
+    competing_ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+    competing_pool = cast(Any, competing_ledger)._async_pool
+    cast(Any, competing_ledger)._async_pool = _PauseAfterCallInsertPool(
+        competing_pool,
+        competitor_inserted,
+        competitor_release,
+    )
+
+    async def start_competing_retry() -> StartedModelCall | None:
+        with usage_context(
+            UsageOwner(
+                trace_id=uuid.uuid4().hex,
+                ingestion_attempt_id=reservation_test_state.attempt_id,
+            )
+        ):
+            return await competing_ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                3,
+                logical_call_id=logical_call_id,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    competing_retry = asyncio.create_task(start_competing_retry())
+    await asyncio.wait_for(competitor_inserted.wait(), timeout=2)
+    finishing = asyncio.create_task(
+        finishing_ledger.afinish(
+            finishing_call,
+            ModelCallOutcome.failed,
+            None,
+            TokenUsage.unavailable(),
+            failure_code="provider_rejected",
+            retryable=False,
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert not finishing.done()
+
+    competitor_release.set()
+    competing_call = await asyncio.wait_for(competing_retry, timeout=2)
+    assert competing_call is not None
+    await asyncio.wait_for(finishing, timeout=2)
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        assert connection.execute(
+            """SELECT count(*) FROM agent.model_calls
+               WHERE logical_call_id = %s AND outcome = 'started'""",
+            (logical_call_id,),
+        ).fetchone() == (1,)
+        assert connection.execute(
+            """SELECT status FROM agent.model_call_cost_reservations
+               WHERE id = %s""",
+            (first_call.cost_reservation_id,),
+        ).fetchone() == ("reserved",)
+
+    await competing_ledger.afinish(
+        competing_call,
+        ModelCallOutcome.failed,
+        None,
+        TokenUsage.unavailable(),
+        failure_code="provider_rejected",
+        retryable=False,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL,
+    reason="PostgreSQL owner and application URLs not set",
+)
+async def test_reservation_state_trigger_rejects_rolling_old_reconciler(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    logical_call_id = uuid.uuid4()
+    ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+    first_call = await _create_retryable_reserved_call(
+        ledger,
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            ingestion_attempt_id=reservation_test_state.attempt_id,
+        ),
+        logical_call_id,
+    )
+    competitor_inserted = asyncio.Event()
+    competitor_release = asyncio.Event()
+    ledger_pool = cast(Any, ledger)._async_pool
+    cast(Any, ledger)._async_pool = _PauseAfterCallInsertPool(
+        ledger_pool,
+        competitor_inserted,
+        competitor_release,
+    )
+
+    async def start_competing_retry() -> StartedModelCall | None:
+        with usage_context(
+            UsageOwner(
+                trace_id=uuid.uuid4().hex,
+                ingestion_attempt_id=reservation_test_state.attempt_id,
+            )
+        ):
+            return await ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                2,
+                logical_call_id=logical_call_id,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    competing_retry = asyncio.create_task(start_competing_retry())
+    try:
+        await asyncio.wait_for(competitor_inserted.wait(), timeout=2)
+        reconciliation_started = threading.Event()
+
+        def reconcile_without_reservation_lock() -> None:
+            with psycopg.connect(reservation_test_state.owner_sync) as connection:
+                reconciliation_started.set()
+                connection.execute(
+                    """UPDATE agent.model_call_cost_reservations
+                       SET measured_cost_usd = 0,
+                           reserved_cost_usd = 0,
+                           status = 'finalized',
+                           updated_at = now()
+                       WHERE id = %s""",
+                    (first_call.cost_reservation_id,),
+                )
+                connection.commit()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            old_reconciliation = executor.submit(reconcile_without_reservation_lock)
+            try:
+                assert await asyncio.to_thread(reconciliation_started.wait, 2)
+                await asyncio.sleep(0.05)
+                assert not old_reconciliation.done()
+            finally:
+                competitor_release.set()
+                competing_result = (await asyncio.gather(competing_retry, return_exceptions=True))[
+                    0
+                ]
+
+            assert not isinstance(competing_result, BaseException)
+            competing_call = competing_result
+            assert competing_call is not None
+            with pytest.raises(
+                psycopg.errors.RaiseException,
+                match="terminal cost reservation conflicts with a started model call",
+            ):
+                await asyncio.wrap_future(old_reconciliation)
+
+        with psycopg.connect(reservation_test_state.owner_sync) as connection:
+            assert connection.execute(
+                """SELECT status FROM agent.model_call_cost_reservations
+                   WHERE id = %s""",
+                (first_call.cost_reservation_id,),
+            ).fetchone() == ("reserved",)
+
+        await ledger.afinish(
+            competing_call,
+            ModelCallOutcome.failed,
+            None,
+            TokenUsage.unavailable(),
+            failure_code="provider_rejected",
+            retryable=False,
+        )
+
+        with psycopg.connect(reservation_test_state.owner_sync) as connection:
+            connection.execute(
+                """UPDATE agent.model_call_cost_reservations
+                   SET reserved_cost_usd = 0, status = 'reserved'
+                   WHERE id = %s""",
+                (first_call.cost_reservation_id,),
+            )
+            with pytest.raises(
+                psycopg.errors.RaiseException,
+                match="reserved model call cost reservation is underfunded",
+            ):
+                connection.commit()
+            connection.rollback()
+    finally:
+        competitor_release.set()
+        if not competing_retry.done():
+            competing_retry.cancel()
+        await asyncio.gather(competing_retry, return_exceptions=True)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL or not DISPOSABLE_DATABASE,
+    reason="disposable PostgreSQL owner and application URLs are required",
+)
+async def test_query_owner_cleanup_uses_allocator_experiment_order(
+    reservation_test_state: _ReservationTestState,
+) -> None:
+    assert APP_URL is not None
+    second_experiment_id = uuid.uuid4()
+    experiment_ids = sorted(
+        (reservation_test_state.experiment_id, second_experiment_id),
+        key=lambda value: value.int,
+    )
+    allocated_experiment_id, other_experiment_id = experiment_ids
+    logical_call_id = uuid.uuid4()
+    other_reservation_id = uuid.uuid4()
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        _insert_reservation_test_experiment(
+            connection,
+            second_experiment_id,
+            "second-query-membership",
         )
         connection.execute(
-            "DELETE FROM agent.model_call_cost_reservations WHERE id = %s",
-            (call.cost_reservation_id,),
+            """INSERT INTO agent.experiment_memberships
+               (id, experiment_id, query_run_id, trial_key, repetition,
+                sequence_number, included)
+               VALUES (%s, %s, %s, %s, 1, 0, true),
+                      (%s, %s, %s, %s, 1, 1, true)""",
+            (
+                uuid.uuid4(),
+                reservation_test_state.experiment_id,
+                reservation_test_state.query_run_id,
+                uuid.uuid4().hex,
+                uuid.uuid4(),
+                second_experiment_id,
+                reservation_test_state.query_run_id,
+                uuid.uuid4().hex,
+            ),
         )
-        connection.execute("DELETE FROM agent.query_runs WHERE id = %s", (query_run_id,))
-        connection.execute("DELETE FROM agent.api_keys WHERE id = %s", (api_key_id,))
-        connection.execute("DELETE FROM agent.ingestion_attempts WHERE id = %s", (attempt_id,))
-        connection.execute("DELETE FROM agent.ingestion_jobs WHERE id = %s", (job_id,))
-        connection.execute("DELETE FROM agent.experiments WHERE id = %s", (experiment_id,))
-        connection.execute("DELETE FROM agent.documents WHERE id = %s", (document_id,))
         connection.commit()
+
+    ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=3)
+    first_call = await _create_retryable_reserved_call(
+        ledger,
+        UsageOwner(
+            trace_id=uuid.uuid4().hex,
+            query_run_id=reservation_test_state.query_run_id,
+        ),
+        logical_call_id,
+        stage=ModelCallStage.query_route,
+    )
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        assert connection.execute(
+            """SELECT experiment_id FROM agent.model_call_cost_reservations
+               WHERE id = %s""",
+            (first_call.cost_reservation_id,),
+        ).fetchone() == (allocated_experiment_id,)
+        connection.execute(
+            """INSERT INTO agent.model_call_cost_reservations
+               (id, experiment_id, logical_call_id, reserved_cost_usd,
+                input_token_limit, output_token_limit, attempt_limit, status)
+               VALUES (%s, %s, %s, 1, 100, 1, 3, 'reserved')""",
+            (other_reservation_id, other_experiment_id, logical_call_id),
+        )
+        connection.commit()
+
+    blocked = asyncio.Event()
+    release = asyncio.Event()
+    ledger_pool = cast(Any, ledger)._async_pool
+    cast(Any, ledger)._async_pool = _PauseBeforeCallInsertPool(
+        ledger_pool,
+        blocked,
+        release,
+    )
+
+    async def start_retry() -> None:
+        with usage_context(
+            UsageOwner(
+                trace_id=uuid.uuid4().hex,
+                query_run_id=reservation_test_state.query_run_id,
+            )
+        ):
+            await ledger.astart(
+                ModelCallStage.query_route,
+                "provider/model",
+                2,
+                logical_call_id=logical_call_id,
+                input_token_limit=100,
+                output_token_limit=1,
+            )
+
+    retry = asyncio.create_task(start_retry())
+    await asyncio.wait_for(blocked.wait(), timeout=2)
+    retry.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(retry, timeout=2)
+
+    with psycopg.connect(reservation_test_state.owner_sync) as connection:
+        statuses = dict(
+            connection.execute(
+                """SELECT experiment_id, status
+                   FROM agent.model_call_cost_reservations
+                   WHERE logical_call_id = %s""",
+                (logical_call_id,),
+            ).fetchall()
+        )
+    assert statuses == {
+        allocated_experiment_id: "review_required",
+        other_experiment_id: "reserved",
+    }
+    # Memberships are append-only; the disposable stack owns their teardown.
 
 
 class _UnusedRouterLLM:
@@ -590,6 +2114,15 @@ async def test_migration_search_reader_permissions_and_guarded_execution() -> No
                 )
             )
             assert colon_literal.rows == [
+                {"document_id": identifier, "title": "Vectorless Retrieval"}
+            ]
+            percent_literal = await PostgreSQLAdapter(engine, settings).execute(
+                validate_sql(
+                    "SELECT document_id, title FROM agent.paper_catalog_v1 "
+                    "WHERE title ILIKE '%Vectorless%'"
+                )
+            )
+            assert percent_literal.rows == [
                 {"document_id": identifier, "title": "Vectorless Retrieval"}
             ]
         finally:
@@ -1171,8 +2704,11 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
             VALUES (%s, %s, %s, 'pageindex_generation', 'test', %s, %s,
                     'pageindex_completion', 'failed', false, false, %s, %s)
         """
-        connection.execute("SAVEPOINT duplicate_attempt")
-        with pytest.raises(psycopg.errors.UniqueViolation):
+        connection.execute("SAVEPOINT terminal_reservation")
+        with pytest.raises(
+            psycopg.errors.RaiseException,
+            match="model call conflicts with its cost reservation",
+        ):
             connection.execute(
                 call_insert,
                 (
@@ -1185,7 +2721,7 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                     uncertain_reservation_id,
                 ),
             )
-        connection.execute("ROLLBACK TO SAVEPOINT duplicate_attempt")
+        connection.execute("ROLLBACK TO SAVEPOINT terminal_reservation")
 
         connection.execute("SAVEPOINT mismatched_logical_call")
         with pytest.raises(

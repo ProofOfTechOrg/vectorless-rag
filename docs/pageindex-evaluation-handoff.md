@@ -17,12 +17,12 @@ This reference records the PageIndex v2 evaluation state, the defects found in i
 | Historical capped run | Stopped safely at its frozen $25 ceiling after 227/1,440 trials |
 | Historical partial report | 172 included, 55 excluded; claim recall not yet scored |
 | Corrected trial plan | 1,080 trials; removes 360 duplicate graph executions |
-| Corrected cost control | Request-bounded reservations, terminal unknown-attempt reconciliation, and explicit model-call experiment ownership at schema head `0007_model_call_experiment` |
+| Corrected cost control | Request-bounded reservations, terminal unknown-attempt reconciliation, and serialized model-call reservation state at schema head `0008_reservation_state_guard` |
 | Branch | `fix/pageindex-evaluation-dataset`; remote branch exists and matched runtime commit `5fa5801` when this handoff was updated |
 
 `make api-lint`, `make api-typecheck`, `make docs-check`, and `make compose-check`
-pass. The provider-free API suite is 431 passed, 13 skipped; the disposable
-PostgreSQL integration stack is 13 passed.
+pass. The provider-free API suite is 434 passed, 24 skipped; the disposable
+PostgreSQL integration stack is 24 passed.
 
 ## Do this next
 
@@ -128,7 +128,7 @@ The corrected experiment passed identity, dataset, corpus, and index preflight w
 | Cap exposure | `$0.000000` |
 | State | Frozen and dry-run verified; live canary not started |
 
-The deployed API release matches the manifest, and PostgreSQL is at schema head `0007_model_call_experiment`.
+The deployed API release matches the manifest, and PostgreSQL is at schema head `0008_reservation_state_guard`.
 
 ## Historical capped parallel run
 
@@ -429,8 +429,8 @@ Verify with `git apply --check` against a pristine copy, and bump `+vrN` in both
 
 ```bash
 make api-lint && make api-typecheck && make docs-check && make compose-check
-make api-test                         # expect 431 passed, 13 skipped
-TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 13 passed
+make api-test                         # expect 434 passed, 24 skipped
+TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 24 passed
 make pageindex-patch-test PAGEINDEX_SOURCE=/opt/pageindex
 ```
 

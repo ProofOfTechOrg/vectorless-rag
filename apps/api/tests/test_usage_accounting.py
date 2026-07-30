@@ -306,6 +306,43 @@ async def test_attached_experiment_rejection_stops_without_owner_flag() -> None:
     assert connection.executions == 1
 
 
+async def test_unissued_call_cleanup_survives_repeated_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger = object.__new__(ModelCallLedger)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def persist(
+        call_id: uuid.UUID,
+        owner: UsageOwner,
+        logical_call_id: uuid.UUID,
+    ) -> None:
+        del call_id, owner, logical_call_id
+        entered.set()
+        await release.wait()
+        completed.set()
+
+    monkeypatch.setattr(ledger, "_persist_unissued_cancellation", persist)
+    owner = UsageOwner(trace_id=uuid.uuid4().hex, query_run_id=uuid.uuid4())
+    cleanup = asyncio.create_task(
+        ledger._cancel_unissued_call(  # pyright: ignore[reportPrivateUsage]
+            uuid.uuid4(),
+            owner,
+            uuid.uuid4(),
+        )
+    )
+    await entered.wait()
+    cleanup.cancel()
+    await asyncio.sleep(0)
+    cleanup.cancel()
+    release.set()
+    await asyncio.wait_for(cleanup, timeout=1)
+
+    assert completed.is_set()
+
+
 def test_operational_events_are_one_line_allowlisted_json(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

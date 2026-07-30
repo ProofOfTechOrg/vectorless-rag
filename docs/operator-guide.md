@@ -37,7 +37,7 @@ make artifact-verify
 make pilot-report
 ```
 
-`make pilot-run` requires a clean worktree, a running API image whose `RELEASE` equals the current commit, schema head `0007_model_call_experiment`, an available provider, all 25 exact PDFs, a complete price snapshot, and no active ingestion jobs. The Make target reserves `apps/api/pilots/run/` before it invokes the API container. An existing directory stops the command before provider work. A failed run leaves the directory reserved; inspect it before authorizing another run.
+`make pilot-run` requires a clean worktree, a running API image whose `RELEASE` equals the current commit, schema head `0008_reservation_state_guard`, an available provider, all 25 exact PDFs, a complete price snapshot, and no active ingestion jobs. The Make target reserves `apps/api/pilots/run/` before it invokes the API container. An existing directory stops the command before provider work. A failed run leaves the directory reserved; inspect it before authorizing another run.
 
 The pilot queues one manifest document at a time with `reextract_all`. PostgreSQL rejects any logical call whose three-attempt worst-case reservation would exceed the $10 experiment cap. The worker then defers the job without consuming retry budget. Do not enable full-corpus indexing or run ordinary 537-file sync until the pilot is accepted and separately authorized.
 

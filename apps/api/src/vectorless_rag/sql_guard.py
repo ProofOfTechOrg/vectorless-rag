@@ -452,6 +452,9 @@ class PostgreSQLAdapter:
                     text("SELECT set_config('lock_timeout', :timeout, true)"),
                     {"timeout": f"{self.settings.sql_lock_timeout_ms}ms"},
                 )
+                # exec_driver_sql bypasses SQLAlchemy's :name parsing; no_parameters
+                # prevents Psycopg from parsing literal percent signs as placeholders.
+                await connection.execution_options(no_parameters=True)
                 explain = await connection.exec_driver_sql(
                     "EXPLAIN (FORMAT JSON) " + query.normalized
                 )

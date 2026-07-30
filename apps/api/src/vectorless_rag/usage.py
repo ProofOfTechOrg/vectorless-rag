@@ -363,13 +363,17 @@ inserted AS (
     )
     RETURNING id, input_token_limit, output_token_limit, attempt_limit
 ),
-resolved AS (
-    SELECT id, input_token_limit, output_token_limit, attempt_limit FROM inserted
-    UNION ALL
+existing AS (
     SELECT r.id, r.input_token_limit, r.output_token_limit, r.attempt_limit
     FROM agent.model_call_cost_reservations r
     JOIN experiment e ON e.id = r.experiment_id
     WHERE r.logical_call_id = %(logical_call_id)s::uuid
+    FOR UPDATE OF r
+),
+resolved AS (
+    SELECT id, input_token_limit, output_token_limit, attempt_limit FROM inserted
+    UNION ALL
+    SELECT id, input_token_limit, output_token_limit, attempt_limit FROM existing
 )
 SELECT id, input_token_limit, output_token_limit, attempt_limit FROM resolved
 UNION ALL
@@ -443,6 +447,75 @@ SET outcome = %(outcome)s::agent.model_call_outcome,
 WHERE id = %(id)s::uuid
 """
 
+_CANCEL_UNISSUED_CALL = """
+WITH cancelled AS (
+    UPDATE agent.model_calls
+    SET outcome = 'cancelled'::agent.model_call_outcome,
+        failure_code = 'cancelled',
+        retryable = false,
+        cancelled = true,
+        input_tokens = 0,
+        cache_hit_input_tokens = 0,
+        cache_miss_input_tokens = 0,
+        cache_write_input_tokens = 0,
+        unattributed_input_tokens = 0,
+        output_tokens = 0,
+        reasoning_output_tokens = 0,
+        total_tokens = 0,
+        usage_available = true,
+        cache_attribution_complete = true,
+        completed_at = now(),
+        updated_at = now()
+    WHERE id = %(id)s::uuid
+      AND outcome = 'started'::agent.model_call_outcome
+    RETURNING cost_reservation_id
+),
+owner_experiment AS (
+    SELECT j.experiment_id
+    FROM agent.ingestion_attempts a
+    JOIN agent.ingestion_jobs j ON j.id = a.job_id
+    WHERE a.id = %(ingestion_attempt_id)s::uuid
+      AND j.experiment_id IS NOT NULL
+    UNION ALL
+    SELECT m.experiment_id
+    FROM agent.experiment_memberships m
+    WHERE m.query_run_id = %(query_run_id)s::uuid
+    ORDER BY 1
+    LIMIT 1
+),
+fallback_reservation AS (
+    SELECT r.id
+    FROM agent.model_call_cost_reservations r
+    JOIN owner_experiment e ON e.experiment_id = r.experiment_id
+    WHERE r.logical_call_id = %(logical_call_id)s::uuid
+      AND r.status = 'reserved'
+      AND NOT EXISTS (SELECT 1 FROM cancelled)
+      AND NOT EXISTS (
+          SELECT 1
+          FROM agent.model_calls c
+          WHERE c.cost_reservation_id = r.id
+            AND c.outcome = 'started'::agent.model_call_outcome
+      )
+    FOR UPDATE OF r
+),
+reservation AS (
+    SELECT cost_reservation_id AS id
+    FROM cancelled
+    WHERE cost_reservation_id IS NOT NULL
+    UNION ALL
+    SELECT id FROM fallback_reservation
+)
+SELECT id FROM reservation
+LIMIT 1
+"""
+
+_LOCK_MODEL_CALL_RESERVATION_SQL = """
+SELECT id
+FROM agent.model_call_cost_reservations
+WHERE id = %(cost_reservation_id)s::uuid
+FOR UPDATE
+"""
+
 RECONCILE_MODEL_CALL_RESERVATION_SQL = """
 WITH measured AS (
     SELECT
@@ -469,6 +542,10 @@ WITH measured AS (
                 * (e.price_snapshot->>'output_per_million_usd')::numeric
             ) / 1000000
         ) FILTER (WHERE c.usage_available) AS measured_cost,
+        coalesce(
+            bool_or(c.outcome = 'started'::agent.model_call_outcome),
+            false
+        ) AS has_started_call,
         bool_and(c.usage_available) FILTER (WHERE c.outcome <> 'started') AS usage_complete,
         count(*) FILTER (
             WHERE c.outcome <> 'started' AND NOT c.usage_available
@@ -496,7 +573,9 @@ SET measured_cost_usd = CASE
         ELSE ceil(measured.measured_cost * 1000000) / 1000000
     END,
     reserved_cost_usd = CASE
-        WHEN %(terminal)s AND NOT coalesce(measured.usage_complete, false)
+        WHEN %(terminal)s
+             AND NOT measured.has_started_call
+             AND NOT coalesce(measured.usage_complete, false)
         THEN ceil(
             (
                 coalesce(measured.measured_cost, 0)
@@ -507,7 +586,7 @@ SET measured_cost_usd = CASE
         ELSE r.reserved_cost_usd
     END,
     status = CASE
-        WHEN NOT %(terminal)s THEN 'reserved'
+        WHEN NOT %(terminal)s OR measured.has_started_call THEN 'reserved'
         WHEN coalesce(measured.usage_complete, false) THEN 'finalized'
         ELSE 'review_required'
     END,
@@ -813,7 +892,8 @@ class ModelCallLedger:
             configuration_hash=configuration_hash,
             retry_delay_ms=retry_delay_ms,
         )
-        try:
+
+        async def persist() -> StartedModelCall:
             async with self._async_open_lock:
                 if self._async_pool.closed:
                     await self._async_pool.open()
@@ -847,7 +927,7 @@ class ModelCallLedger:
                 inserted = await cursor.fetchone()
                 if inserted is None:
                     raise UsagePersistenceError
-                call = StartedModelCall(
+                return StartedModelCall(
                     call_id,
                     owner,
                     stage,
@@ -856,6 +936,14 @@ class ModelCallLedger:
                     logical_call_id,
                     cost_reservation_id,
                 )
+
+        try:
+            return await persist()
+        except asyncio.CancelledError:
+            # Cancellation can race the connection context's implicit commit. The
+            # preallocated ID lets cleanup handle both commit and rollback outcomes.
+            await self._cancel_unissued_call(call_id, owner, logical_call_id)
+            raise
         except Exception as error:
             if "experiment cost cap exceeded" in str(error):
                 raise ExperimentBudgetExceeded from error
@@ -864,7 +952,115 @@ class ModelCallLedger:
             if isinstance(error, UsagePersistenceError):
                 raise
             raise UsagePersistenceError from error
-        return call
+
+    @staticmethod
+    def _reconcile_reservation(
+        connection: psycopg.Connection[tuple[object, ...]],
+        cost_reservation_id: uuid.UUID,
+        *,
+        terminal: bool,
+    ) -> None:
+        parameters = {
+            "cost_reservation_id": cost_reservation_id,
+            "terminal": terminal,
+        }
+        if (
+            connection.execute(
+                _LOCK_MODEL_CALL_RESERVATION_SQL,
+                parameters,
+            ).fetchone()
+            is None
+        ):
+            raise UsagePersistenceError
+        if (
+            connection.execute(
+                RECONCILE_MODEL_CALL_RESERVATION_SQL,
+                parameters,
+            ).fetchone()
+            is None
+        ):
+            raise UsagePersistenceError
+
+    @staticmethod
+    async def _areconcile_reservation(
+        connection: psycopg.AsyncConnection[tuple[object, ...]],
+        cost_reservation_id: uuid.UUID,
+        *,
+        terminal: bool,
+    ) -> None:
+        parameters = {
+            "cost_reservation_id": cost_reservation_id,
+            "terminal": terminal,
+        }
+        lock_cursor = await connection.execute(
+            _LOCK_MODEL_CALL_RESERVATION_SQL,
+            parameters,
+        )
+        if await lock_cursor.fetchone() is None:
+            raise UsagePersistenceError
+        reconcile_cursor = await connection.execute(
+            RECONCILE_MODEL_CALL_RESERVATION_SQL,
+            parameters,
+        )
+        if await reconcile_cursor.fetchone() is None:
+            raise UsagePersistenceError
+
+    async def _cancel_unissued_call(
+        self,
+        call_id: uuid.UUID,
+        owner: UsageOwner,
+        logical_call_id: uuid.UUID,
+    ) -> None:
+        cleanup = asyncio.create_task(
+            self._persist_unissued_cancellation(call_id, owner, logical_call_id),
+            name=f"cancel-unissued-model-call-{call_id}",
+        )
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        await cleanup
+
+    async def _persist_unissued_cancellation(
+        self,
+        call_id: uuid.UUID,
+        owner: UsageOwner,
+        logical_call_id: uuid.UUID,
+    ) -> None:
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                async with self._async_open_lock:
+                    if self._async_pool.closed:
+                        await self._async_pool.open()
+                async with self._async_pool.connection() as connection:
+                    cursor = await connection.execute(
+                        _CANCEL_UNISSUED_CALL,
+                        {
+                            "id": call_id,
+                            "query_run_id": owner.query_run_id,
+                            "ingestion_attempt_id": owner.ingestion_attempt_id,
+                            "logical_call_id": logical_call_id,
+                        },
+                    )
+                    reservation = await cursor.fetchone()
+                    if reservation is not None and reservation[0] is not None:
+                        await self._areconcile_reservation(
+                            connection,
+                            uuid.UUID(str(reservation[0])),
+                            terminal=True,
+                        )
+                return
+            except UsagePersistenceError:
+                raise
+            except (psycopg.OperationalError, psycopg.InterfaceError) as error:
+                last_error = error
+                if attempt < 2:
+                    await asyncio.sleep(0)
+            except Exception as error:
+                raise UsagePersistenceError from error
+        raise UsagePersistenceError from last_error
 
     def finish(
         self,
@@ -902,24 +1098,20 @@ class ModelCallLedger:
                     if cursor.rowcount != 1:
                         raise UsagePersistenceError
                     if call.cost_reservation_id is not None:
-                        reconciled = connection.execute(
-                            RECONCILE_MODEL_CALL_RESERVATION_SQL,
-                            {
-                                "cost_reservation_id": call.cost_reservation_id,
-                                "terminal": (
-                                    outcome
-                                    in {
-                                        ModelCallOutcome.completed,
-                                        ModelCallOutcome.cancelled,
-                                        ModelCallOutcome.abandoned,
-                                    }
-                                    or retryable is False
-                                    or call.provider_attempt >= self.maximum_provider_attempts
-                                ),
-                            },
-                        ).fetchone()
-                        if reconciled is None:
-                            raise UsagePersistenceError
+                        self._reconcile_reservation(
+                            connection,
+                            call.cost_reservation_id,
+                            terminal=(
+                                outcome
+                                in {
+                                    ModelCallOutcome.completed,
+                                    ModelCallOutcome.cancelled,
+                                    ModelCallOutcome.abandoned,
+                                }
+                                or retryable is False
+                                or call.provider_attempt >= self.maximum_provider_attempts
+                            ),
+                        )
                 return
             except UsagePersistenceError:
                 raise
@@ -968,24 +1160,20 @@ class ModelCallLedger:
                     if cursor.rowcount != 1:
                         raise UsagePersistenceError
                     if call.cost_reservation_id is not None:
-                        reconcile_cursor = await connection.execute(
-                            RECONCILE_MODEL_CALL_RESERVATION_SQL,
-                            {
-                                "cost_reservation_id": call.cost_reservation_id,
-                                "terminal": (
-                                    outcome
-                                    in {
-                                        ModelCallOutcome.completed,
-                                        ModelCallOutcome.cancelled,
-                                        ModelCallOutcome.abandoned,
-                                    }
-                                    or retryable is False
-                                    or call.provider_attempt >= self.maximum_provider_attempts
-                                ),
-                            },
+                        await self._areconcile_reservation(
+                            connection,
+                            call.cost_reservation_id,
+                            terminal=(
+                                outcome
+                                in {
+                                    ModelCallOutcome.completed,
+                                    ModelCallOutcome.cancelled,
+                                    ModelCallOutcome.abandoned,
+                                }
+                                or retryable is False
+                                or call.provider_attempt >= self.maximum_provider_attempts
+                            ),
                         )
-                        if await reconcile_cursor.fetchone() is None:
-                            raise UsagePersistenceError
                 return
             except UsagePersistenceError:
                 raise
