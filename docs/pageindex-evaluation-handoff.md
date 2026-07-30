@@ -1,9 +1,9 @@
 <!-- Content type: Reference -->
-<!-- Content plan: Goal: let a fresh maintainer resume the PageIndex v2 evaluation without redoing its investigation. Audience: maintainers continuing the evaluation. Content: current state, decisions with rationale, diagnosed failure classes, implemented corrections, operating recipes, measured costs, and remaining steps. Open questions: whether to retain the capped partial run only as historical evidence and who will score the claim-recall queue. -->
+<!-- Content plan: Goal: let a fresh maintainer resume the PageIndex v2 evaluation without redoing its investigation. Audience: maintainers continuing the evaluation. Content: current state, decisions with rationale, diagnosed failure classes, implemented corrections, operating recipes, measured costs, and remaining steps. Open questions: the corrected canary outcome and whether to score the historical claim-recall queue. -->
 
 # Resume the PageIndex v2 evaluation
 
-This reference records the PageIndex v2 evaluation state, the defects found in its capped run, and the corrected procedure. It covers branch `fix/pageindex-evaluation-dataset` with working-tree fixes based on commit `74016bbdf5d0ee0b77d735bc5c7a297b4341b6c2`. Reconfirm every anchor against the checkout before editing because the fixes described below are not committed at this baseline.
+This reference records the PageIndex v2 evaluation state, the defects found in its capped run, and the corrected procedure. It covers branch `fix/pageindex-evaluation-dataset` at runtime commit `5fa5801006020082cda3e23cc5f6cc4491155e5d`. The corrected experiment, deployed API, and worker are pinned to that commit. Reconfirm every anchor against the checkout before editing.
 
 ## Where it stands
 
@@ -12,12 +12,13 @@ This reference records the PageIndex v2 evaluation state, the defects found in i
 | Evaluation dataset | 120/120 approved: 40 by `gcharang`, 80 automated structural reviews explicitly marked “not a human read”; `make evaluation-check` clean |
 | Corpus index | 104/104 documents indexed and ready |
 | Index recipe | 98 documents on `+vr5`, 6 on `+vr6` — deliberate, see below |
-| Trial executor | Historical bounded concurrency 4 verified live; compact parallel catalog routing now has provider-free coverage |
-| Current run | Stopped safely at its frozen $25 ceiling after 227/1,440 trials |
-| Partial report | 172 included, 55 excluded; claim recall not yet scored |
+| Trial executor | Historical bounded concurrency 4 verified live; compact routing now shares a global four-call limit across executor workers |
+| Corrected run | Dry run passed for experiment `57eb60c6-2de3-4f24-a77d-512a08e48154`; 0 provider calls and `$0` exposure |
+| Historical capped run | Stopped safely at its frozen $25 ceiling after 227/1,440 trials |
+| Historical partial report | 172 included, 55 excluded; claim recall not yet scored |
 | Corrected trial plan | 1,080 trials; removes 360 duplicate graph executions |
 | Corrected cost control | Request-bounded reservations and terminal unknown-attempt reconciliation at schema head `0006_bound_cost_reservations` |
-| Branch | No remote branch; 23 commits ahead of refreshed `origin/master`, plus the uncommitted fixes described here |
+| Branch | `fix/pageindex-evaluation-dataset`; remote branch exists and matched runtime commit `5fa5801` when this handoff was updated |
 
 `make api-lint`, `make api-typecheck`, `make docs-check`, and `make compose-check`
 pass. The provider-free API suite is 430 passed, 13 skipped; the disposable
@@ -25,17 +26,60 @@ PostgreSQL integration stack is 13 passed.
 
 ## Do this next
 
-The `$25` experiment remains a valid capped partial run, not a complete baseline. Do not resume it: its 1,440-trial plan, runtime release, and accounting protocol are frozen.
+The corrected experiment is frozen at the same `$25` ceiling, and its provider-free dry run passed. It contains 1,080 planned trials, no scores, no memberships, no model calls, no reservations, and no cost exposure.
 
-No budget increase is justified by this run. The retired `$155` projection extrapolated conservative cap exposure, not provider spend. That exposure included `$23.051574` held by 54 uncertain calls, each reserved as three attempts at the frozen 1 million input-token and 8,192 output-token limits. It also included a trial plan with 360 duplicate graph executions.
+The next command spends provider budget:
 
-Continue in this order:
+```bash
+make evaluation-execute LIMIT=12
+```
 
-1. Review and commit the working-tree fixes, rebuild the application, and migrate PostgreSQL to `0006_bound_cost_reservations`.
-2. Preserve `apps/api/evaluation/run` as the historical run for experiment `09471839-de04-4f94-97aa-a34e31b86509`.
-3. Create a new 1,080-trial experiment with the same `$25` ceiling. Do not raise the ceiling unless the corrected run reaches it and the database audit shows legitimate measured or request-bounded exposure.
-4. Run `make evaluation-execute DRY_RUN=1`, then a small `LIMIT=12` live canary before continuing the experiment. The dry run validates identity and index bindings but does not estimate cost.
-5. Score answer claims with `make evaluation-judge REVIEWER=your_reviewer_name_here`, then rebuild `summary.json` with `make evaluation-report`.
+Run it only after explicit canary authorization. Do not rebuild the runtime, recreate the manifest, change its ceiling, or resume historical experiment `09471839-de04-4f94-97aa-a34e31b86509`.
+
+After the canary:
+
+1. Confirm 12 score rows and 12 terminal experiment memberships
+2. Confirm no model call or reservation remains in `started` or `reserved`
+3. Inspect measured cost, request-bounded cap exposure, retries, and failure codes
+4. Continue the corrected experiment only if the canary has no accounting or routing defect
+5. Score answer claims with `make evaluation-judge REVIEWER=your_reviewer_name_here`
+6. Rebuild `summary.json` with `make evaluation-report`
+
+Check local and durable progress with:
+
+```bash
+experiment_id=57eb60c6-2de3-4f24-a77d-512a08e48154
+wc -l apps/api/evaluation/run/scores.jsonl
+docker compose exec -T postgres \
+  psql -U rag_owner -d rag -c "
+SELECT count(*) AS memberships,
+       count(*) FILTER (
+         WHERE q.answer IS NULL AND q.failure_code IS NULL AND q.error IS NULL
+       ) AS nonterminal
+FROM agent.experiment_memberships m
+JOIN agent.query_runs q ON q.id = m.query_run_id
+WHERE m.experiment_id = '$experiment_id';"
+```
+
+Audit reservations before continuing:
+
+```bash
+docker compose exec -T postgres \
+  psql -U rag_owner -d rag -c "
+SELECT count(*) AS reservations,
+       count(*) FILTER (WHERE status = 'reserved') AS still_reserved,
+       coalesce(sum(
+         CASE
+           WHEN status = 'released' THEN 0
+           WHEN status = 'finalized' THEN measured_cost_usd
+           ELSE reserved_cost_usd
+         END
+       ), 0) AS cap_exposure_usd
+FROM agent.model_call_cost_reservations
+WHERE experiment_id = '$experiment_id';"
+```
+
+No budget increase is justified. The retired `$155` projection extrapolated conservative cap exposure, not provider spend. Its `$23.051574` hold covered 54 uncertain calls, each reserved as three attempts at the frozen 1 million input-token and 8,192 output-token limits. The historical plan also contained 360 duplicate graph executions.
 
 Concurrency is part of the frozen configuration hash. Execution defaults to the
 manifest value and rejects a different `CONCURRENCY` override.
@@ -43,27 +87,50 @@ manifest value and rejects a different `CONCURRENCY` override.
 ## Defects corrected after the capped run
 
 The capped run and the independent clean-code, architecture, and QA passes
-exposed the defects below. The working tree fixes each root cause and retains
-historical read compatibility.
+exposed the defects below. Commits `18aba5d` and `5fa5801` fix each root cause
+and retain historical read compatibility.
 
 | Defect | Evidence from the capped run | Correction |
 | --- | --- | --- |
 | Full-catalog routing was serial and failed batches leaked sibling tasks | A 104-document catalog generated one model call per document; 44 trials reached the exact 180s request deadline after 4 to 13 completed calls | Pack up to 32 compact catalog entries per map call, run map and reduction batches concurrently, and cancel plus join every sibling when any batch fails |
+| Parallel catalog routing had no runtime-wide limit | Four evaluation workers could each launch four map calls, allowing 16 overlapping catalog calls despite execution concurrency 4 | Share one `CatalogRoutingLimiter` across request runners and evaluation executors; freeze `CATALOG_ROUTING_CONCURRENCY=4` into experiment identity |
 | Malformed HTTP-200 responses did not retry on both provider call paths | Ten document-selection calls returned HTTP 200 without valid structured output and were classified `provider_rejected` | Classify `openai.APIResponseValidationError` as retryable `upstream_invalid_response`, and use that shared classification in both the application LLM and PageIndex runtime retry loops |
 | An older successful call could erase a newer provider-blocking failure | Completion success unconditionally persisted `available`, even if another in-flight call or worker had since observed an authentication, permission, or credit failure | Completion success no longer changes provider availability; only a fresh status or balance observation can clear a hard failure |
 | Reservations used frozen maximum bounds | The old ledger reserved 1 million input tokens plus 8,192 output tokens for all three attempts, independent of request size | Persist immutable per-call input, output, and attempt bounds; derive the input-token bound from serialized UTF-8 bytes plus a 4,096-byte request-wrapper allowance |
 | An experiment-attached call could proceed without a reservation | The ledger treated “no experiment” and “attached experiment rejected by validity or bounds” as the same empty SQL result when reservation enforcement was optional | Return a rejection sentinel for an attached experiment that cannot reserve, and stop the call before inserting model-call telemetry regardless of the caller’s optional-reservation flag |
 | Terminal uncertain calls retained unused attempts | One missing usage record kept the entire three-attempt reservation | On terminal reconciliation, retain measured usage plus one per-request bound for each attempt whose usage is unknown |
-| Reservation-to-call relationships were application-only invariants | The schema allowed a call to reuse an attempt number, exceed its reserved attempt limit, use another logical call ID, attach to an owner outside the reservation’s experiment, or mutate reservation/owner identity after validation | Audit historical rows during migration, add a unique reserved-attempt constraint, validate logical ID, attempt bound, and experiment ownership in a database trigger, and make reservation identity/bounds plus attempted-job experiment bindings immutable |
+| Reservation-to-call relationships were application-only invariants | The schema allowed a call to reuse an attempt number, exceed its reserved attempt limit, use another logical call ID, attach to an owner outside the reservation’s experiment, or mutate reservation/owner identity after validation | Audit historical rows during migration, add a unique reserved-attempt constraint, validate logical ID, attempt bound, and experiment ownership in a database trigger, and make reservation identity, bounds, attempt-to-job ownership, and attempted-job experiment bindings immutable |
+| Pilot attempt bounds could omit a provider client’s retry policy | The pilot snapshot used only `pageindex_llm_max_attempts`, while other admitted calls use `MAX_PROVIDER_ATTEMPTS` | Freeze the larger retry bound so every call the pilot can admit fits its immutable price snapshot |
 | Two experiment kinds executed the same graph | `corpus_routing` and `forced_route_end_to_end` used identical `GraphRunOptions`; only their score extraction differed | Stop generating `corpus_routing` trials, reducing new plans from 1,440 to 1,080; keep the literal only for historical manifests |
-| Claim recall had no writer | The current run has 35 durable queue entries and no claim scores | Add a strict, idempotent judgment ledger and atomic score updater in `judge_evaluation.py` |
+| Claim recall had no writer | The historical capped run has 35 durable queue entries and no claim scores | Add a strict, idempotent judgment ledger and atomic score updater in `judge_evaluation.py` |
 | Claim judgments could target a changed answer, and scoring could overwrite a newly appended score | Judgment identity covered the trial, item, and claims but not the answer; atomic replacement serialized only within the scoring process | Bind each judgment to the queued answer’s SHA-256 and use one filesystem lock for executor appends, judgment writes, and score rewrites |
 | A crash could duplicate or tear a claim queue entry | The executor wrote the judge queue before the score resume ledger, so recovery could append the same queue item again | Validate queue items and replace the queue atomically; treat an identical trial item as already written and reject conflicting content |
 | Artifact coverage and reuse identity omitted Python-layer behavior | Internal direct-range gaps appeared covered, and Python artifact-builder changes altered neither the configuration hash nor the reuse key | Recurse over direct page ranges and include `ARTIFACT_BUILDER_VERSION` in both the configuration hash and artifact reuse key |
 
 No live provider call or re-index has run against these corrections. The full API suite, migration render, and disposable PostgreSQL integration suite pass.
 
-## Current capped parallel run
+## Corrected dry-run experiment
+
+The corrected experiment passed identity, dataset, corpus, and index preflight without issuing a provider call.
+
+| Field | Value |
+| --- | --- |
+| Experiment | `57eb60c6-2de3-4f24-a77d-512a08e48154` |
+| Runtime release | `5fa5801006020082cda3e23cc5f6cc4491155e5d` |
+| Runtime configuration | `897ea99deb6c9ef0b9ecd9d298ce187e86a712aa0b856989f2da18c02bcac9da` |
+| Reviewed corpus | `d7e2d075f9e20c4778269bf4de6b7b4d9158dc92e206eaeccf59a25954442b68` |
+| Active index | `ae4a7407c9ec07b60ce580a2e547c4ebd3d40ecae7e4cb3f0bc0f76346a4ca5a` |
+| Dataset | `821e973c6362b105e899586cac9c9c189c6deb98cf0de047a8a9b3f754a9f872` |
+| Plan | 1,080 trials; one repetition across three evidence budgets |
+| Concurrency | Four executor workers; four catalog-routing calls across the runtime |
+| Ceiling | `$25.000000` |
+| Progress | 0 scores, 0 memberships, 0 model calls, and 0 reservations |
+| Cap exposure | `$0.000000` |
+| State | Frozen and dry-run verified; live canary not started |
+
+The deployed API release matches the manifest, and PostgreSQL is at schema head `0006_bound_cost_reservations`.
+
+## Historical capped parallel run
 
 | Field | Value |
 | --- | --- |
@@ -373,7 +440,7 @@ PageIndex v2 regression baseline, and it is visible to future vector development
 
 ## Appendix: current-state anchors
 
-The snippets below, and any line numbers derived from them, are from the working tree based on `74016bbdf5d0ee0b77d735bc5c7a297b4341b6c2`. Always read the symbol again before editing. These anchors record the corrected edit targets and invariants.
+The snippets below, and any line numbers derived from them, are from runtime commit `5fa5801006020082cda3e23cc5f6cc4491155e5d`. Always read the symbol again before editing. These anchors record the corrected edit targets and invariants.
 
 ### New plans exclude the duplicate graph execution
 
@@ -387,7 +454,9 @@ EXPERIMENT_KINDS = (
 )
 ```
 
-`EvaluationTrial.experiment_kind` still accepts `corpus_routing`, so the current 1,440-trial manifest remains readable. `build_trials` iterates only `EXPERIMENT_KINDS`, so a one-repetition plan now contains 1,080 trials.
+`EvaluationTrial.experiment_kind` still accepts `corpus_routing`, so the
+historical 1,440-trial manifest remains readable. `build_trials` iterates only
+`EXPERIMENT_KINDS`, so a one-repetition plan contains 1,080 trials.
 
 ### Catalog routing uses compact concurrent batches
 
@@ -402,14 +471,15 @@ mapped = [
     item
     for batch_result in await _gather_or_cancel(
         [
-            self._select_batch(
+            lambda batch=batch: self._select_batch(
                 question,
                 batch,
                 phase="map",
                 selection_limit=self.settings.document_limit,
             )
             for batch in self._batches(candidates)
-        ]
+        ],
+        self.catalog_routing_limiter,
     )
     for item in batch_result
 ]
@@ -417,9 +487,10 @@ mapped = [
 
 The regression test binds the current 104-document catalog to batch sizes `32,
 32, 32, 8` and blocks each map task until all four have started. Reduction
-batches use the same concurrent pattern. `_gather_or_cancel` cancels and awaits
-every sibling before re-raising a batch failure; a separate regression proves
-no sibling is left running.
+batches use the same concurrent pattern. The API runtime and all evaluation
+executors share one limiter, so overlapping trials cannot multiply the global
+catalog-call limit. `_gather_or_cancel` cancels and awaits every worker before
+re-raising a batch failure.
 
 ### HTTP-200 validation failures retry
 
@@ -699,29 +770,19 @@ value = "\0".join(
 It no longer treats a widened parent-to-child span as direct coverage. The
 builder version participates in both the manifest configuration and reuse key.
 
-### The corrected run requires a new experiment
+### The corrected experiment is immutable
 
 Current immutable state:
 
 ```text
-experiment_id = 09471839-de04-4f94-97aa-a34e31b86509
+experiment_id = 57eb60c6-2de3-4f24-a77d-512a08e48154
+release_sha = 5fa5801006020082cda3e23cc5f6cc4491155e5d
 maximum_cost_usd = 25.000000
+planned_trials = 1080
 ```
 
-Target transition after committing, rebuilding, and migrating the corrections:
-
-```bash
-test ! -e /tmp/pageindex-evaluation-run-09471839
-mv apps/api/evaluation/run /tmp/pageindex-evaluation-run-09471839
-make evaluation-run \
-  INDEX_HASH=ae4a7407c9ec07b60ce580a2e547c4ebd3d40ecae7e4cb3f0bc0f76346a4ca5a \
-  MAX_COST=25 CONCURRENCY=4
-make evaluation-execute DRY_RUN=1
-make evaluation-execute LIMIT=12
-```
-
-That command must create a new experiment UUID and clean manifest. Do not edit
-the existing JSON or `agent.experiments.maximum_cost_usd`: either mutation
-breaks the frozen-protocol claim. Rejected alternatives are raising the current
-row in place and copying old scores into a differently bounded experiment. Keep
-the `$25` ceiling unless corrected-run evidence proves it is insufficient.
+The deployed image, frozen manifest, and database experiment match those
+values. The dry run completed with zero cost exposure. Do not edit the manifest
+or `agent.experiments.maximum_cost_usd`, rebuild under another release, copy
+historical scores into this run, or recreate the experiment after provider work
+starts.
