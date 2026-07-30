@@ -1263,6 +1263,12 @@ class _CancelledRunner:
         raise asyncio.CancelledError
 
 
+class _FailedRunner:
+    async def run(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("unexpected execution failure")
+
+
 class _SuccessfulRunner:
     async def run(self, *args: object, **kwargs: object) -> Any:
         del args, kwargs
@@ -1486,6 +1492,71 @@ async def test_cancelled_execution_terminalizes_before_propagating(
     assert run.failure_code == RunFailureCode.request_failed
     assert session.rollbacks == 1
     assert session.commits == 1
+
+
+async def test_unexpected_execution_terminalizes_before_propagating(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    case, trial = _single_trial()
+    experiment_id = uuid.uuid4()
+    run = QueryRun(
+        id=execute_evaluation.trial_run_id(experiment_id, trial.trial_id),
+        trace_id=uuid.uuid4().hex,
+        thread_id="failed-execution",
+        api_key_id=uuid.uuid4(),
+        question=case.prompt,
+    )
+
+    async def created(*args: object, **kwargs: object) -> tuple[QueryRun, bool]:
+        del args, kwargs
+        return run, True
+
+    monkeypatch.setattr(execute_evaluation, "create_trial_run", created)
+    session = _RecordingSession(run)
+    executor = execute_evaluation.Executor(
+        cast(Any, _FailedRunner()),
+        {},
+        Settings(),
+        experiment_id,
+        run.api_key_id,
+        {},
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected execution failure"):
+        await executor.execute(cast(Any, session), case, trial)
+
+    assert run.error == execute_evaluation.EXECUTION_FAILED_FAILURE_CODE
+    assert run.failure_code == RunFailureCode.request_failed
+    assert session.rollbacks == 1
+    assert session.commits == 1
+
+
+async def test_malformed_case_fails_before_durable_trial_lifecycle(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    case, trial = _single_trial()
+    malformed = case.model_copy(update={"constraints": {"date_from": "not-a-date"}})
+
+    async def must_not_create(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        pytest.fail("malformed frozen input must not create a durable trial")
+
+    monkeypatch.setattr(execute_evaluation, "create_trial_run", must_not_create)
+    session = _RecordingSession()
+    executor = execute_evaluation.Executor(
+        cast(Any, _RunnerMustNotRun()),
+        {},
+        Settings(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+        {},
+    )
+
+    with pytest.raises(ValueError, match="date_from"):
+        await executor.execute(cast(Any, session), malformed, trial)
+
+    assert session.rollbacks == 0
+    assert session.commits == 0
 
 
 async def test_cancelled_trial_creation_recovers_a_committed_running_row(

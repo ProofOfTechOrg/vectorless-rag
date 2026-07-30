@@ -583,6 +583,15 @@ async def test_migration_search_reader_permissions_and_guarded_execution() -> No
             )
             assert result.rows == [{"document_id": identifier, "title": "Vectorless Retrieval"}]
             assert result.explain_cost >= 0
+            colon_literal = await PostgreSQLAdapter(engine, settings).execute(
+                validate_sql(
+                    "SELECT document_id, title FROM agent.paper_catalog_v1 "
+                    r"WHERE title ~* '\y(?:large\s+)?vectorless\y'"
+                )
+            )
+            assert colon_literal.rows == [
+                {"document_id": identifier, "title": "Vectorless Retrieval"}
+            ]
         finally:
             await engine.dispose()
     finally:

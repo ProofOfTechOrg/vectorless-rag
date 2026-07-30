@@ -83,6 +83,7 @@ from vectorless_rag.usage import ExperimentBudgetExceeded, UsageOwner, usage_con
 EXPECTED_ROUTE = RunRoute.documents
 IMAGE_RELEASE_PATH = Path("/app/.release")
 EXECUTION_CANCELLED_FAILURE_CODE = "execution_cancelled"
+EXECUTION_FAILED_FAILURE_CODE = "execution_failed"
 MAX_TRIAL_LIMIT = 10_000
 
 
@@ -233,23 +234,39 @@ class Executor:
         case: EvaluationCase,
         trial: EvaluationTrial,
     ) -> tuple[EvaluationScore, ClaimJudgeItem | None]:
+        oracle = tuple(
+            self.documents[target.arxiv_id]
+            for target in case.target_documents
+            if target.arxiv_id in self.documents
+        )
+        request = ChatRequest(
+            message=case.prompt,
+            constraints=MetadataConstraints.model_validate(case.constraints),
+        )
+        options = options_for(
+            trial.experiment_kind,
+            trial.evidence_token_budget,
+            oracle,
+            self.index_version_ids,
+        )
         run_id = trial_run_id(self.experiment_id, trial.trial_id)
         lifecycle_started = time.monotonic()
         try:
-            return await self._execute(session, case, trial)
+            return await self._execute(
+                session,
+                case,
+                trial,
+                request=request,
+                options=options,
+            )
         except asyncio.CancelledError:
             latency = round((time.monotonic() - lifecycle_started) * 1000)
 
             async def terminalize_cancelled_run() -> None:
-                await session.rollback()
-                durable_run = await session.get(QueryRun, run_id, populate_existing=True)
-                if durable_run is None or query_run_status(durable_run) != QueryRunStatus.running:
-                    return
-                await self.finalize(
+                await self.terminalize_running_run(
                     session,
-                    durable_run,
+                    run_id,
                     latency=latency,
-                    failure_code=RunFailureCode.request_failed,
                     evaluation_failure_code=EXECUTION_CANCELLED_FAILURE_CODE,
                 )
 
@@ -264,18 +281,44 @@ class Executor:
                     continue
             await cleanup
             raise
+        except Exception:
+            await self.terminalize_running_run(
+                session,
+                run_id,
+                latency=round((time.monotonic() - lifecycle_started) * 1000),
+                evaluation_failure_code=EXECUTION_FAILED_FAILURE_CODE,
+            )
+            raise
+
+    async def terminalize_running_run(
+        self,
+        session: AsyncSession,
+        run_id: uuid.UUID,
+        *,
+        latency: int,
+        evaluation_failure_code: str,
+    ) -> None:
+        await session.rollback()
+        durable_run = await session.get(QueryRun, run_id, populate_existing=True)
+        if durable_run is None or query_run_status(durable_run) != QueryRunStatus.running:
+            return
+        await self.finalize(
+            session,
+            durable_run,
+            latency=latency,
+            failure_code=RunFailureCode.request_failed,
+            evaluation_failure_code=evaluation_failure_code,
+        )
 
     async def _execute(
         self,
         session: AsyncSession,
         case: EvaluationCase,
         trial: EvaluationTrial,
+        *,
+        request: ChatRequest,
+        options: GraphRunOptions,
     ) -> tuple[EvaluationScore, ClaimJudgeItem | None]:
-        oracle = tuple(
-            self.documents[target.arxiv_id]
-            for target in case.target_documents
-            if target.arxiv_id in self.documents
-        )
         run, created = await create_trial_run(
             session,
             experiment_id=self.experiment_id,
@@ -290,19 +333,6 @@ class Executor:
                     "inspect it before resuming"
                 )
             return await self.score_terminal_run(session, case, trial, run)
-
-        # Built outside the try so a malformed case raises instead of being recorded as an
-        # excluded trial: a bad dataset is a defect, not a provider failure.
-        request = ChatRequest(
-            message=case.prompt,
-            constraints=MetadataConstraints.model_validate(case.constraints),
-        )
-        options = options_for(
-            trial.experiment_kind,
-            trial.evidence_token_budget,
-            oracle,
-            self.index_version_ids,
-        )
 
         started = time.monotonic()
         try:

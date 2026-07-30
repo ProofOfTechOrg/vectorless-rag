@@ -452,8 +452,8 @@ class PostgreSQLAdapter:
                     text("SELECT set_config('lock_timeout', :timeout, true)"),
                     {"timeout": f"{self.settings.sql_lock_timeout_ms}ms"},
                 )
-                explain = await connection.execute(
-                    text("EXPLAIN (FORMAT JSON) " + query.normalized)
+                explain = await connection.exec_driver_sql(
+                    "EXPLAIN (FORMAT JSON) " + query.normalized
                 )
                 explain_value = explain.scalar_one()
                 if isinstance(explain_value, str):
@@ -464,7 +464,7 @@ class PostgreSQLAdapter:
                         f"query cost {cost:.2f} exceeds ceiling "
                         f"{self.settings.sql_explain_cost_ceiling:.2f}"
                     )
-                cursor = await connection.execute(text(query.normalized))
+                cursor = await connection.exec_driver_sql(query.normalized)
                 columns = list(cursor.keys())
                 rows = [
                     dict(row._mapping)  # pyright: ignore[reportPrivateUsage]
