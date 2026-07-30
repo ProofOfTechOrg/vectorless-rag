@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy.exc import ProgrammingError
 
 from vectorless_rag.config import Settings
 from vectorless_rag.graph import (
@@ -359,7 +358,10 @@ class _SQLAdapter:
         if self.failure is not None:
             raise self.failure
         if self.fail_first and self.calls == 1:
-            raise ProgrammingError("SELECT missing", {}, Exception("undefined column"))
+            raise SQLRejected(
+                "query uses an expression or value that PostgreSQL cannot execute "
+                "against the approved schema"
+            )
         return SQLResult(
             columns=["document_id", "title"],
             rows=(
@@ -447,7 +449,7 @@ async def test_sql_synthesis_keeps_audit_provenance_internal() -> None:
     assert any("do not split abstract text into words" in value for value in llm.system_prompts)
     assert any("do not assemble display text" in value for value in llm.system_prompts)
     assert any("PostgreSQL regex word boundaries" in value for value in llm.system_prompts)
-    assert any("authors and topics are text[]" in value for value in llm.system_prompts)
+    assert any("PostgreSQL cannot execute" in value for value in llm.system_prompts)
     assert any(
         "When the SQL filtered or counted rows by text or pattern matching" in value
         for value in llm.system_prompts

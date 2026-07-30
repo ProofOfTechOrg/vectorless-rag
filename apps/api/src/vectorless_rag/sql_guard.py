@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 import sqlglot
 from sqlalchemy import text
+from sqlalchemy.exc import DataError, DBAPIError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
@@ -87,6 +88,8 @@ SIMILAR_TO_METACHARS = frozenset("%_|*+()[]?{}")
 # sqlglot text diverges from what PostgreSQL runs and can hide a short term (E'%r\ag%' is
 # %r<0x07>g% to the guard but runs as %rag%). Catalog LIKE patterns never contain one.
 CONTROL_CHAR = re.compile(r"[\x00-\x1f\x7f]")
+INFRASTRUCTURE_PROGRAMMING_SQLSTATES = frozenset({"3F000", "42501", "42P01"})
+QUERY_TIMEOUT_SQLSTATE = "57014"
 
 
 class SQLRejected(ValueError):
@@ -110,6 +113,17 @@ class SQLResult:
 
 class DatabaseAdapter(Protocol):
     async def execute(self, query: ValidatedSQL) -> SQLResult: ...
+
+
+def _is_generated_query_rejection(error: DBAPIError) -> bool:
+    if error.connection_invalidated:
+        return False
+    if isinstance(error, DataError):
+        return True
+    sqlstate = getattr(error.orig, "sqlstate", None)
+    if isinstance(error, ProgrammingError):
+        return sqlstate not in INFRASTRUCTURE_PROGRAMMING_SQLSTATES
+    return isinstance(error, OperationalError) and sqlstate == QUERY_TIMEOUT_SQLSTATE
 
 
 def _relation_name(table: exp.Table) -> str:
@@ -481,24 +495,32 @@ class PostgreSQLAdapter:
                 # exec_driver_sql bypasses SQLAlchemy's :name parsing; no_parameters
                 # prevents Psycopg from parsing literal percent signs as placeholders.
                 await connection.execution_options(no_parameters=True)
-                explain = await connection.exec_driver_sql(
-                    "EXPLAIN (FORMAT JSON) " + query.normalized
-                )
-                explain_value = explain.scalar_one()
-                if isinstance(explain_value, str):
-                    explain_value = json.loads(explain_value)
-                cost = float(explain_value[0]["Plan"]["Total Cost"])
-                if cost > self.settings.sql_explain_cost_ceiling:
-                    raise SQLRejected(
-                        f"query cost {cost:.2f} exceeds ceiling "
-                        f"{self.settings.sql_explain_cost_ceiling:.2f}"
+                try:
+                    explain = await connection.exec_driver_sql(
+                        "EXPLAIN (FORMAT JSON) " + query.normalized
                     )
-                cursor = await connection.exec_driver_sql(query.normalized)
-                columns = list(cursor.keys())
-                rows = [
-                    dict(row._mapping)  # pyright: ignore[reportPrivateUsage]
-                    for row in cursor.fetchall()
-                ]
+                    explain_value = explain.scalar_one()
+                    if isinstance(explain_value, str):
+                        explain_value = json.loads(explain_value)
+                    cost = float(explain_value[0]["Plan"]["Total Cost"])
+                    if cost > self.settings.sql_explain_cost_ceiling:
+                        raise SQLRejected(
+                            f"query cost {cost:.2f} exceeds ceiling "
+                            f"{self.settings.sql_explain_cost_ceiling:.2f}"
+                        )
+                    cursor = await connection.exec_driver_sql(query.normalized)
+                    columns = list(cursor.keys())
+                    rows = [
+                        dict(row._mapping)  # pyright: ignore[reportPrivateUsage]
+                        for row in cursor.fetchall()
+                    ]
+                except DBAPIError as error:
+                    if not _is_generated_query_rejection(error):
+                        raise
+                    raise SQLRejected(
+                        "query uses an expression or value that PostgreSQL cannot execute "
+                        "against the approved schema"
+                    ) from error
                 serialized = json.dumps(rows, default=str, separators=(",", ":")).encode()
                 if len(serialized) > self.settings.sql_payload_limit_bytes:
                     raise SQLRejected("SQL result payload exceeds configured limit")

@@ -2423,6 +2423,12 @@ async def test_migration_search_reader_permissions_and_guarded_execution() -> No
             assert bounded_short_term.rows == [
                 {"document_id": identifier, "title": "Vectorless Retrieval"}
             ]
+            invalid_regex = validate_sql(
+                "SELECT document_id, title FROM agent.paper_catalog_v1 "
+                r"WHERE abstract ~ '\y(unbalanced\y'"
+            )
+            with pytest.raises(SQLRejected, match="PostgreSQL cannot execute"):
+                await PostgreSQLAdapter(engine, settings).execute(invalid_regex)
             for unsafe_sql in (
                 r"SELECT document_id, title FROM agent.paper_catalog_v1 "
                 r"WHERE title ~* '(?b)\mai\M'",

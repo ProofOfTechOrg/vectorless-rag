@@ -1,6 +1,54 @@
 import pytest
+from sqlalchemy.exc import DataError, OperationalError, ProgrammingError
 
-from vectorless_rag.sql_guard import SQLRejected, validate_sql
+from vectorless_rag.sql_guard import (
+    SQLRejected,
+    _is_generated_query_rejection,  # pyright: ignore[reportPrivateUsage]
+    validate_sql,
+)
+
+
+class _SqlstateError(Exception):
+    def __init__(self, sqlstate: str) -> None:
+        self.sqlstate = sqlstate
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DataError("SELECT", {}, Exception("invalid value")),
+        ProgrammingError("SELECT", {}, Exception("invalid expression")),
+        OperationalError("SELECT", {}, _SqlstateError("57014")),
+    ],
+)
+def test_generated_query_database_rejections_are_contained(
+    error: DataError | ProgrammingError | OperationalError,
+) -> None:
+    assert _is_generated_query_rejection(error)
+
+
+def test_database_infrastructure_failures_are_not_contained_as_generated_sql() -> None:
+    disconnected = OperationalError("SELECT", {}, _SqlstateError("08006"))
+    lock_contention = OperationalError("SELECT", {}, _SqlstateError("55P03"))
+    invalidated = DataError(
+        "SELECT",
+        {},
+        Exception("connection invalidated"),
+        connection_invalidated=True,
+    )
+
+    assert not _is_generated_query_rejection(disconnected)
+    assert not _is_generated_query_rejection(lock_contention)
+    assert not _is_generated_query_rejection(invalidated)
+
+
+@pytest.mark.parametrize("sqlstate", ["3F000", "42501", "42P01"])
+def test_approved_schema_infrastructure_failures_are_not_generated_sql(
+    sqlstate: str,
+) -> None:
+    error = ProgrammingError("SELECT", {}, _SqlstateError(sqlstate))
+
+    assert not _is_generated_query_rejection(error)
 
 
 def test_approved_select_gets_bounded_limit() -> None:

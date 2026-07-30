@@ -10,7 +10,6 @@ import sqlglot
 from langgraph.graph import END, START, StateGraph
 from pydantic import TypeAdapter
 from sqlalchemy import desc, select
-from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
@@ -700,15 +699,6 @@ not answer the question. Treat prior assistant text as conversation context, not
                 audit.rejection_reason = error
                 if attempt == 1:
                     raise
-            except ProgrammingError as exc:
-                error = (
-                    "query uses a column, operator, or value incompatible with the approved "
-                    "schema; remember that authors and topics are text[] and must be cast to "
-                    "text before scalar text matching"
-                )
-                audit.rejection_reason = error
-                if attempt == 1:
-                    raise SQLRejected(error) from exc
             except RecursionError as exc:
                 error = "query is too deeply nested to analyze safely"
                 audit.rejection_reason = error
