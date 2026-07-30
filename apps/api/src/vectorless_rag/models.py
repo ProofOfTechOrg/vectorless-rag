@@ -469,6 +469,10 @@ class ModelCall(TimestampMixin, Base):
             "(query_run_id IS NULL) <> (ingestion_attempt_id IS NULL)",
             name="ck_model_call_exactly_one_owner",
         ),
+        CheckConstraint(
+            "(experiment_id IS NULL) = (cost_reservation_id IS NULL)",
+            name="ck_model_call_experiment_reservation_pair",
+        ),
         CheckConstraint("provider_attempt > 0", name="ck_model_call_attempt_positive"),
         CheckConstraint(
             """

@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import uuid
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -55,8 +56,22 @@ from vectorless_rag.usage import (
 OWNER_URL = os.getenv("TEST_OWNER_DATABASE_URL")
 APP_URL = os.getenv("TEST_APP_DATABASE_URL")
 READER_URL = os.getenv("TEST_DATABASE_URL")
+DISPOSABLE_DATABASE = os.getenv("TEST_DATABASE_DISPOSABLE") == "1"
 StructuredT = TypeVar("StructuredT", bound=BaseModel)
 API_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def downgraded_measurement_schema() -> Iterator[Config]:
+    assert OWNER_URL is not None
+    config = Config(str(API_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(API_ROOT / "alembic"))
+    config.set_main_option("sqlalchemy.url", OWNER_URL)
+    command.downgrade(config, "0005_measurement_experiments")
+    try:
+        yield config
+    finally:
+        command.upgrade(config, "head")
 
 
 def test_cost_orm_columns_match_the_numeric_database_contract() -> None:
@@ -72,19 +87,24 @@ def test_cost_orm_columns_match_the_numeric_database_contract() -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not OWNER_URL, reason="PostgreSQL owner URL not set")
-def test_0006_migration_backfills_historical_reservation_bounds() -> None:
+@pytest.mark.skipif(
+    not OWNER_URL or not DISPOSABLE_DATABASE,
+    reason="disposable PostgreSQL owner URL not set",
+)
+def test_cost_migrations_backfill_reservation_bounds_and_call_ownership(
+    downgraded_measurement_schema: Config,
+) -> None:
     assert OWNER_URL is not None
     owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
-    config = Config(str(API_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(API_ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", OWNER_URL)
-    command.downgrade(config, "0005_measurement_experiments")
 
     explicit_experiment = uuid.uuid4()
     legacy_experiment = uuid.uuid4()
     explicit_reservation = uuid.uuid4()
     legacy_reservation = uuid.uuid4()
+    explicit_logical_call = uuid.uuid4()
+    api_key_id = uuid.uuid4()
+    query_run_id = uuid.uuid4()
+    model_call_id = uuid.uuid4()
     with psycopg.connect(owner_sync) as connection:
         assert connection.execute(
             "SELECT to_regprocedure('agent.ingestion_attempt_job_immutable()')"
@@ -136,12 +156,50 @@ def test_0006_migration_backfills_historical_reservation_bounds() -> None:
             (
                 explicit_reservation,
                 explicit_experiment,
-                uuid.uuid4(),
+                explicit_logical_call,
                 legacy_reservation,
                 legacy_experiment,
                 uuid.uuid4(),
             ),
         )
+        connection.execute(
+            """INSERT INTO agent.api_keys
+               (id, name, prefix, key_hash, scopes, disabled)
+               VALUES (%s, 'migration-call-owner', %s, %s, '{}'::text[], true)""",
+            (api_key_id, f"t{api_key_id.hex[:8]}", api_key_id.hex + api_key_id.hex),
+        )
+        connection.execute(
+            """INSERT INTO agent.query_runs
+               (id, trace_id, thread_id, api_key_id, question)
+               VALUES (%s, %s, 'migration-call-owner', %s, 'question')""",
+            (query_run_id, uuid.uuid4().hex, api_key_id),
+        )
+        connection.execute(
+            """INSERT INTO agent.experiment_memberships
+               (id, experiment_id, query_run_id, trial_key, repetition,
+                sequence_number, included)
+               VALUES (%s, %s, %s, %s, 1, 0, true)""",
+            (uuid.uuid4(), explicit_experiment, query_run_id, str(uuid.uuid4())),
+        )
+        connection.execute(
+            """INSERT INTO agent.model_calls
+               (id, query_run_id, trace_id, stage, model, provider_attempt,
+                logical_call_id, operation, cost_reservation_id, outcome,
+                usage_available, cache_attribution_complete)
+               VALUES (%s, %s, %s, 'query_route', 'test', 1, %s,
+                       'query_route', %s, 'failed', false, false)""",
+            (
+                model_call_id,
+                query_run_id,
+                uuid.uuid4().hex,
+                explicit_logical_call,
+                explicit_reservation,
+            ),
+        )
+        assert connection.execute(
+            "SELECT experiment_id FROM agent.model_calls WHERE id = %s",
+            (model_call_id,),
+        ).fetchone() == (None,)
         assert connection.execute(
             """SELECT price_snapshot->>'max_input_tokens',
                       price_snapshot->>'max_output_tokens',
@@ -151,7 +209,7 @@ def test_0006_migration_backfills_historical_reservation_bounds() -> None:
         ).fetchone() == ("1000000.0", "8192.0", "3.0")
         connection.commit()
 
-    command.upgrade(config, "head")
+    command.upgrade(downgraded_measurement_schema, "head")
 
     with psycopg.connect(owner_sync) as connection:
         assert connection.execute(
@@ -181,8 +239,12 @@ def test_0006_migration_backfills_historical_reservation_bounds() -> None:
             "review_required",
         )
         assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0006_bound_cost_reservations",
+            "0007_model_call_experiment",
         )
+        assert connection.execute(
+            "SELECT experiment_id FROM agent.model_calls WHERE id = %s",
+            (model_call_id,),
+        ).fetchone() == (explicit_experiment,)
         connection.execute("SAVEPOINT invalid_bound")
         with pytest.raises(psycopg.errors.CheckViolation):
             connection.execute(
@@ -193,26 +255,23 @@ def test_0006_migration_backfills_historical_reservation_bounds() -> None:
                 (uuid.uuid4(), explicit_experiment, uuid.uuid4()),
             )
         connection.execute("ROLLBACK TO SAVEPOINT invalid_bound")
-        connection.execute(
-            "DELETE FROM agent.model_call_cost_reservations WHERE id = ANY(%s)",
-            ([explicit_reservation, legacy_reservation],),
-        )
-        connection.execute(
-            "DELETE FROM agent.experiments WHERE id = ANY(%s)",
-            ([explicit_experiment, legacy_experiment],),
-        )
-        connection.commit()
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(not OWNER_URL, reason="PostgreSQL owner URL not set")
-def test_ingestion_experiment_rejects_unreservable_call_before_insert() -> None:
+@pytest.mark.skipif(
+    not OWNER_URL or not APP_URL,
+    reason="PostgreSQL owner and application URLs not set",
+)
+def test_application_role_inserts_reserved_and_unreserved_call_ownership() -> None:
     assert OWNER_URL is not None
+    assert APP_URL is not None
     owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
     document_id = uuid.uuid4()
     job_id = uuid.uuid4()
     attempt_id = uuid.uuid4()
     experiment_id = uuid.uuid4()
+    api_key_id = uuid.uuid4()
+    query_run_id = uuid.uuid4()
     with psycopg.connect(owner_sync) as connection:
         connection.execute(
             """INSERT INTO agent.documents
@@ -262,9 +321,21 @@ def test_ingestion_experiment_rejects_unreservable_call_before_insert() -> None:
                        false, false)""",
             (attempt_id, job_id, uuid.uuid4().hex),
         )
+        connection.execute(
+            """INSERT INTO agent.api_keys
+               (id, name, prefix, key_hash, scopes, disabled)
+               VALUES (%s, 'unreserved-call-owner', %s, %s, '{}'::text[], true)""",
+            (api_key_id, f"t{api_key_id.hex[:8]}", api_key_id.hex + api_key_id.hex),
+        )
+        connection.execute(
+            """INSERT INTO agent.query_runs
+               (id, trace_id, thread_id, api_key_id, question)
+               VALUES (%s, %s, 'unreserved-call-owner', %s, 'question')""",
+            (query_run_id, uuid.uuid4().hex, api_key_id),
+        )
         connection.commit()
 
-    ledger = ModelCallLedger(OWNER_URL, maximum_provider_attempts=1)
+    ledger = ModelCallLedger(APP_URL, maximum_provider_attempts=1)
     with usage_context(UsageOwner(trace_id=uuid.uuid4().hex, ingestion_attempt_id=attempt_id)):
         with pytest.raises(ExperimentBudgetExceeded):
             ledger.start(
@@ -286,6 +357,48 @@ def test_ingestion_experiment_rejects_unreservable_call_before_insert() -> None:
                WHERE experiment_id = %s""",
             (experiment_id,),
         ).fetchone() == (0,)
+
+    with usage_context(UsageOwner(trace_id=uuid.uuid4().hex, ingestion_attempt_id=attempt_id)):
+        call = ledger.start(
+            ModelCallStage.pageindex_generation,
+            "provider/model",
+            1,
+            input_token_limit=100,
+            output_token_limit=1,
+        )
+    assert call is not None
+
+    with usage_context(UsageOwner(trace_id=uuid.uuid4().hex, query_run_id=query_run_id)):
+        unreserved_call = ledger.start(
+            ModelCallStage.query_route,
+            "provider/model",
+            1,
+            input_token_limit=100,
+            output_token_limit=1,
+        )
+    assert unreserved_call is not None
+
+    with psycopg.connect(owner_sync) as connection:
+        assert connection.execute(
+            """SELECT experiment_id, cost_reservation_id
+               FROM agent.model_calls WHERE id = %s""",
+            (call.id,),
+        ).fetchone() == (experiment_id, call.cost_reservation_id)
+        assert connection.execute(
+            """SELECT experiment_id, cost_reservation_id
+               FROM agent.model_calls WHERE id = %s""",
+            (unreserved_call.id,),
+        ).fetchone() == (None, None)
+        connection.execute(
+            "DELETE FROM agent.model_calls WHERE id = ANY(%s)",
+            ([call.id, unreserved_call.id],),
+        )
+        connection.execute(
+            "DELETE FROM agent.model_call_cost_reservations WHERE id = %s",
+            (call.cost_reservation_id,),
+        )
+        connection.execute("DELETE FROM agent.query_runs WHERE id = %s", (query_run_id,))
+        connection.execute("DELETE FROM agent.api_keys WHERE id = %s", (api_key_id,))
         connection.execute("DELETE FROM agent.ingestion_attempts WHERE id = %s", (attempt_id,))
         connection.execute("DELETE FROM agent.ingestion_jobs WHERE id = %s", (job_id,))
         connection.execute("DELETE FROM agent.experiments WHERE id = %s", (experiment_id,))
@@ -979,11 +1092,18 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                 cache_attribution_complete, input_tokens, cache_hit_input_tokens,
                 cache_miss_input_tokens, cache_write_input_tokens,
                 unattributed_input_tokens, output_tokens, reasoning_output_tokens,
-                total_tokens, cost_reservation_id)
+                total_tokens, experiment_id, cost_reservation_id)
                VALUES (%s, %s, %s, 'pageindex_generation', 'test', 1, %s,
                        'pageindex_completion', 'completed', true, true,
-                       10, 0, 10, 0, 0, 5, 0, 15, %s)""",
-            (uuid.uuid4(), attempt_id, uuid.uuid4().hex, logical_call_id, reservation_id),
+                       10, 0, 10, 0, 0, 5, 0, 15, %s, %s)""",
+            (
+                uuid.uuid4(),
+                attempt_id,
+                uuid.uuid4().hex,
+                logical_call_id,
+                experiment_id,
+                reservation_id,
+            ),
         )
         assert connection.execute(
             RECONCILE_MODEL_CALL_RESERVATION_SQL,
@@ -1012,14 +1132,15 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
             """INSERT INTO agent.model_calls
                (id, ingestion_attempt_id, trace_id, stage, model, provider_attempt,
                 logical_call_id, operation, outcome, usage_available,
-                cache_attribution_complete, cost_reservation_id)
+                cache_attribution_complete, experiment_id, cost_reservation_id)
                VALUES (%s, %s, %s, 'pageindex_generation', 'test', 1, %s,
-                       'pageindex_completion', 'failed', false, false, %s)""",
+                       'pageindex_completion', 'failed', false, false, %s, %s)""",
             (
                 uuid.uuid4(),
                 attempt_id,
                 uuid.uuid4().hex,
                 uncertain_logical_call_id,
+                experiment_id,
                 uncertain_reservation_id,
             ),
         )
@@ -1037,9 +1158,9 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
             INSERT INTO agent.model_calls
               (id, ingestion_attempt_id, trace_id, stage, model, provider_attempt,
                logical_call_id, operation, outcome, usage_available,
-               cache_attribution_complete, cost_reservation_id)
+               cache_attribution_complete, experiment_id, cost_reservation_id)
             VALUES (%s, %s, %s, 'pageindex_generation', 'test', %s, %s,
-                    'pageindex_completion', 'failed', false, false, %s)
+                    'pageindex_completion', 'failed', false, false, %s, %s)
         """
         connection.execute("SAVEPOINT duplicate_attempt")
         with pytest.raises(psycopg.errors.UniqueViolation):
@@ -1051,6 +1172,7 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                     uuid.uuid4().hex,
                     1,
                     uncertain_logical_call_id,
+                    experiment_id,
                     uncertain_reservation_id,
                 ),
             )
@@ -1069,6 +1191,7 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                     uuid.uuid4().hex,
                     2,
                     uuid.uuid4(),
+                    experiment_id,
                     uncertain_reservation_id,
                 ),
             )
@@ -1087,10 +1210,30 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
                     uuid.uuid4().hex,
                     4,
                     uncertain_logical_call_id,
+                    experiment_id,
                     uncertain_reservation_id,
                 ),
             )
         connection.execute("ROLLBACK TO SAVEPOINT attempt_over_limit")
+
+        connection.execute("SAVEPOINT missing_experiment_owner")
+        with pytest.raises(
+            psycopg.errors.RaiseException,
+            match="model call conflicts with its cost reservation",
+        ):
+            connection.execute(
+                call_insert,
+                (
+                    uuid.uuid4(),
+                    attempt_id,
+                    uuid.uuid4().hex,
+                    2,
+                    uncertain_logical_call_id,
+                    None,
+                    uncertain_reservation_id,
+                ),
+            )
+        connection.execute("ROLLBACK TO SAVEPOINT missing_experiment_owner")
 
         connection.execute("SAVEPOINT mutate_reservation_identity")
         with pytest.raises(
@@ -1137,7 +1280,7 @@ def test_experiment_reservations_enforce_cap_and_reconcile_measured_cost() -> No
     not OWNER_URL or not APP_URL,
     reason="PostgreSQL owner and application URLs not set",
 )
-def test_application_role_cannot_reparent_an_ingestion_attempt() -> None:
+def test_application_role_cannot_reparent_ledger_ownership() -> None:
     assert OWNER_URL is not None
     assert APP_URL is not None
     owner_sync = OWNER_URL.replace("postgresql+psycopg://", "postgresql://")
@@ -1147,6 +1290,9 @@ def test_application_role_cannot_reparent_an_ingestion_attempt() -> None:
     bound_job_id = uuid.uuid4()
     unbound_job_id = uuid.uuid4()
     attempt_id = uuid.uuid4()
+    call_id = uuid.uuid4()
+    reservation_ids = [uuid.uuid4(), uuid.uuid4()]
+    logical_call_ids = [uuid.uuid4(), uuid.uuid4()]
     digest = document_id.hex + document_id.hex
 
     try:
@@ -1208,6 +1354,40 @@ def test_application_role_cannot_reparent_an_ingestion_attempt() -> None:
                            'none', false, false)""",
                 (attempt_id, bound_job_id, uuid.uuid4().hex),
             )
+            for reservation_id, logical_call_id in zip(
+                reservation_ids, logical_call_ids, strict=True
+            ):
+                assert connection.execute(
+                    RESERVE_MODEL_CALL_SQL,
+                    {
+                        "query_run_id": None,
+                        "ingestion_attempt_id": attempt_id,
+                        "reservation_id": reservation_id,
+                        "logical_call_id": logical_call_id,
+                        "input_token_limit": 100,
+                        "output_token_limit": 100,
+                        "attempt_limit": 3,
+                        "legacy_max_input_tokens": DEEPSEEK_MAX_INPUT_TOKENS,
+                        "legacy_max_output_tokens": DEEPSEEK_MAX_OUTPUT_TOKENS,
+                        "legacy_query_max_attempts": 3,
+                    },
+                ).fetchone() == (reservation_id, 100, 100, 3)
+            connection.execute(
+                """INSERT INTO agent.model_calls
+                   (id, ingestion_attempt_id, trace_id, stage, model, provider_attempt,
+                    logical_call_id, operation, experiment_id, cost_reservation_id,
+                    outcome, usage_available, cache_attribution_complete)
+                   VALUES (%s, %s, %s, 'pageindex_generation', 'test', 1, %s,
+                           'pageindex_completion', %s, %s, 'failed', false, false)""",
+                (
+                    call_id,
+                    attempt_id,
+                    uuid.uuid4().hex,
+                    logical_call_ids[0],
+                    experiment_id,
+                    reservation_ids[0],
+                ),
+            )
             connection.commit()
 
         with psycopg.connect(app_sync) as connection:
@@ -1227,6 +1407,32 @@ def test_application_role_cannot_reparent_an_ingestion_attempt() -> None:
                     (unbound_job_id, attempt_id),
                 )
             connection.execute("ROLLBACK TO SAVEPOINT reparent_ingestion_attempt")
+
+            connection.execute("SAVEPOINT detach_model_call")
+            with pytest.raises(
+                psycopg.errors.RaiseException,
+                match="model call identity is immutable",
+            ):
+                connection.execute(
+                    """UPDATE agent.model_calls
+                       SET experiment_id = NULL, cost_reservation_id = NULL
+                       WHERE id = %s""",
+                    (call_id,),
+                )
+            connection.execute("ROLLBACK TO SAVEPOINT detach_model_call")
+
+            connection.execute("SAVEPOINT reassign_model_call")
+            with pytest.raises(
+                psycopg.errors.RaiseException,
+                match="model call identity is immutable",
+            ):
+                connection.execute(
+                    """UPDATE agent.model_calls
+                       SET logical_call_id = %s, cost_reservation_id = %s
+                       WHERE id = %s""",
+                    (logical_call_ids[1], reservation_ids[1], call_id),
+                )
+            connection.execute("ROLLBACK TO SAVEPOINT reassign_model_call")
             connection.commit()
 
         with psycopg.connect(owner_sync) as connection:
@@ -1234,8 +1440,21 @@ def test_application_role_cannot_reparent_an_ingestion_attempt() -> None:
                 "SELECT job_id FROM agent.ingestion_attempts WHERE id = %s",
                 (attempt_id,),
             ).fetchone() == (bound_job_id,)
+            assert connection.execute(
+                """SELECT logical_call_id, experiment_id, cost_reservation_id
+                   FROM agent.model_calls WHERE id = %s""",
+                (call_id,),
+            ).fetchone() == (logical_call_ids[0], experiment_id, reservation_ids[0])
     finally:
         with psycopg.connect(owner_sync, autocommit=True) as connection:
+            connection.execute(
+                "DELETE FROM agent.model_calls WHERE id = %s",
+                (call_id,),
+            )
+            connection.execute(
+                "DELETE FROM agent.model_call_cost_reservations WHERE id = ANY(%s)",
+                (reservation_ids,),
+            )
             connection.execute(
                 "DELETE FROM agent.ingestion_attempts WHERE id = %s",
                 (attempt_id,),

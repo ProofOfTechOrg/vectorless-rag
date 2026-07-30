@@ -383,7 +383,7 @@ _INSERT_CALL = """
 INSERT INTO agent.model_calls (
     id, query_run_id, ingestion_attempt_id, trace_id, stage, model, provider_attempt,
     logical_call_id, operation, retry_delay_ms, prompt_sha256, prompt_bytes,
-    release, configuration_hash, cost_reservation_id,
+    release, configuration_hash, experiment_id, cost_reservation_id,
     outcome, usage_available, cache_attribution_complete
 )
 SELECT
@@ -391,6 +391,11 @@ SELECT
     %(stage)s::agent.model_call_stage, %(model)s, %(provider_attempt)s,
     %(logical_call_id)s::uuid, %(operation)s, %(retry_delay_ms)s,
     %(prompt_sha256)s, %(prompt_bytes)s, %(release)s, %(configuration_hash)s,
+    (
+      SELECT experiment_id
+      FROM agent.model_call_cost_reservations
+      WHERE id = %(cost_reservation_id)s::uuid
+    ),
     %(cost_reservation_id)s::uuid,
     'started'::agent.model_call_outcome, false, false
 WHERE

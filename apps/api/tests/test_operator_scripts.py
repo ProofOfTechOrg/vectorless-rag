@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from pytest import MonkeyPatch
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -82,6 +84,16 @@ def _complete_price_snapshot() -> dict[str, float]:
         "max_output_tokens": 8_192.0,
         "max_attempts": float(MAX_PROVIDER_ATTEMPTS),
     }
+
+
+def test_pilot_schema_guard_matches_alembic_head() -> None:
+    config = Config(str(API_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(API_ROOT / "alembic"))
+    config.set_main_option("path_separator", "os")
+
+    assert run_pageindex_pilot.MEASUREMENT_SCHEMA_REVISION == (
+        ScriptDirectory.from_config(config).get_current_head()
+    )
 
 
 async def _add_indexed_document(

@@ -45,6 +45,7 @@ TERMINAL = {
     JobStatus.cancelled,
 }
 RELEASE_SHA = re.compile(r"^[0-9a-f]{40}$")
+MEASUREMENT_SCHEMA_REVISION = "0007_model_call_experiment"
 
 
 def report_cost(value: Decimal | float | int) -> float:
@@ -108,7 +109,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     try:
         async with database.session() as session:
             schema_revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-            if schema_revision != "0006_bound_cost_reservations":
+            if schema_revision != MEASUREMENT_SCHEMA_REVISION:
                 raise RuntimeError("database is not at the frozen measurement schema head")
             active_jobs = (
                 await session.scalar(

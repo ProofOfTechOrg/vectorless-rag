@@ -17,11 +17,11 @@ This reference records the PageIndex v2 evaluation state, the defects found in i
 | Historical capped run | Stopped safely at its frozen $25 ceiling after 227/1,440 trials |
 | Historical partial report | 172 included, 55 excluded; claim recall not yet scored |
 | Corrected trial plan | 1,080 trials; removes 360 duplicate graph executions |
-| Corrected cost control | Request-bounded reservations and terminal unknown-attempt reconciliation at schema head `0006_bound_cost_reservations` |
+| Corrected cost control | Request-bounded reservations, terminal unknown-attempt reconciliation, and explicit model-call experiment ownership at schema head `0007_model_call_experiment` |
 | Branch | `fix/pageindex-evaluation-dataset`; remote branch exists and matched runtime commit `5fa5801` when this handoff was updated |
 
 `make api-lint`, `make api-typecheck`, `make docs-check`, and `make compose-check`
-pass. The provider-free API suite is 430 passed, 13 skipped; the disposable
+pass. The provider-free API suite is 431 passed, 13 skipped; the disposable
 PostgreSQL integration stack is 13 passed.
 
 ## Do this next
@@ -128,7 +128,7 @@ The corrected experiment passed identity, dataset, corpus, and index preflight w
 | Cap exposure | `$0.000000` |
 | State | Frozen and dry-run verified; live canary not started |
 
-The deployed API release matches the manifest, and PostgreSQL is at schema head `0006_bound_cost_reservations`.
+The deployed API release matches the manifest, and PostgreSQL is at schema head `0007_model_call_experiment`.
 
 ## Historical capped parallel run
 
@@ -429,7 +429,7 @@ Verify with `git apply --check` against a pristine copy, and bump `+vrN` in both
 
 ```bash
 make api-lint && make api-typecheck && make docs-check && make compose-check
-make api-test                         # expect 430 passed, 13 skipped
+make api-test                         # expect 431 passed, 13 skipped
 TEST_POSTGRES_PORT=55433 make test-integration-stack  # expect 13 passed
 make pageindex-patch-test PAGEINDEX_SOURCE=/opt/pageindex
 ```
@@ -668,7 +668,7 @@ available and retains one immutable per-attempt bound for each attempt without
 usage. Reserved and measured costs round upward to the schema’s micro-dollar
 precision, so quantization cannot understate cap exposure.
 
-Schema head `0006_bound_cost_reservations` backfills historical rows from their
+Migration `0006_bound_cost_reservations` backfills historical rows from their
 experiment snapshots. It does not rewrite historical `reserved_cost_usd`,
 status, or measured cost. Snapshot limits are validated as positive integral
 JSON numbers and cast through `numeric`, which accepts the actual frozen
