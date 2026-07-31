@@ -7,7 +7,19 @@ This changelog records user-visible changes. Vectorless RAG follows semantic ver
 
 ## Unreleased
 
-No user-visible changes have been recorded after v0.2.0.
+### Changed
+
+- Completed the reviewed 120-case PageIndex v2 evaluation as a 1,080-trial experiment and recorded its metrics, accounting evidence, exclusions, and immutable artifact identities
+- Kept the evidence budget unchanged because the completed experiment found no consistent quality gain from larger windows
+- Reduced new evaluation plans from 1,440 to 1,080 trials by removing a duplicate execution path and made bounded concurrent execution resumable
+
+### Fixed
+
+- Routed content-based discovery, quoted passage lookup, and corpus claim checks through document evidence while reserving clarification for incomplete intent
+- Applied structured metadata constraints consistently to routing, guarded catalog SQL, and document retrieval
+- Preserved an empty hybrid catalog selection as an empty document restriction and required successful hybrid answers to cite document evidence
+- Contained malformed generated SQL and PostgreSQL expression errors without hiding infrastructure failures
+- Made model-call admission, experiment ownership, cost reservation, interruption recovery, and retry classification consistent across concurrent workers
 
 ## 0.2.0, 2026-07-27
 

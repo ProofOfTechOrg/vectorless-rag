@@ -17,7 +17,7 @@ Use the Ingestion page for one PDF, or `make upload-document PDF=/path/file.pdf`
 
 The UI polls every 1.5 seconds until the job reaches a terminal state. Transient status failures switch to five-second polling and do not discard the durable job. A provider wait or deferred state remains visible and continues polling. A fresh successful provider check can resume a waiting job after the provider retry cooldown. Cached checks and fresh checks made during that cooldown cannot resume it.
 
-Mounted sync scans only direct Portable Document Format (PDF) children of `ARXIV_PDF_HOST_DIR`. `make sync-corpus` deduplicates by content. The API supports three modes:
+Mounted sync scans only direct PDF children of `ARXIV_PDF_HOST_DIR`. `make sync-corpus` deduplicates by content. The API supports three modes:
 
 - `ensure_current` reuses a compatible index or stored metadata
 - `rebuild_index` rebuilds the index from compatible stored metadata

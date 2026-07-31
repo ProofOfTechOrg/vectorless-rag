@@ -53,7 +53,7 @@ The console can report unavailable credit, rate limiting, authentication failure
 
 - `DEEPSEEK_API_KEY` belongs to the intended account
 - The account has available credit
-- `deepseek-v4-pro` remains listed in the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/)
+- The underlying serving and PageIndex models are currently listed in the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/)
 - The configured retry cooldown has elapsed
 
 Restarting healthy services does not bypass provider cooldown or account state.

@@ -85,7 +85,7 @@ The web runtime uses Node 22 as its non-root `node` user and exposes `/healthz`.
 
 ## Helm
 
-Use Helm 3 to validate or deploy the chart at `infra/helm/vectorless-rag`. Helm is not required for general frontend development.
+Use Helm 4.2.3 to validate or deploy the chart at `infra/helm/vectorless-rag`. This is the version pinned by continuous integration. Helm is not required for general frontend development.
 
 The existing `ingress` targets the API. `frontendIngress` is independent and targets the web service. Set `appOrigin` to the frontend’s exact HTTPS origin.
 

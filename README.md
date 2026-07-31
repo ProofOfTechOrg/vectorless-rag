@@ -1,5 +1,5 @@
 <!-- Content type: Landing -->
-<!-- Content plan: Goal: help researchers decide whether to run Vectorless RAG and reach the first cited answer. Audience: researchers, operators, and contributors. Content: status, use cases, architecture, costs, startup, testing, and project links. Open questions: measured vector-versus-PageIndex answer quality at full-corpus scale. -->
+<!-- Content plan: Goal: help researchers decide whether to run Vectorless RAG and reach the first cited answer. Audience: researchers, operators, and contributors. Content: release and research status, fit, architecture, costs, startup, verification, and project links. Open questions: measured vector-versus-PageIndex answer quality at full-corpus scale. -->
 
 # Vectorless RAG
 
@@ -7,36 +7,44 @@
 [![License: MIT](https://img.shields.io/github/license/ProofOfTechOrg/vectorless-rag)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/ProofOfTechOrg/vectorless-rag?include_prereleases)](https://github.com/ProofOfTechOrg/vectorless-rag/releases)
 
-Vectorless RAG is a self-hosted research preview for grounded question answering over local Portable Document Format (PDF) files. It uses PageIndex hierarchies instead of embeddings or a vector database, then returns inline citations that resolve to document pages.
+Vectorless RAG is a self-hosted research preview for grounded question answering across local PDFs. It builds PageIndex hierarchies without embeddings or a vector database and returns inline citations tied to document pages.
 
 Version 0.2.0 is a prerelease. It supports evaluation and bounded pilots, not production stability or unattended full-corpus ingestion.
 
-## Choose this project for bounded research
+## Current research status
+
+The PageIndex v2 evaluation is complete: 1,080 trials produced 1,018 included scores and 62 excluded terminal failures. Free routing selected the required document path in only 18.8% to 31.7% of trials, while larger evidence budgets did not produce a consistent end-to-end quality gain. The experiment therefore does not justify increasing the evidence budget.
+
+The routing, structured-constraint, generated-SQL, hybrid-evidence, retry, and accounting defects exposed during the run are fixed and covered by provider-free tests. Those post-experiment corrections have not been remeasured against DeepSeek, and no replacement experiment is planned. A final vector-versus-PageIndex quality verdict still requires a separately designed comparison.
+
+Read the [completed evaluation results and handoff](docs/pageindex-evaluation-handoff.md) for metrics, accounting, defect history, artifact identities, and remaining limits.
+
+## Use cases
 
 Vectorless RAG fits these use cases:
 
-- Compare hierarchical, vectorless retrieval with a conventional vector retrieval-augmented generation (RAG) system
+- Use hierarchical, vectorless retrieval as one arm of a controlled comparison with conventional vector retrieval-augmented generation (RAG)
 - Ask cross-document questions over a small, controlled PDF corpus
 - Inspect retrieval routes, durable ingestion jobs, citations, token use, and provider costs
 - Run a self-hosted browser console with scoped API keys and server-side credential storage
 
 Do not use this preview for regulated workloads, scanned PDFs that require optical character recognition (OCR), or an unreviewed full-corpus migration.
 
-## Understand costs and limits before starting
+## Costs and operating limits
 
-Ingestion and live chat call DeepSeek and can incur provider charges. The default safety controls cap registration at 25 documents, keep full-corpus indexing disabled, and enforce a $10 frozen-pilot ceiling. Provider prices can change, so check the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/) before a paid run.
+Ingestion and live chat call DeepSeek and can incur provider charges. The default configuration uses `deepseek-v4-flash` for serving and `deepseek/deepseek-v4-pro` for PageIndex construction. Confirm both underlying models and their current rates in the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/) before a paid run.
 
-The configured `deepseek-v4-pro` model remains available in that reference. Deterministic unit, integration, deployment, and browser tests do not require provider credentials.
+Safety controls cap registration at 25 documents, keep full-corpus indexing disabled, and enforce a $10 frozen-pilot ceiling. The completed evaluation used `$5.389689` of conservative accounting exposure under its separate `$25` authorization; that ledger exposure is not a provider-invoice claim. Deterministic unit, integration, deployment, browser, and evaluation checks do not require provider credentials.
 
 Current limitations include:
 
 - Born-digital PDFs only, with no OCR
 - No API-key lifecycle interface or embedded PDF viewer
-- Source builds only, with no package-registry or container-registry release
+- The v0.2.0 GitHub release provides source archives but no prebuilt artifacts
 - A pilot gate instead of a production-scale claim
 - No final vector-versus-PageIndex quality verdict
 
-## Follow the request path
+## Architecture
 
 The browser-facing frontend (BFF) keeps API keys out of browser-readable storage. FastAPI authorizes each API request, LangGraph coordinates retrieval, and a durable worker builds PageIndex artifacts.
 
@@ -80,24 +88,18 @@ Read [get started with one cited answer](docs/getting-started.md) for prerequisi
 
 ## Run provider-free verification
 
-Install the frozen development dependencies before running the complete local gates:
+Install the frozen development dependencies, then run the complete continuous-integration equivalent:
 
 ```bash
 make install
-make docs-check
-make api-check
-make test-integration-stack
-make web-check
-make playwright
-make deploy-check ENV_FILE=.env.example
-make docker-build
+make ci
 ```
 
-`make playwright` uses the existing mock upstream only for deterministic browser coverage. It is not a product demo and does not replace the paid release gate.
+`make ci` runs documentation, API, web, isolated PostgreSQL, deployment, browser, and image gates without reading `DEEPSEEK_API_KEY`. Deterministic Playwright uses a mock upstream; it does not replace an explicitly authorized paid release check.
 
 Read [choose a test tier](docs/testing.md) for test prerequisites and provider boundaries.
 
-## Find the next task
+## Documentation and project policy
 
 The [documentation index](docs/README.md) routes setup, operation, deployment, security, evaluation, and historical design work. Start with:
 

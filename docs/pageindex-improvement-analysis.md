@@ -5,6 +5,8 @@
 
 > **Dated design record, July 2026:** This document preserves the decisions and evidence from its recorded repository baseline. Do not recalculate its historical conclusions with current dependencies or pricing.
 
+The implementation and PageIndex-only evaluation described as future work in this record are now complete. Read the [PageIndex v2 evaluation results and handoff](pageindex-evaluation-handoff.md) for the current result, post-experiment route corrections, and remaining limits. The historical baselines and execution record below remain unchanged.
+
 This record defines the PageIndex v2 implementation baseline, architecture, rollout, and verification evidence. It is the durable handoff for the work that starts at commit `cfbea604c64d51c20ca1cea413b2bfa35be94471`.
 
 ## Baseline

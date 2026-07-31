@@ -8,8 +8,8 @@ budget to continue this investigation. The current checkout fixes the route
 defects exposed by the completed run. No replacement experiment is authorized
 or planned.
 
-Branch `fix/pageindex-evaluation-dataset` at base commit
-`97b5dca3b4c622a4e6030b978f5f3532ef857e10` is the route-correction baseline.
+Branch `fix/pageindex-evaluation-dataset` at implementation commit
+`75900f585bedff291daec97384ce11e83f8b3698` is the route-correction baseline.
 The evaluated runtime remains release
 `d32f7a36c18a6818fbebce24582fc175107c8b9f`, with PostgreSQL at schema head
 `0009_atomic_model_call_start`. Reconfirm these anchors against the checkout
@@ -261,7 +261,9 @@ benefit from a larger window.
 ## Remaining work and limits
 
 - Reconcile the 124 `review_required` reservations only from provider-side
-  usage evidence.
+  usage evidence. The repository has no supported importer for provider billing
+  data, so leave these holds unchanged unless request-level provider evidence
+  can be bound to the exact calls.
 - Treat the revised route policy as unmeasured by a live provider until a
   separately authorized evaluation runs. Do not infer a new accuracy number
   from provider-free tests.

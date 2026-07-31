@@ -1,5 +1,5 @@
 <!-- Content type: How-to -->
-<!-- Content plan: Goal: validate, review, seed, run, and report the tracked evaluation suites. Audience: retrieval researchers and maintainers. Content: deterministic checks, human review, experiment freezing, reports, and browser coverage. Open questions: sealed vector-versus-PageIndex evaluation results. -->
+<!-- Content plan: Goal: distinguish the completed PageIndex experiment from future evaluation work and document the supported workflow. Audience: retrieval researchers and maintainers. Content: current result, deterministic checks, human review, experiment freezing, execution, reports, and browser coverage. Open questions: sealed vector-versus-PageIndex evaluation results. -->
 
 # Run evaluation workflows
 
@@ -8,6 +8,14 @@ The repository has two evaluation surfaces with different claims.
 `apps/api/evaluation/release-v1.jsonl` remains a route, SQL, citation-policy, security, and deterministic browser regression suite. It is not a content-retrieval comparison.
 
 `apps/api/evaluation/pageindex-v2-regression.jsonl` contains 120 source-grounded PageIndex cases: 48 development and 72 regression cases. The six 20-case strata cover explicit single-document, unconstrained discovery, metadata-constrained discovery, long/cross-section, cross-document, and unanswerable requests. The suite is visible to future vector development, so `regression` is deliberate; it is not held out.
+
+## Completed PageIndex v2 experiment
+
+The PageIndex v2 experiment is complete. Its 1,080 trials produced 1,018 included scores and 62 excluded terminal trials. Free route correctness was 0.188 to 0.317 across splits and budgets, and forced-route claim recall did not improve consistently with larger evidence windows. The route and constraint defects exposed by the run are fixed in later code, but those corrections have not been measured by a new provider-backed experiment.
+
+Do not resume, replace, or increase the budget of that experiment. Read the [evaluation results and handoff](pageindex-evaluation-handoff.md) for the exact release, configuration and artifact hashes, score tables, accounting state, fixes, and remaining limits.
+
+The workflow below remains supported for a distinctly identified, separately authorized future experiment. It is not a continuation procedure for the completed run.
 
 ## Validate and review
 
@@ -20,7 +28,7 @@ make evaluation-review-pack
 
 Validation enforces the strict schema, stable UUIDv5 item IDs, 48/72 split, six strata, target-document isolation between splits, corpus membership, page bounds, source hashes, at least 24 vocabulary-mismatch cases, at least 12 exact-phrase cases, and deterministic trial/bootstrap generation.
 
-All 120 tracked review records start as `pending`. A human must approve, edit, or reject every case against `apps/api/evaluation/review-pack.md`. A completed record requires reviewer identity, timestamp, and the current source hash. Seeding and experiment preparation fail closed while any case lacks a completed review. Do not bulk-mark cases reviewed.
+All 120 current tracked review records are approved. A completed record carries reviewer identity, timestamp, and the current source hash. Rebuilding preserves completed reviews only while case content remains unchanged; any changed or replacement case returns to `pending`. Seeding and experiment preparation fail closed while a case is pending or rejected. Do not bulk-mark changed cases reviewed.
 
 Review interactively rather than editing the JSONL by hand:
 
@@ -34,15 +42,15 @@ Each case prints with its source excerpts and accepts approve, edit reference, e
 
 ## Rebuild the PageIndex suite
 
-`apps/api/scripts/build_pageindex_evaluation.py` rebuilds all 120 cases from the tracked 537-PDF corpus. It selects source excerpts by discarding page furniture — captions, running headers, reference entries, pseudocode, appendix exemplars, sampled model output, and sentences broken across a line by hyphenation.
+`apps/api/scripts/build_pageindex_evaluation.py` rebuilds all 120 cases from the tracked 537-PDF corpus. It selects source excerpts by discarding page furniture: captions, running headers, reference entries, pseudocode, appendix exemplars, sampled model output, and sentences broken across a line by hyphenation.
 
 Two strata, `metadata_constrained_discovery` and `long_cross_section`, require prompts that restate the finding in different words. String manipulation cannot produce genuine paraphrase, so their text lives in `apps/api/evaluation/pageindex-v2-authored.json`, keyed `split:stratum:index` and bound to its source excerpts by SHA-256. When an entry is missing, malformed, or bound to excerpts that have since changed, the build writes every affected case to `apps/api/evaluation/pageindex-v2-authoring-queue.json` and exits without touching the dataset. Author the queued prompts and reference answers into the authored file, then build again.
 
 Rebuilding carries forward completed reviews whose case content is unchanged. A case whose content changed returns to `pending`, because the reviewer approved different text.
 
-## Seed and freeze an experiment
+## Seed and freeze a new experiment
 
-After review:
+After review and separate provider-spend authorization:
 
 ```bash
 make evaluation-seed
@@ -67,7 +75,7 @@ Seeding uses each case’s stable UUID as the Langfuse dataset item ID. The run 
 
 The plan contains 1,080 trials: three experiment types, three evidence budgets (6,400, 12,800, and 25,600 tokens), one repetition, and 120 items. Pass `--repetitions 2` or `3` to estimate within-configuration variance at proportional provider cost; the manifest records the count, so a single-pass run is never mistaken for a repeated one. Historical manifests may still contain `corpus_routing`, but new plans omit it because it executed the same graph as `forced_route_end_to_end`.
 
-## Execute the plan
+## Execute a new plan
 
 `make evaluation-run` only prepares the plan. Execute it against the configured provider:
 
@@ -119,7 +127,7 @@ whose claim-recall count is zero. The report rejects duplicate or unknown trial
 IDs and summarizes route, document, support, claim, citation, latency, retry,
 and failure measurements with deterministic bootstrap intervals.
 
-A final unbiased vector-versus-PageIndex architecture verdict still requires a new sealed dataset created only after both implementations and their indexes freeze.
+A final unbiased vector-versus-PageIndex architecture verdict still requires a sealed comparison dataset created only after both implementations and their indexes freeze. The completed PageIndex-only experiment does not supply that verdict.
 
 ## Browser verification
 
