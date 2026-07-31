@@ -13,11 +13,17 @@ Version 0.3.0 is a prerelease. It supports evaluation and bounded pilots, not pr
 
 ## Current research status
 
-The PageIndex v2 evaluation is complete: 1,080 trials produced 1,018 included scores and 62 excluded terminal failures. Free routing selected the required document path in only 18.8% to 31.7% of trials, while larger evidence budgets did not produce a consistent end-to-end quality gain. The experiment therefore does not justify increasing the evidence budget.
+### What the evaluation delivered
 
-The routing, structured-constraint, generated-SQL, hybrid-evidence, retry, and accounting defects exposed during the run are fixed and covered by provider-free tests. Those post-experiment corrections have not been remeasured against DeepSeek, and no replacement experiment is planned. A final vector-versus-PageIndex quality verdict still requires a separately designed comparison.
+The completed PageIndex v2 evaluation produced 1,018 scored outcomes from 1,080 trials and isolated 62 terminal failures. Free routing selected the required document path in 18.8% to 31.7% of trials, while larger evidence windows did not consistently improve end-to-end quality. These results set two operating priorities: keep the current evidence budget and improve routing before expanding context.
 
-Read the [completed evaluation results and handoff](docs/pageindex-evaluation-handoff.md) for metrics, accounting, defect history, artifact identities, and remaining limits.
+The work also produced a repeatable evaluation system: a reviewed 120-case dataset, frozen artifacts, resumable concurrent execution, claim-level judging, cost controls, and deterministic reports. It drove fixes across routing, structured constraints, generated SQL, hybrid evidence, retries, and accounting. Provider-free regression tests now cover those fixes.
+
+### What remains
+
+The next research milestone is a controlled comparison between PageIndex and vector retrieval under the same corpus, prompts, model, judge, and cost envelope. That study should evaluate the corrected system directly. It does not require rerunning the completed PageIndex experiment or increasing the evidence budget.
+
+Read the [completed evaluation results and handoff](docs/pageindex-evaluation-handoff.md) for metrics, accounting, defect history, artifact identities, and experimental limits.
 
 ## Use cases
 
