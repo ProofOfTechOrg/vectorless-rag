@@ -2394,6 +2394,22 @@ async def test_migration_search_reader_permissions_and_guarded_execution() -> No
             )
             assert result.rows == [{"document_id": identifier, "title": "Vectorless Retrieval"}]
             assert result.explain_cost >= 0
+            constrained = await PostgreSQLAdapter(engine, settings).execute(
+                validate_sql(
+                    "SELECT document_id, title FROM agent.paper_catalog_v1",
+                    constraints=MetadataConstraints(topics=["pageindex"]),
+                )
+            )
+            assert constrained.rows == [
+                {"document_id": identifier, "title": "Vectorless Retrieval"}
+            ]
+            excluded = await PostgreSQLAdapter(engine, settings).execute(
+                validate_sql(
+                    "SELECT document_id, title FROM agent.paper_catalog_v1",
+                    constraints=MetadataConstraints(topics=["not-present"]),
+                )
+            )
+            assert excluded.rows == []
             colon_literal = await PostgreSQLAdapter(engine, settings).execute(
                 validate_sql(
                     "SELECT document_id, title FROM agent.paper_catalog_v1 "

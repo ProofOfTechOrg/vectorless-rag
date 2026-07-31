@@ -15,6 +15,7 @@ from sqlglot.errors import SqlglotError
 from sqlglot.optimizer.scope import build_scope
 
 from vectorless_rag.config import Settings
+from vectorless_rag.schemas import MetadataConstraints
 
 APPROVED_RELATIONS = frozenset({"agent.paper_catalog_v1", "agent.ingestion_summary_v1"})
 DANGEROUS_FUNCTIONS = frozenset(
@@ -159,6 +160,91 @@ def _scope_relations(statement: exp.Query) -> set[str]:
             if isinstance(source, exp.Table) and not isinstance(source.this, exp.Func):
                 relations.add(_relation_name(source))
     return relations
+
+
+def _catalog_constraint_predicate(constraints: MetadataConstraints) -> exp.Condition | None:
+    predicates: list[exp.Condition] = []
+    if constraints.arxiv_ids:
+        predicates.append(
+            exp.column("arxiv_id").isin(
+                *[exp.Literal.string(value) for value in constraints.arxiv_ids]
+            )
+        )
+    if constraints.authors:
+        predicates.append(
+            exp.ArrayOverlaps(
+                this=exp.column("authors"),
+                expression=exp.Array(
+                    expressions=[exp.Literal.string(value) for value in constraints.authors]
+                ),
+            )
+        )
+    if constraints.topics:
+        predicates.append(
+            exp.ArrayOverlaps(
+                this=exp.column("topics"),
+                expression=exp.Array(
+                    expressions=[exp.Literal.string(value) for value in constraints.topics]
+                ),
+            )
+        )
+    if constraints.date_from is not None:
+        predicates.append(
+            exp.GTE(
+                this=exp.column("submitted_date"),
+                expression=exp.cast(
+                    exp.Literal.string(constraints.date_from.isoformat()),
+                    "date",
+                ),
+            )
+        )
+    if constraints.date_to is not None:
+        predicates.append(
+            exp.LTE(
+                this=exp.column("submitted_date"),
+                expression=exp.cast(
+                    exp.Literal.string(constraints.date_to.isoformat()),
+                    "date",
+                ),
+            )
+        )
+    return exp.and_(*predicates) if predicates else None
+
+
+def _apply_catalog_constraints(
+    statement: exp.Query,
+    relations: set[str],
+    constraints: MetadataConstraints,
+) -> None:
+    predicate = _catalog_constraint_predicate(constraints)
+    if predicate is None:
+        return
+    relation = "agent.paper_catalog_v1"
+    if "agent.ingestion_summary_v1" in relations:
+        raise SQLRejected(
+            "structured document constraints cannot be applied to agent.ingestion_summary_v1"
+        )
+    if relation not in relations:
+        raise SQLRejected(
+            "structured document constraints require a query over agent.paper_catalog_v1"
+        )
+    for table in list(statement.find_all(exp.Table)):
+        if _relation_name(table) != relation:
+            continue
+        if not table.alias:
+            for column in statement.find_all(exp.Column):
+                if (
+                    column.table == table.name
+                    and column.db == table.db
+                    and column.catalog == table.catalog
+                ):
+                    column.set("db", None)
+                    column.set("catalog", None)
+        inner_table = table.copy()
+        inner_table.set("alias", None)
+        filtered = exp.select("*").from_(inner_table).where(predicate.copy())
+        alias = table.args.get("alias") or exp.TableAlias(this=exp.to_identifier(table.name))
+        table.replace(exp.Subquery(this=filtered, alias=alias.copy()))
 
 
 def match_pattern_text(node: exp.Expr | None) -> tuple[str, bool] | None:
@@ -391,7 +477,11 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
                 )
 
 
-def validate_sql(sql: str, maximum_limit: int = 200) -> ValidatedSQL:
+def validate_sql(
+    sql: str,
+    maximum_limit: int = 200,
+    constraints: MetadataConstraints | None = None,
+) -> ValidatedSQL:
     stripped = sql.strip()
     if not stripped:
         raise SQLRejected("empty SQL")
@@ -461,6 +551,11 @@ def validate_sql(sql: str, maximum_limit: int = 200) -> ValidatedSQL:
         if name not in APPROVED_FUNCTIONS:
             raise SQLRejected(f"function is not approved: {name}")
     _reject_unsafe_short_term_matches(statement)
+    _apply_catalog_constraints(
+        statement,
+        relations,
+        constraints or MetadataConstraints(),
+    )
     limit = statement.args.get("limit")
     if limit is None:
         statement = statement.limit(maximum_limit)

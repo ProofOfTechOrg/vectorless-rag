@@ -1,14 +1,17 @@
 <!-- Content type: Reference -->
-<!-- Content plan: Goal: preserve the completed PageIndex v2 evaluation, its accounting evidence, and the next engineering decision. Audience: maintainers continuing PageIndex retrieval work. Content: immutable baseline, final results, interpretation, defect history, cost audit, artifacts, reuse map, verification, and next work. Open questions: provider-side reconciliation for unknown-usage calls and the design of a route-classification improvement. -->
+<!-- Content plan: Goal: preserve the completed PageIndex v2 evaluation, its accounting evidence, and the route correction it motivated. Audience: maintainers continuing PageIndex retrieval work. Content: immutable baseline, final results, interpretation, defect history, route correction, cost audit, artifacts, reuse map, verification, and remaining limits. Open questions: provider-side reconciliation for unknown-usage calls and empirical validation of the revised route policy if separately authorized later. -->
 
 # PageIndex v2 evaluation results and handoff
 
 The PageIndex v2 evaluation is complete. Do not rerun it or increase its token
-budget to continue this investigation. The evidence points to route
-classification, not evidence-window size, as the first problem to fix.
+budget to continue this investigation. The current checkout fixes the route
+defects exposed by the completed run. No replacement experiment is authorized
+or planned.
 
-This handoff describes branch `fix/pageindex-evaluation-dataset` at runtime
-release `d32f7a36c18a6818fbebce24582fc175107c8b9f`. PostgreSQL was at schema head
+Branch `fix/pageindex-evaluation-dataset` at base commit
+`97b5dca3b4c622a4e6030b978f5f3532ef857e10` is the route-correction baseline.
+The evaluated runtime remains release
+`d32f7a36c18a6818fbebce24582fc175107c8b9f`, with PostgreSQL at schema head
 `0009_atomic_model_call_start`. Reconfirm these anchors against the checkout
 before editing; line numbers are intentionally omitted because they drift.
 
@@ -200,27 +203,72 @@ The completed files have these SHA-256 digests:
 | `claim-judgments.jsonl` | `5e96c7d30afaf5592293d7d20066e3252ede2396f847fc484e18e5eef2b8fd7e` |
 | `summary.json` | `8309bc9a045ebefb27246b40ed3c5f2cf6069671e475b3ce5dd59934141028db` |
 
-## What to do next
+## Route defects corrected after the experiment
 
-Treat route classification as the next engineering unit:
+The existing experiment supplied 360 free-route observations. The table groups
+the persisted choices across both splits and all three evidence budgets. A
+missing route means the provider call failed before a decision was persisted.
 
-1. Export the free-route misclassifications from the existing experiment.
-   Join `trials.jsonl` and `scores.jsonl` by `trial_id`, then use
-   `query_run_id` to inspect `agent.query_runs.route`. No provider call is
-   needed.
-2. Group document questions incorrectly sent to `hybrid` or `clarify` by
-   dataset stratum and prompt shape. Preserve the 6,400/12,800/25,600 groups;
-   do not collapse them before checking whether errors are paired.
-3. Fix route choice in the existing graph/router surfaces. Add a deterministic
-   regression set for the observed prompt shapes.
-4. Run the provider-free suites and the isolated PostgreSQL integration stack.
-5. Freeze a new release and index identity, then run a small matched canary.
-   A new live experiment needs separate spend authorization; this completed
-   experiment does not authorize it.
+| Stratum | `documents` | `hybrid` | `clarify` | Missing |
+| --- | ---: | ---: | ---: | ---: |
+| Explicit single document | 31 | 29 | 0 | 0 |
+| Unconstrained discovery | 4 | 46 | 0 | 10 |
+| Metadata-constrained discovery | 1 | 59 | 0 | 0 |
+| Long cross-section | 41 | 16 | 3 | 0 |
+| Cross-document | 1 | 42 | 0 | 17 |
+| Unanswerable | 7 | 1 | 52 | 0 |
 
-Do not start by increasing `evidence_token_budget`. The free-route failure
-happens before evidence retrieval, and the completed end-to-end results show no
-monotonic benefit from a larger window.
+These outcomes and the subsequent architecture review exposed five defects in
+`GraphRunner`:
+
+- The route request omitted `ChatRequest.constraints`, even though document
+  retrieval applied those constraints later. The router could not distinguish
+  a preselected document or catalog subset from an unconstrained request.
+- The route policy did not give content evidence precedence over output wording.
+  The router treated requests that asked which paper contained or reported a
+  passage as metadata identification and sent them to `hybrid`.
+- The route policy did not distinguish missing intent from missing evidence.
+  The router sent complete questions about a deliberately nonexistent
+  mechanism to `clarify` instead of retrieval and a grounded
+  insufficient-evidence result.
+- Structured constraints reached document retrieval but not guarded SQL.
+  Filtered SQL answers could ignore API-level author, topic, date, or arXiv
+  filters, while hybrid SQL could select documents outside those filters.
+- Hybrid treated any nonempty catalog result as sufficient when body retrieval
+  failed. Catalog metadata cannot answer a request that the route policy says
+  requires page content.
+
+The correction adds every active structured constraint to the route input. The
+route policy now chooses by required evidence source. It explicitly assigns
+quoted passage lookup, content-based paper discovery, and corpus claim checks
+to `documents`. It limits `hybrid` to metadata selection followed by body
+reading, and limits `clarify` to requests whose intent remains incomplete after
+history resolution. The guarded SQL boundary wraps every catalog reference in
+the same structured filters and rejects constrained queries over an
+unfilterable summary view. Hybrid now reports insufficient evidence whenever
+body retrieval is insufficient, regardless of catalog rows.
+
+Provider-free tests verify the complete constraint payload, the observed route
+failure classes, SQL filter enforcement, and hybrid evidence invariants. They
+do not measure how frequently the provider follows the revised prompt. The
+decision for this work is to stop after fixing and reviewing the defects,
+without a new provider-backed experiment.
+
+Do not increase `evidence_token_budget`. Route selection happens before
+evidence retrieval, and the completed end-to-end results show no monotonic
+benefit from a larger window.
+
+## Remaining work and limits
+
+- Reconcile the 124 `review_required` reservations only from provider-side
+  usage evidence.
+- Treat the revised route policy as unmeasured by a live provider until a
+  separately authorized evaluation runs. Do not infer a new accuracy number
+  from provider-free tests.
+- Keep the completed manifest and result artifacts immutable. Any later live
+  comparison requires a new experiment identity because the release changed.
+- A final vector-versus-PageIndex verdict still requires the sealed comparison
+  described in `docs/evaluation.md`.
 
 ## Reuse map
 
@@ -257,14 +305,17 @@ path:
 
 ## Verification record
 
-The behavior changes in the final release passed:
+The behavior changes in the evaluated release and the later route correction
+passed:
 
 ```text
-478 provider-free Python tests
+489 provider-free Python tests
 27 isolated PostgreSQL integration tests
 Ruff lint and format checks
 Basedpyright
 migration head check at 0009_atomic_model_call_start
+PageIndex evaluation dataset validation
+documentation contract validation
 ```
 
 The integration command was:
@@ -312,6 +363,49 @@ score = EvaluationScore(
 All current suite cases expect `RunRoute.documents`; a low free-route score
 therefore means the graph chose another route, not that PageIndex selected the
 wrong document after routing.
+
+`apps/api/src/vectorless_rag/graph.py`, `GraphRunner.run.route`, now supplies
+the request constraints to the router:
+
+```python
+route_input = json.dumps(
+    {
+        "history": state["history"],
+        "current_request": state["question"],
+        "structured_constraints": request.constraints.model_dump(
+            mode="json",
+            exclude_defaults=True,
+        ),
+    },
+    ensure_ascii=False,
+)
+```
+
+`ROUTE_SYSTEM_PROMPT` in the same file defines the corrected precedence. Keep
+the following invariants together when editing it:
+
+- Missing evidence is not missing intent.
+- Page-content discovery uses `documents`, even when the answer identifies a
+  paper.
+- Active structured constraints restrict both document retrieval and guarded
+  catalog SQL.
+- `hybrid` requires metadata selection followed by page-content reading.
+- `sql` requires catalog metadata only.
+
+`apps/api/src/vectorless_rag/sql_guard.py`, `validate_sql`, applies active
+`MetadataConstraints` after validating the generated query and before
+normalizing it. The constraint wrapper must cover every
+`agent.paper_catalog_v1` reference. Constrained queries must reject
+`agent.ingestion_summary_v1`, because that aggregate view cannot enforce
+document-level filters.
+
+`apps/api/src/vectorless_rag/graph.py`, `GraphRunner.run.documents_node`, keeps
+an empty hybrid SQL selection as `restrict_ids=[]`. It also preserves
+insufficiency when catalog selection succeeds but page-content retrieval does
+not. Catalog rows never substitute for the body evidence a hybrid request
+requires. A successful hybrid synthesis must cite at least one document
+evidence label; a SQL-only citation triggers one repair attempt and then fails
+closed.
 
 `apps/api/scripts/execute_evaluation.py`, the same symbol, queues only
 answerable end-to-end answers for claim review:

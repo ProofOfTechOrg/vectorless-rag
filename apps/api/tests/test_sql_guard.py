@@ -1,6 +1,9 @@
+from datetime import date
+
 import pytest
 from sqlalchemy.exc import DataError, OperationalError, ProgrammingError
 
+from vectorless_rag.schemas import MetadataConstraints
 from vectorless_rag.sql_guard import (
     SQLRejected,
     _is_generated_query_rejection,  # pyright: ignore[reportPrivateUsage]
@@ -54,6 +57,68 @@ def test_approved_schema_infrastructure_failures_are_not_generated_sql(
 def test_approved_select_gets_bounded_limit() -> None:
     validated = validate_sql("SELECT document_id, title FROM agent.paper_catalog_v1")
     assert "LIMIT 200" in validated.normalized
+
+
+def test_structured_constraints_wrap_catalog_source_with_enforced_filters() -> None:
+    constraints = MetadataConstraints(
+        arxiv_ids=["2401.01234"],
+        authors=["O'Neil"],
+        topics=["retrieval"],
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 12, 31),
+    )
+
+    validated = validate_sql(
+        "SELECT count(*) FROM agent.paper_catalog_v1",
+        constraints=constraints,
+    )
+
+    assert "arxiv_id IN ('2401.01234')" in validated.normalized
+    assert "authors && ARRAY['O''Neil']" in validated.normalized
+    assert "topics && ARRAY['retrieval']" in validated.normalized
+    assert "submitted_date >= CAST('2024-01-01' AS DATE)" in validated.normalized
+    assert "submitted_date <= CAST('2024-12-31' AS DATE)" in validated.normalized
+
+
+def test_structured_constraints_apply_to_every_catalog_reference() -> None:
+    validated = validate_sql(
+        "SELECT left_paper.title FROM agent.paper_catalog_v1 AS left_paper "
+        "JOIN agent.paper_catalog_v1 AS right_paper "
+        "ON left_paper.document_id = right_paper.document_id",
+        constraints=MetadataConstraints(topics=["retrieval"]),
+    )
+
+    assert validated.normalized.count("topics && ARRAY['retrieval']") == 2
+    assert ") AS left_paper" in validated.normalized
+    assert ") AS right_paper" in validated.normalized
+
+
+def test_structured_constraints_preserve_schema_qualified_columns() -> None:
+    validated = validate_sql(
+        "SELECT agent.paper_catalog_v1.document_id FROM agent.paper_catalog_v1",
+        constraints=MetadataConstraints(authors=["Ada Lovelace"]),
+    )
+
+    assert "SELECT paper_catalog_v1.document_id" in validated.normalized
+    assert "authors && ARRAY['Ada Lovelace']" in validated.normalized
+
+
+def test_structured_constraints_reject_unfilterable_summary_view() -> None:
+    with pytest.raises(SQLRejected, match="cannot be applied to"):
+        validate_sql(
+            "SELECT status, document_count FROM agent.ingestion_summary_v1",
+            constraints=MetadataConstraints(authors=["Ada Lovelace"]),
+        )
+
+
+def test_structured_constraints_reject_mixed_summary_view_query() -> None:
+    with pytest.raises(SQLRejected, match="cannot be applied to"):
+        validate_sql(
+            "SELECT paper.title, summary.document_count "
+            "FROM agent.paper_catalog_v1 AS paper "
+            "CROSS JOIN agent.ingestion_summary_v1 AS summary",
+            constraints=MetadataConstraints(authors=["Ada Lovelace"]),
+        )
 
 
 def test_large_limit_is_reduced() -> None:
