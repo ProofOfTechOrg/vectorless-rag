@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -52,6 +53,36 @@ def test_page_grouping(page_index: Any) -> None:
     assert groups
     assert all(group and len(group) <= 55 for group in groups)
     assert all("<physical_index_1>" in group for group in groups)
+
+
+def test_pypdf_parser(utilities: Any) -> None:
+    def zero_tokens(**kwargs: object) -> int:
+        del kwargs
+        return 0
+
+    utilities.litellm.token_counter = zero_tokens
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "blank.pdf"
+        writer = utilities.pypdf.PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        with path.open("wb") as output:
+            writer.write(output)
+
+        pages = utilities.get_page_tokens(path, model=None, pdf_parser="pypdf")
+
+    assert pages == [("", 0)]
+
+
+def test_pypdf_migration_is_complete(source: Path) -> None:
+    paths = (
+        source / "pageindex/client.py",
+        source / "pageindex/retrieve.py",
+        source / "pageindex/utils.py",
+        source / "requirements.txt",
+    )
+
+    assert all("PyPDF2" not in path.read_text(encoding="utf-8") for path in paths)
+    assert "pypdf==6.14.2" in paths[-1].read_text(encoding="utf-8")
 
 
 def test_continuation_boundaries(page_index: Any) -> None:
@@ -250,6 +281,8 @@ async def test_verify_toc_still_refuses_an_unplaced_toc(page_index: Any) -> None
 
 def main() -> None:
     source = Path(sys.argv[1] if len(sys.argv) > 1 else "/opt/pageindex").resolve()
+    test_pypdf_migration_is_complete(source)
+    test_pypdf_parser(load_modules(source)[1])
     test_page_grouping(load_modules(source)[0])
     test_continuation_boundaries(load_modules(source)[0])
     asyncio.run(test_large_node_keeps_first_subsection_at_node_start(load_modules(source)[0]))

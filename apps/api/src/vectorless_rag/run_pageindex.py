@@ -71,7 +71,7 @@ def main() -> None:
                 Callable[..., list[tuple[object, object]]],
                 utilities.get_page_tokens,
             )
-            pages = get_page_tokens(pdf_path, model=None, pdf_parser="PyPDF2")
+            pages = get_page_tokens(pdf_path, model=None, pdf_parser="pypdf")
             exact_text = [page[0] if isinstance(page[0], str) else "" for page in pages]
             known.pages_output.write_text(
                 json.dumps(exact_text, ensure_ascii=False, separators=(",", ":")),

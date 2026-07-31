@@ -1,6 +1,9 @@
 packages:
   - apps/web
 
+overrides:
+  brace-expansion: 5.0.8
+
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
   - "@astryxdesign/cli@0.1.6"

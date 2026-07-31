@@ -32,8 +32,8 @@ class Settings(BaseSettings):
     pageindex_output_cost_per_million_usd: float | None = None
     pageindex_source_dir: Path = Path("/opt/pageindex")
     pageindex_work_dir: Path = Path("/workspaces")
-    pageindex_version: Literal["190f8b378be58199ca993566a9214dba72089c54+vr6"] = (
-        "190f8b378be58199ca993566a9214dba72089c54+vr6"
+    pageindex_version: Literal["190f8b378be58199ca993566a9214dba72089c54+vr7"] = (
+        "190f8b378be58199ca993566a9214dba72089c54+vr7"
     )
     pageindex_llm_max_attempts: int = 3
     pageindex_async_concurrency: int = 8

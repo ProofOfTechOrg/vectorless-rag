@@ -376,8 +376,8 @@ def test_a_page_containing_a_special_token_literal_still_indexes() -> None:
         model="model",
         prompt_profile="profile",
         options_profile={},
-        parser="PyPDF2",
-        parser_version="3.0.0",
+        parser="pypdf",
+        parser_version="6.14.2",
     )
 
     assert build.manifest.quality.page_count == 10
