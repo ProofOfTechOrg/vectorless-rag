@@ -45,5 +45,5 @@ These pages document the completed PageIndex evaluation, future evaluation workf
 - [Calculate provider costs for PageIndex and vector RAG](token-cost-analysis.md)
 - [Compare vector RAG with the PageIndex system](vector-rag-vs-pageindex-analysis.md)
 - [Harden PageIndex before comparing retrieval architectures](pageindex-improvement-analysis.md)
-- [Read the vendored PageIndex runtime patch](pageindex-runtime-patch.md)
+- [Understand why Vectorless RAG patches PageIndex](pageindex-runtime-patch.md)
 - [Review deferred hardening](DEFERRED.md)
