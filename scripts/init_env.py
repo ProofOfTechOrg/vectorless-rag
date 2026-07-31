@@ -68,7 +68,9 @@ def create_atomically(template_path: Path, output_path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create a local Vectorless RAG environment without overwriting an existing file."
+        description=(
+            "Create a local Vectorless RAG environment without overwriting an existing file."
+        )
     )
     parser.add_argument("--template", type=Path, default=Path(".env.example"))
     parser.add_argument("--output", type=Path, default=Path(".env"))

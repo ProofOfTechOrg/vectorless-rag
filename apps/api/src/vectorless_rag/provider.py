@@ -6,12 +6,15 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import httpx
+import openai
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vectorless_rag.config import Settings
 from vectorless_rag.models import ProviderAvailability, ProviderState
 
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
+DEEPSEEK_MAX_INPUT_TOKENS = 1_000_000
+DEEPSEEK_MAX_OUTPUT_TOKENS = 384_000
 STALE_POSITIVE_WINDOW = timedelta(minutes=5)
 STATUS_CACHE_WINDOW = timedelta(seconds=30)
 
@@ -65,6 +68,8 @@ def _status_code(error: BaseException) -> int | None:
 
 def classify_provider_failure(error: BaseException) -> ProviderFailure:
     status = _status_code(error)
+    if isinstance(error, openai.APIResponseValidationError):
+        return ProviderFailure("upstream_invalid_response", True, status, False)
     if status == 402:
         return ProviderFailure("insufficient_credit", False, status, True)
     if status == 401:
@@ -82,6 +87,7 @@ def classify_provider_failure(error: BaseException) -> ProviderFailure:
             ConnectionError,
             httpx.TimeoutException,
             httpx.NetworkError,
+            openai.APIConnectionError,
         ),
     ):
         return ProviderFailure("network_error", True, status, False)
@@ -111,7 +117,7 @@ class ProviderGate:
             self._hard_failure_at = datetime.now(UTC)
         return failure
 
-    def observe_completion_success(self) -> None:
+    def _clear_hard_failure(self) -> None:
         self._hard_failure = None
         self._hard_failure_at = None
 
@@ -142,7 +148,7 @@ class ProviderGate:
                 and state.checked_at > self._hard_failure_at
                 and state.availability == ProviderAvailability.available
             ):
-                self.observe_completion_success()
+                self._clear_hard_failure()
                 return ProviderObservation(
                     availability=state.availability,
                     reason=state.reason,
@@ -216,7 +222,7 @@ class ProviderGate:
                 configuration_hash,
             )
         if available:
-            self.observe_completion_success()
+            self._clear_hard_failure()
             return await self.persist_observation(
                 session,
                 state,
@@ -244,36 +250,6 @@ class ProviderGate:
                 retryable=observation.availability == ProviderAvailability.unknown,
             )
         return observation
-
-    async def record_completion_result(
-        self,
-        session: AsyncSession,
-        error: BaseException | None,
-    ) -> None:
-        now = datetime.now(UTC)
-        configuration_hash = provider_configuration_hash(self.settings)
-        state = await session.get(ProviderState, "deepseek")
-        if error is None:
-            self.observe_completion_success()
-            await self.persist_observation(
-                session,
-                state,
-                ProviderAvailability.available,
-                None,
-                now,
-                configuration_hash,
-            )
-            return
-        failure = self.observe_completion_failure(error)
-        if failure.blocks_provider:
-            await self.persist_observation(
-                session,
-                state,
-                ProviderAvailability.unavailable,
-                failure.code,
-                now,
-                configuration_hash,
-            )
 
     async def _balance_available(self) -> bool:
         assert self.settings.deepseek_api_key is not None

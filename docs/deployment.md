@@ -56,6 +56,7 @@ Keep these values aligned across `.env`, Compose, and Helm:
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
+| `PAGEINDEX_LLM_MAX_ATTEMPTS` | 3 | Maximum attempts for one PageIndex model operation |
 | `PAGEINDEX_ASYNC_CONCURRENCY` | 8 | Maximum concurrent PageIndex provider calls |
 | `PAGEINDEX_MAX_OUTPUT_TOKENS` | 8,192 | Explicit output ceiling used by calls and reservations |
 | `QUERY_NODE_SELECTION_MAX_OUTPUT_TOKENS` | 4,096 | Output ceiling for non-thinking query node selection |
@@ -63,11 +64,25 @@ Keep these values aligned across `.env`, Compose, and Helm:
 | `INGESTION_LEASE_SECONDS` | 120 | Renewable job lease |
 | `INGESTION_HEARTBEAT_SECONDS` | 30 | Lease renewal interval |
 | `CATALOG_BATCH_TOKEN_LIMIT` | 24,000 | Complete-catalog map batch size |
+| `CATALOG_ROUTING_CONCURRENCY` | 4 | Process-wide concurrent catalog-routing provider calls |
 | `DOCUMENT_LIMIT` | 8 | Maximum selected documents |
 | `EVIDENCE_TOKEN_LIMIT` | 40,000 | Public evidence ceiling |
 | `REQUEST_DEADLINE_SECONDS` | 180 | Complete chat request deadline |
 | `PILOT_DOCUMENT_LIMIT` | 25 | Registration safety gate |
 | `PILOT_COST_LIMIT_USD` | 10 | Frozen-pilot cost ceiling |
+
+Compose forwards the serving and indexing rates independently. Helm maps the same settings as follows:
+
+| Environment variable | Helm value |
+| --- | --- |
+| `DEEPSEEK_INPUT_COST_PER_MILLION_USD` | `deepseekInputCostPerMillionUsd` |
+| `DEEPSEEK_CACHE_HIT_INPUT_COST_PER_MILLION_USD` | `deepseekCacheHitInputCostPerMillionUsd` |
+| `DEEPSEEK_OUTPUT_COST_PER_MILLION_USD` | `deepseekOutputCostPerMillionUsd` |
+| `PAGEINDEX_INPUT_COST_PER_MILLION_USD` | `pageindexInputCostPerMillionUsd` |
+| `PAGEINDEX_CACHE_HIT_INPUT_COST_PER_MILLION_USD` | `pageindexCacheHitInputCostPerMillionUsd` |
+| `PAGEINDEX_OUTPUT_COST_PER_MILLION_USD` | `pageindexOutputCostPerMillionUsd` |
+
+Set all six from current provider pricing before a pilot or evaluation.
 
 Leave `ALLOW_FULL_CORPUS_INDEX=false` until the manifest-driven pilot is accepted and separately authorized.
 
@@ -84,7 +99,7 @@ The web runtime uses Node 22 as its non-root `node` user and exposes `/healthz`.
 
 ## Helm
 
-Use Helm 3 to validate or deploy the chart at `infra/helm/vectorless-rag`. Helm is not required for general frontend development.
+Use Helm 4.2.3 to validate or deploy the chart at `infra/helm/vectorless-rag`. This is the version pinned by continuous integration. Helm is not required for general frontend development.
 
 The existing `ingress` targets the API. `frontendIngress` is independent and targets the web service. Set `appOrigin` to the frontend’s exact HTTPS origin.
 

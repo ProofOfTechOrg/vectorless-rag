@@ -18,6 +18,9 @@ x-app-env: &app-env
   DEEPSEEK_CACHE_HIT_INPUT_COST_PER_MILLION_USD: ${DEEPSEEK_CACHE_HIT_INPUT_COST_PER_MILLION_USD}
   DEEPSEEK_OUTPUT_COST_PER_MILLION_USD: ${DEEPSEEK_OUTPUT_COST_PER_MILLION_USD}
   PAGEINDEX_MODEL: ${PAGEINDEX_MODEL}
+  PAGEINDEX_INPUT_COST_PER_MILLION_USD: ${PAGEINDEX_INPUT_COST_PER_MILLION_USD}
+  PAGEINDEX_CACHE_HIT_INPUT_COST_PER_MILLION_USD: ${PAGEINDEX_CACHE_HIT_INPUT_COST_PER_MILLION_USD}
+  PAGEINDEX_OUTPUT_COST_PER_MILLION_USD: ${PAGEINDEX_OUTPUT_COST_PER_MILLION_USD}
   PAGEINDEX_LLM_MAX_ATTEMPTS: ${PAGEINDEX_LLM_MAX_ATTEMPTS:-3}
   PAGEINDEX_ASYNC_CONCURRENCY: ${PAGEINDEX_ASYNC_CONCURRENCY:-8}
   PAGEINDEX_MAX_OUTPUT_TOKENS: ${PAGEINDEX_MAX_OUTPUT_TOKENS:-8192}
@@ -29,6 +32,7 @@ x-app-env: &app-env
   INGESTION_HEARTBEAT_SECONDS: ${INGESTION_HEARTBEAT_SECONDS:-30}
   INGESTION_STALE_GRACE_SECONDS: ${INGESTION_STALE_GRACE_SECONDS:-300}
   CATALOG_BATCH_TOKEN_LIMIT: ${CATALOG_BATCH_TOKEN_LIMIT:-24000}
+  CATALOG_ROUTING_CONCURRENCY: ${CATALOG_ROUTING_CONCURRENCY:-4}
   DOCUMENT_LIMIT: ${DOCUMENT_LIMIT:-8}
   EVIDENCE_TOKEN_LIMIT: ${EVIDENCE_TOKEN_LIMIT:-40000}
   REQUEST_DEADLINE_SECONDS: ${REQUEST_DEADLINE_SECONDS:-180}
@@ -77,7 +81,10 @@ x-langfuse-env: &langfuse-env
 services:
   api:
     logging: *default-logging
-    build: ./apps/api
+    build:
+      context: ./apps/api
+      args:
+        RELEASE: ${RELEASE}
     restart: unless-stopped
     command: ["sh", "-c", "vectorless-rag migrate && uvicorn vectorless_rag.api:app --host 0.0.0.0 --port 8000"]
     environment: *app-env
@@ -86,6 +93,11 @@ services:
     volumes:
       - ${ARXIV_PDF_HOST_DIR}:/corpus:ro
       - pageindex_work:/workspaces
+      # The evaluation plan is written on the host and executed in here, because the
+      # executor needs the object store, which is not published outside the network. The
+      # mount also stops evaluation-freeze reading a baked corpus manifest that has since
+      # moved on. Run the execute target as the host user so appends land as that user.
+      - ./apps/api/evaluation:/app/evaluation
     depends_on:
       postgres:
         condition: service_healthy
@@ -100,7 +112,10 @@ services:
 
   worker:
     logging: *default-logging
-    build: ./apps/api
+    build:
+      context: ./apps/api
+      args:
+        RELEASE: ${RELEASE}
     restart: unless-stopped
     command: ["python", "-m", "vectorless_rag.worker"]
     environment: *app-env

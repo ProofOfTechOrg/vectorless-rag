@@ -17,7 +17,7 @@ Use the Ingestion page for one PDF, or `make upload-document PDF=/path/file.pdf`
 
 The UI polls every 1.5 seconds until the job reaches a terminal state. Transient status failures switch to five-second polling and do not discard the durable job. A provider wait or deferred state remains visible and continues polling. A fresh successful provider check can resume a waiting job after the provider retry cooldown. Cached checks and fresh checks made during that cooldown cannot resume it.
 
-Mounted sync scans only direct Portable Document Format (PDF) children of `ARXIV_PDF_HOST_DIR`. `make sync-corpus` deduplicates by content. The API supports three modes:
+Mounted sync scans only direct PDF children of `ARXIV_PDF_HOST_DIR`. `make sync-corpus` deduplicates by content. The API supports three modes:
 
 - `ensure_current` reuses a compatible index or stored metadata
 - `rebuild_index` rebuilds the index from compatible stored metadata
@@ -37,7 +37,7 @@ make artifact-verify
 make pilot-report
 ```
 
-`make pilot-run` requires a clean worktree, a running API image whose `RELEASE` equals the current commit, schema head `0005_measurement_experiments`, an available provider, all 25 exact PDFs, a complete price snapshot, and no active ingestion jobs. The Make target reserves `apps/api/pilots/run/` before it invokes the API container. An existing directory stops the command before provider work. A failed run leaves the directory reserved; inspect it before authorizing another run.
+`make pilot-run` requires a clean worktree, a running API image whose `RELEASE` equals the current commit, schema head `0009_atomic_model_call_start`, an available provider, all 25 exact PDFs, a complete price snapshot, and no active ingestion jobs. The Make target reserves `apps/api/pilots/run/` before it invokes the API container. An existing directory stops the command before provider work. A failed run leaves the directory reserved; inspect it before authorizing another run.
 
 The pilot queues one manifest document at a time with `reextract_all`. PostgreSQL rejects any logical call whose three-attempt worst-case reservation would exceed the $10 experiment cap. The worker then defers the job without consuming retry budget. Do not enable full-corpus indexing or run ordinary 537-file sync until the pilot is accepted and separately authorized.
 

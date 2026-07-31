@@ -37,11 +37,13 @@ These pages cover provider-free gates and operating environments:
 
 ## Run research and evaluation
 
-These pages document evaluation workflows and frozen historical conclusions:
+These pages document the completed PageIndex evaluation, future evaluation workflows, and frozen historical decisions:
 
+- [Review the completed PageIndex v2 evaluation](pageindex-evaluation-handoff.md)
 - [Run evaluation workflows](evaluation.md)
 - [Review the generated PageIndex evaluation cases](../apps/api/evaluation/review-pack.md)
 - [Calculate provider costs for PageIndex and vector RAG](token-cost-analysis.md)
 - [Compare vector RAG with the PageIndex system](vector-rag-vs-pageindex-analysis.md)
 - [Harden PageIndex before comparing retrieval architectures](pageindex-improvement-analysis.md)
+- [Read the vendored PageIndex runtime patch](pageindex-runtime-patch.md)
 - [Review deferred hardening](DEFERRED.md)

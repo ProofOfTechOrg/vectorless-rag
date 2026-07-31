@@ -53,14 +53,14 @@ The console can report unavailable credit, rate limiting, authentication failure
 
 - `DEEPSEEK_API_KEY` belongs to the intended account
 - The account has available credit
-- `deepseek-v4-pro` remains listed in the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/)
+- The underlying serving and PageIndex models are currently listed in the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/)
 - The configured retry cooldown has elapsed
 
 Restarting healthy services does not bypass provider cooldown or account state.
 
 ## A PDF is unsupported or ingestion fails
 
-Version 0.2.0 supports born-digital PDFs. It does not perform optical character recognition (OCR).
+The current release supports born-digital PDFs. It does not perform optical character recognition (OCR).
 
 Open the PDF locally and confirm that you can select its text. Use one small file for diagnosis. Inspect sanitized worker logs without copying document text or provider response bodies:
 

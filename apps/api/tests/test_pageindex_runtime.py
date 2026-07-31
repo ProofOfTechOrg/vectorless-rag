@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, cast
 
+import httpx
+import openai
 import pytest
 from litellm.exceptions import AuthenticationError, BadRequestError
 
@@ -79,6 +81,12 @@ async def _async_noop(delay: float) -> None:
     del delay
 
 
+class _StatusError(RuntimeError):
+    def __init__(self, status_code: int) -> None:
+        super().__init__("private provider body")
+        self.status_code = status_code
+
+
 def test_strict_json_parsing_allows_fences_and_narrow_repairs() -> None:
     assert extract_json('prose\n```json\n{"value": None,}\n```') == {"value": None}
     assert extract_json('{"None": "None", "items": [1, 2,]}') == {
@@ -108,6 +116,21 @@ def test_sync_valid_json_and_length_continuation() -> None:
     assert length.complete(
         "provider/model", "prompt", return_finish_reason=True, expect_json=True
     ) == ("partial", "max_output_reached")
+
+
+def test_success_does_not_clear_hard_failure_observed_inflight() -> None:
+    runtime: PageIndexRuntime
+
+    def completion(**kwargs: object) -> object:
+        del kwargs
+        runtime.provider_gate.observe_completion_failure(_StatusError(402))
+        return _response("ready")
+
+    runtime = _runtime(completion)
+
+    assert runtime.complete("provider/model", "prompt") == "ready"
+    assert runtime.provider_gate.hard_failure is not None
+    assert runtime.provider_gate.hard_failure.code == "insufficient_credit"
 
 
 def test_empty_and_invalid_json_append_correction_then_recover() -> None:
@@ -141,6 +164,26 @@ def test_transient_exception_and_insufficient_resource_retry() -> None:
         return response
 
     assert _runtime(completion).complete("provider/model", "prompt") == "ready"
+
+
+def test_sync_http_200_response_validation_failure_retries() -> None:
+    calls = 0
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    response = httpx.Response(200, request=request)
+
+    def completion(**kwargs: object) -> object:
+        nonlocal calls
+        del kwargs
+        calls += 1
+        if calls == 1:
+            raise openai.APIResponseValidationError(
+                response=response,
+                body={"invalid": True},
+            )
+        return _response("ready")
+
+    assert _runtime(completion).complete("provider/model", "prompt") == "ready"
+    assert calls == 2
 
 
 @pytest.mark.parametrize(
@@ -244,6 +287,32 @@ async def test_async_invalid_then_valid() -> None:
     assert all(call["extra_body"] == {"thinking": {"type": "disabled"}} for call in calls)
 
 
+async def test_async_http_200_response_validation_failure_retries() -> None:
+    calls = 0
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    response = httpx.Response(200, request=request)
+
+    async def completion(**kwargs: object) -> object:
+        nonlocal calls
+        del kwargs
+        calls += 1
+        if calls == 1:
+            raise openai.APIResponseValidationError(
+                response=response,
+                body={"invalid": True},
+            )
+        return _response("ready")
+
+    def unused_sync(**kwargs: object) -> object:
+        del kwargs
+        return _response("unused")
+
+    runtime = _runtime(unused_sync, acompletion=completion)
+
+    assert await runtime.acomplete("provider/model", "prompt") == "ready"
+    assert calls == 2
+
+
 async def test_async_invalid_json_fallback_cannot_convert_failure_to_a_fact() -> None:
     calls = 0
 
@@ -287,3 +356,18 @@ async def test_async_json_fallback_does_not_mask_provider_rejection() -> None:
             invalid_json_fallback={"answer": "no"},
         )
     assert error.value.failure_code == "pageindex_provider_rejected"
+
+
+def test_control_characters_from_pdf_text_do_not_discard_the_response() -> None:
+    """PDF text layers carry raw control bytes that the model quotes back inside JSON.
+
+    A lambda extracted from one corpus paper arrives as 0x15, so strict parsing rejected
+    an otherwise valid response and burned every retry on a deterministic failure.
+    """
+    payload = '{"thinking": "title \x15 in FastEmit", "answer": "yes"}'
+    assert extract_json(payload) == {"thinking": "title \x15 in FastEmit", "answer": "yes"}
+
+
+def test_malformed_json_is_still_rejected() -> None:
+    with pytest.raises(InvalidPageIndexJSON):
+        extract_json('{"unterminated": ')

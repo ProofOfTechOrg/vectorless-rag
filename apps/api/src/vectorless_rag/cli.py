@@ -33,9 +33,10 @@ from vectorless_rag.models import (
     QueryRun,
 )
 from vectorless_rag.reporting import (
-    Pricing,
     build_pilot_report,
     build_query_cost_report,
+    indexing_pricing,
+    query_pricing,
     scan_corpus,
 )
 from vectorless_rag.storage import S3ObjectStore
@@ -140,11 +141,8 @@ def pilot_report() -> None:
                     attempts,
                     calls,
                     scan_corpus(settings.arxiv_pdf_dir),
-                    Pricing(
-                        settings.deepseek_input_cost_per_million_usd,
-                        settings.deepseek_cache_hit_input_cost_per_million_usd,
-                        settings.deepseek_output_cost_per_million_usd,
-                    ),
+                    # This report covers ingestion, which runs on the PageIndex model.
+                    indexing_pricing(settings),
                 )
         finally:
             await database.close()
@@ -184,11 +182,8 @@ def query_cost_report(
                 return build_query_cost_report(
                     runs,
                     calls,
-                    Pricing(
-                        settings.deepseek_input_cost_per_million_usd,
-                        settings.deepseek_cache_hit_input_cost_per_million_usd,
-                        settings.deepseek_output_cost_per_million_usd,
-                    ),
+                    # This report covers serving, which runs on the query model.
+                    query_pricing(settings),
                     days=days,
                 )
         finally:

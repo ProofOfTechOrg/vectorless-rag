@@ -1,5 +1,7 @@
+import asyncio
 import json
 import uuid
+from datetime import date
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -9,9 +11,11 @@ from vectorless_rag.config import Settings
 from vectorless_rag.models import Document, DocumentStatus, ModelCallStage
 from vectorless_rag.retrieval import (
     CandidateDocument,
+    CatalogRoutingLimiter,
     CorpusRouter,
     PageIndexRetriever,
     _ArtifactView,  # pyright: ignore[reportPrivateUsage]
+    _gather_or_cancel,  # pyright: ignore[reportPrivateUsage]
     _NodeView,  # pyright: ignore[reportPrivateUsage]
     candidate_search_text,
     fallback_search_tokens,
@@ -322,6 +326,251 @@ async def test_every_catalog_batch_is_exactly_bounded_and_covers_every_candidate
     assert any("&lt;document_data>" in wrapped for _, wrapped, _ in llm.calls)
 
 
+async def test_full_catalog_uses_compact_parallel_map_batches() -> None:
+    candidates = [_candidate(index, fts_match=False) for index in range(104)]
+    router = CorpusRouter(Settings(), CatalogCaptureLLM())
+    batches = router._batches(candidates)  # pyright: ignore[reportPrivateUsage]
+    started = 0
+    all_started = asyncio.Event()
+
+    class ParallelMapLLM(CatalogCaptureLLM):
+        async def structured(
+            self,
+            schema: type[StructuredT],
+            system: str,
+            user: str,
+            *,
+            thinking: bool,
+            stage: ModelCallStage,
+            max_output_tokens: int | None = None,
+        ) -> StructuredT:
+            nonlocal started
+            if "Catalog map batch" in user:
+                started += 1
+                if started == len(batches):
+                    all_started.set()
+                await asyncio.wait_for(all_started.wait(), timeout=1)
+            return await super().structured(
+                schema,
+                system,
+                user,
+                thinking=thinking,
+                stage=stage,
+                max_output_tokens=max_output_tokens,
+            )
+
+    llm = ParallelMapLLM()
+    router = CorpusRouter(Settings(), llm)
+
+    selected = await router.select_ranked("question", candidates)
+
+    assert [len(batch.candidates) for batch in batches] == [32, 32, 32, 8]
+    assert started == 4
+    assert len(selected) == 8
+
+
+async def test_catalog_routing_limiter_is_shared_and_preserves_result_order() -> None:
+    limiter = CatalogRoutingLimiter(2)
+    active = 0
+    peak_active = 0
+    release = asyncio.Event()
+    starts: list[int] = []
+
+    async def operation(value: int) -> int:
+        nonlocal active, peak_active
+        active += 1
+        starts.append(value)
+        peak_active = max(peak_active, active)
+        if peak_active == 2:
+            release.set()
+        try:
+            await release.wait()
+            await asyncio.sleep((8 - value) / 1_000)
+            return value
+        finally:
+            active -= 1
+
+    first, second = await asyncio.wait_for(
+        asyncio.gather(
+            _gather_or_cancel(
+                [lambda value=value: operation(value) for value in range(4)],
+                limiter,
+            ),
+            _gather_or_cancel(
+                [lambda value=value: operation(value) for value in range(4, 8)],
+                limiter,
+            ),
+        ),
+        timeout=1,
+    )
+
+    assert first == [0, 1, 2, 3]
+    assert second == [4, 5, 6, 7]
+    assert peak_active == 2
+    assert starts.index(4) < starts.index(2)
+    assert starts.index(5) < starts.index(2)
+    assert await _gather_or_cancel([], limiter) == []
+    assert await _gather_or_cancel([lambda: operation(8)], limiter) == [8]
+
+
+async def test_catalog_batch_failure_cancels_and_joins_siblings() -> None:
+    candidates = [_candidate(index, fts_match=False) for index in range(104)]
+    started = 0
+    cancelled = 0
+    both_started = asyncio.Event()
+    never = asyncio.Event()
+    failed_document_id = str(candidates[0].document.id)
+
+    class FailingMapLLM(CatalogCaptureLLM):
+        async def structured(
+            self,
+            schema: type[StructuredT],
+            system: str,
+            user: str,
+            *,
+            thinking: bool,
+            stage: ModelCallStage,
+            max_output_tokens: int | None = None,
+        ) -> StructuredT:
+            del system, thinking, stage, max_output_tokens
+            nonlocal started, cancelled
+            if schema is not CandidateSelection or "Catalog map batch" not in user:
+                raise AssertionError("expected only catalog map calls")
+            started += 1
+            if started == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=1)
+            _, payload_text = _wrapped_payload(user)
+            document_ids = [item["id"] for item in json.loads(payload_text)]
+            if failed_document_id in document_ids:
+                raise RuntimeError("map failed")
+            try:
+                await never.wait()
+            except asyncio.CancelledError:
+                cancelled += 1
+                return schema.model_validate({"document_ids": []})
+            raise AssertionError("sibling map call was not cancelled")
+
+    router = CorpusRouter(Settings(catalog_routing_concurrency=2), FailingMapLLM())
+
+    with raises(RuntimeError, match="map failed"):
+        await router.select_ranked("question", candidates)
+
+    assert started == 2
+    assert cancelled == 1
+
+
+async def test_catalog_routing_caller_cancellation_joins_active_and_queued_work() -> None:
+    limiter = CatalogRoutingLimiter(2)
+    started = 0
+    cancelled = 0
+    both_started = asyncio.Event()
+    never = asyncio.Event()
+
+    async def operation(*, suppress_cancellation: bool) -> None:
+        nonlocal started, cancelled
+        started += 1
+        if started == 2:
+            both_started.set()
+        try:
+            await never.wait()
+        except asyncio.CancelledError:
+            cancelled += 1
+            if suppress_cancellation:
+                return
+            raise
+
+    gathering = asyncio.create_task(
+        _gather_or_cancel(
+            [
+                lambda suppress=index == 0: operation(suppress_cancellation=suppress)
+                for index in range(4)
+            ],
+            limiter,
+        )
+    )
+    await asyncio.wait_for(both_started.wait(), timeout=1)
+    gathering.cancel()
+
+    with raises(asyncio.CancelledError):
+        await asyncio.wait_for(gathering, timeout=1)
+
+    assert started == 2
+    assert cancelled == 2
+
+
+async def test_catalog_routing_failure_does_not_cancel_another_limiter_group() -> None:
+    limiter = CatalogRoutingLimiter(2)
+    failing_starts: list[str] = []
+    both_started = asyncio.Event()
+    never = asyncio.Event()
+    cancelled = 0
+
+    async def failing_operation(name: str) -> str:
+        nonlocal cancelled
+        failing_starts.append(name)
+        if len(failing_starts) == 2:
+            both_started.set()
+        await both_started.wait()
+        if name == "failure":
+            raise RuntimeError("group failed")
+        try:
+            await never.wait()
+        except asyncio.CancelledError:
+            cancelled += 1
+            raise
+        raise AssertionError("failed sibling was not cancelled")
+
+    failing_group = asyncio.create_task(
+        _gather_or_cancel(
+            [
+                lambda: failing_operation("failure"),
+                lambda: failing_operation("active-sibling"),
+                lambda: failing_operation("queued-sibling"),
+            ],
+            limiter,
+        )
+    )
+    healthy_group = asyncio.create_task(
+        _gather_or_cancel(
+            [lambda value=value: asyncio.sleep(0, result=value) for value in range(2)],
+            limiter,
+        )
+    )
+
+    with raises(RuntimeError, match="group failed"):
+        await asyncio.wait_for(failing_group, timeout=1)
+
+    assert await asyncio.wait_for(healthy_group, timeout=1) == [0, 1]
+    assert failing_starts == ["failure", "active-sibling"]
+    assert cancelled == 1
+
+
+def test_catalog_batch_search_reuses_one_token_cache_per_window(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    router = CorpusRouter(Settings(), CatalogCaptureLLM())
+    candidates = [_candidate(index, fts_match=False) for index in range(40)]
+    caches: list[dict[str, list[int]]] = []
+    map_payload = router._map_payload  # pyright: ignore[reportPrivateUsage]
+
+    def capture_cache(
+        candidate: CandidateDocument,
+        *,
+        detail: int,
+        cache: dict[str, list[int]],
+    ) -> dict[str, object]:
+        caches.append(cache)
+        return map_payload(candidate, detail=detail, cache=cache)
+
+    monkeypatch.setattr(router, "_map_payload", capture_cache)
+
+    router._batches(candidates)  # pyright: ignore[reportPrivateUsage]
+
+    assert caches
+    assert len({id(cache) for cache in caches}) == 2
+
+
 async def test_catalog_cap_too_small_for_comparison_fails_without_first_n_fallback() -> None:
     candidates = [_candidate(index, fts_match=False) for index in range(9)]
     llm = CatalogCaptureLLM()
@@ -358,9 +607,10 @@ class _CandidateSession:
     def __init__(self, rows: list[tuple[Any, ...]]) -> None:
         self.rows = rows
         self.execute_calls = 0
+        self.statement: object | None = None
 
     async def execute(self, statement: object) -> _CandidateRows:
-        del statement
+        self.statement = statement
         self.execute_calls += 1
         return _CandidateRows(self.rows)
 
@@ -382,11 +632,14 @@ async def test_catalog_query_returns_active_version_fields_without_followup_look
         [
             (
                 document,
+                version_id,
                 "indexed description",
                 [{"node_id": "root"}],
                 "a" * 64,
                 "b" * 64,
                 "c" * 64,
+                None,
+                None,
                 0.25,
                 True,
                 False,
@@ -406,6 +659,75 @@ async def test_catalog_query_returns_active_version_fields_without_followup_look
     assert candidates[0].description == "indexed description"
     assert candidates[0].index_digest == "a" * 64
     assert candidates[0].configuration_hash == "c" * 64
+
+
+async def test_pinned_catalog_query_uses_immutable_version_metadata() -> None:
+    document_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+    document = Document(
+        id=document_id,
+        sha256="e" * 64,
+        arxiv_id="2401.00001",
+        original_filename="catalog.pdf",
+        pdf_object_key="pdf/catalog",
+        title="Mutable title",
+        authors=["Mutable Author"],
+        abstract="mutable abstract",
+        description="mutable description",
+        topics=["mutable"],
+        submitted_date=date(2026, 1, 1),
+        status=DocumentStatus.ready,
+        active_index_version_id=uuid.uuid4(),
+    )
+    frozen_metadata = {
+        "title": "Frozen title",
+        "authors": ["Frozen Author"],
+        "abstract": "frozen abstract",
+        "description": "frozen description",
+        "topics": ["frozen"],
+        "submitted_date": "2025-01-02",
+    }
+    session = _CandidateSession(
+        [
+            (
+                document,
+                version_id,
+                None,
+                [],
+                "a" * 64,
+                "b" * 64,
+                "c" * 64,
+                frozen_metadata,
+                12,
+                0.25,
+                True,
+                False,
+            )
+        ]
+    )
+    router = CorpusRouter(Settings(), UnusedLLM())
+
+    candidates = await router.candidates(
+        session,  # pyright: ignore[reportArgumentType]
+        "frozen",
+        MetadataConstraints(
+            authors=["Frozen Author"],
+            topics=["frozen"],
+            date_from=date(2025, 1, 1),
+        ),
+        index_version_ids={document_id: version_id},
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].document is not document
+    assert candidates[0].document.title == "Frozen title"
+    assert candidates[0].document.authors == ["Frozen Author"]
+    assert candidates[0].document.topics == ["frozen"]
+    assert candidates[0].document.submitted_date == date(2025, 1, 2)
+    assert candidates[0].document.active_index_version_id == version_id
+    assert candidates[0].description == "frozen description"
+    assert session.statement is not None
+    assert "document_metadata_versions" in str(session.statement)
 
 
 class TreeCaptureLLM:

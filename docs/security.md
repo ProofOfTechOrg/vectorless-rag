@@ -25,7 +25,11 @@ FastAPI stores verifiers instead of raw API keys and constrains both generated q
 
 FastAPI stores only an API-key prefix and HMAC-SHA256 digest. Keys have `chat`, `documents:read`, and/or `admin:ingest`. Thread history/listing and feedback are isolated by API-key ID. Document content is treated as untrusted data rather than instructions.
 
-SQL generation is restricted to a single read-only `SELECT`/CTE over curated views and executes with row, statement-timeout, lock-timeout, payload, and explain-cost bounds. Chat has a request deadline and streaming disconnects propagate cancellation.
+SQL generation is restricted to a single read-only `SELECT`/CTE over curated views and executes with row, statement-timeout, lock-timeout, payload, and explain-cost bounds. Structured arXiv ID, author, topic, and date-range constraints are supplied to the router and enforced independently by guarded SQL and document retrieval. Guarded SQL wraps every `agent.paper_catalog_v1` source in the active filters and rejects constrained access to `agent.ingestion_summary_v1`, which cannot enforce document-level constraints.
+
+Hybrid retrieval preserves an empty SQL document selection as an empty restriction. Catalog rows cannot substitute for missing page evidence, and a successful hybrid synthesis must cite at least one document evidence label. Failed or insufficient body retrieval therefore fails closed even when catalog metadata was returned.
+
+Chat has a request deadline and streaming disconnects propagate cancellation.
 
 Uploads accept bounded born-digital PDFs. Mounted sync uses a fixed configured root and direct `.pdf` children, never a caller-provided path. The 25-document registration gate, disabled full-corpus flag, frozen manifest, and database-enforced $10 reservation ceiling prevent accidental corpus-wide model use.
 

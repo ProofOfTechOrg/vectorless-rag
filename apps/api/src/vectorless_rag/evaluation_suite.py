@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import math
 import random
 import uuid
 from collections import Counter, defaultdict
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from vectorless_rag.config import Settings
+from vectorless_rag.provider import DEEPSEEK_MAX_INPUT_TOKENS, DEEPSEEK_MAX_OUTPUT_TOKENS
 
 EVALUATION_NAMESPACE = uuid.UUID("54140b03-b887-5abf-b546-c619a055425c")
 STRATA = (
@@ -20,13 +28,112 @@ STRATA = (
     "cross_document",
     "unanswerable",
 )
+# Strata whose prompt must not name the document it is supposed to make the router find.
+DISCOVERY_STRATA = frozenset(
+    {"unconstrained_discovery", "metadata_constrained_discovery", "cross_document"}
+)
+# A review a human has finished, whichever way it went. Distinct from the statuses a suite
+# may actually run with, which excludes rejected.
+COMPLETED_REVIEW_STATUSES = frozenset({"approved", "edited", "rejected"})
+USABLE_REVIEW_STATUSES = frozenset({"approved", "edited"})
 EXPERIMENT_KINDS = (
     "route",
-    "corpus_routing",
     "oracle_document_retrieval",
     "forced_route_end_to_end",
 )
 EVIDENCE_BUDGETS = (6_400, 12_800, 25_600)
+PRICE_SNAPSHOT_KEYS = frozenset(
+    {
+        "input_per_million_usd",
+        "cache_hit_input_per_million_usd",
+        "output_per_million_usd",
+        "max_input_tokens",
+        "max_output_tokens",
+        "max_attempts",
+    }
+)
+EVALUATION_RUNTIME_SETTING_NAMES = (
+    "deepseek_model",
+    "pageindex_max_output_tokens",
+    "query_node_selection_max_output_tokens",
+    "pageindex_call_timeout_seconds",
+    "request_deadline_seconds",
+    "candidate_limit",
+    "catalog_batch_token_limit",
+    "catalog_routing_concurrency",
+    "document_limit",
+    "page_ranges_per_document",
+    "fetched_page_limit",
+    "evidence_token_limit",
+    "sql_row_limit",
+    "sql_timeout_ms",
+    "sql_lock_timeout_ms",
+    "sql_payload_limit_bytes",
+    "sql_explain_cost_ceiling",
+)
+
+
+@contextmanager
+def evaluation_ledger_lock(run: Path) -> Generator[None]:
+    with (run / ".evaluation-ledger.lock").open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def evaluation_configuration_sha256(
+    settings: Settings,
+    *,
+    execution_concurrency: int,
+) -> str:
+    snapshot = {name: getattr(settings, name) for name in EVALUATION_RUNTIME_SETTING_NAMES}
+    snapshot["execution_concurrency"] = execution_concurrency
+    return hashlib.sha256(
+        json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def evaluation_price_snapshot(
+    settings: Settings, *, maximum_provider_attempts: int
+) -> dict[str, float]:
+    rates = {
+        "input_per_million_usd": settings.deepseek_input_cost_per_million_usd,
+        "cache_hit_input_per_million_usd": (settings.deepseek_cache_hit_input_cost_per_million_usd),
+        "output_per_million_usd": settings.deepseek_output_cost_per_million_usd,
+    }
+    if any(value is None for value in rates.values()):
+        raise ValueError("all three provider price settings are required")
+    max_output_tokens = max(
+        settings.pageindex_max_output_tokens,
+        settings.query_node_selection_max_output_tokens,
+    )
+    if max_output_tokens > DEEPSEEK_MAX_OUTPUT_TOKENS:
+        raise ValueError("configured output limit exceeds the provider maximum")
+    return {
+        **{key: float(value) for key, value in rates.items() if value is not None},
+        "max_input_tokens": float(DEEPSEEK_MAX_INPUT_TOKENS),
+        "max_output_tokens": float(max_output_tokens),
+        "max_attempts": float(maximum_provider_attempts),
+    }
+
+
+def frozen_index_sha256(entries: Sequence[tuple[str | None, str]]) -> str:
+    identifiers = [identifier for identifier, _ in entries]
+    counts = Counter(identifiers)
+    ambiguous = sorted(
+        str(identifier) for identifier, count in counts.items() if identifier is None or count > 1
+    )
+    if ambiguous:
+        raise ValueError(
+            f"{len(ambiguous)} arXiv identifier(s) are missing or shared by several ready "
+            f"documents, so the digest would not identify the index: {ambiguous[:5]}"
+        )
+    indexed = {str(identifier): digest for identifier, digest in entries}
+    return hashlib.sha256(
+        "\n".join(f"{arxiv_id}\0{indexed[arxiv_id]}" for arxiv_id in sorted(indexed)).encode()
+    ).hexdigest()
 
 
 class StrictEvaluationModel(BaseModel):
@@ -68,7 +175,7 @@ class ReviewRecord(StrictEvaluationModel):
 
     @model_validator(mode="after")
     def approval_has_identity(self) -> ReviewRecord:
-        if self.status in {"approved", "edited", "rejected"} and (
+        if self.status in COMPLETED_REVIEW_STATUSES and (
             not self.reviewer or self.reviewed_at is None
         ):
             raise ValueError("completed reviews require reviewer and timestamp")
@@ -124,14 +231,64 @@ class CorpusDocument(StrictEvaluationModel):
     page_count: int = Field(ge=1)
 
 
+def corpus_snapshot_sha256(documents: Sequence[CorpusDocument]) -> str:
+    identifiers = [document.arxiv_id for document in documents]
+    duplicates = sorted(
+        identifier for identifier, count in Counter(identifiers).items() if count > 1
+    )
+    if duplicates:
+        raise ValueError(f"evaluation corpus repeats arXiv IDs: {duplicates[:5]}")
+    return hashlib.sha256(
+        "\n".join(
+            f"{document.arxiv_id}\0{document.pdf_sha256}"
+            for document in sorted(documents, key=lambda item: item.arxiv_id)
+        ).encode()
+    ).hexdigest()
+
+
 class EvaluationCorpusManifest(StrictEvaluationModel):
     schema_version: Literal[1]
     corpus_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     documents: list[CorpusDocument] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def content_matches_snapshot(self) -> EvaluationCorpusManifest:
+        if corpus_snapshot_sha256(self.documents) != self.corpus_snapshot_sha256:
+            raise ValueError("evaluation corpus documents do not match its snapshot")
+        return self
+
+
+def validate_indexed_corpus(
+    entries: Sequence[tuple[str | None, str]],
+    corpus: EvaluationCorpusManifest,
+) -> None:
+    identifiers = [identifier for identifier, _ in entries]
+    duplicates = sorted(
+        str(identifier)
+        for identifier, count in Counter(identifiers).items()
+        if identifier is None or count > 1
+    )
+    if duplicates:
+        raise ValueError(
+            f"active index has missing or duplicate arXiv identifiers: {duplicates[:5]}"
+        )
+    indexed = {str(identifier): digest for identifier, digest in entries}
+    expected = {document.arxiv_id: document.pdf_sha256 for document in corpus.documents}
+    missing = sorted(set(expected) - set(indexed))
+    mismatched = sorted(
+        arxiv_id
+        for arxiv_id, digest in expected.items()
+        if indexed.get(arxiv_id) is not None and indexed[arxiv_id] != digest
+    )
+    if missing or mismatched:
+        raise ValueError(
+            "active index does not match the reviewed corpus PDFs: "
+            f"missing={missing[:5]}, digest_mismatch={mismatched[:5]}"
+        )
+
 
 class FrozenEvaluationManifest(StrictEvaluationModel):
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     experiment_id: uuid.UUID
     release_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
     configuration_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -139,10 +296,44 @@ class FrozenEvaluationManifest(StrictEvaluationModel):
     index_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     dataset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     price_snapshot: dict[str, float]
-    repetitions: Literal[3]
+    # Repetitions estimate within-configuration variance. A single pass still supports the
+    # across-item bootstrap, so the count is recorded rather than fixed, and the report
+    # carries it so a one-pass run is never mistaken for a repeated one.
+    repetitions: int = Field(ge=1, le=3)
     evidence_budgets: tuple[Literal[6400, 12800, 25600], ...]
+    execution_concurrency: int = Field(ge=1, le=8)
     seed: int
+    # Frozen at plan time and materialised as the experiment's database ceiling before the
+    # first trial, so an unattended run stops at a number chosen in advance rather than at
+    # whatever the provider is willing to bill.
+    maximum_cost_usd: Decimal = Field(
+        gt=Decimal("0"),
+        max_digits=14,
+        decimal_places=6,
+        allow_inf_nan=False,
+    )
     created_at: datetime
+
+    @field_validator("price_snapshot")
+    @classmethod
+    def complete_price_snapshot(cls, value: dict[str, float]) -> dict[str, float]:
+        if set(value) != set(PRICE_SNAPSHOT_KEYS):
+            raise ValueError("evaluation price snapshot is incomplete")
+        if any(not math.isfinite(item) or item < 0 for item in value.values()):
+            raise ValueError("evaluation price snapshot values must be finite and non-negative")
+        if any(
+            value[key] <= 0
+            for key in (
+                "input_per_million_usd",
+                "cache_hit_input_per_million_usd",
+                "output_per_million_usd",
+            )
+        ):
+            raise ValueError("evaluation provider prices must be positive")
+        for key in ("max_input_tokens", "max_output_tokens", "max_attempts"):
+            if value[key] < 1 or not value[key].is_integer():
+                raise ValueError(f"{key} must be a positive integer")
+        return value
 
     @model_validator(mode="after")
     def fixed_budgets(self) -> FrozenEvaluationManifest:
@@ -178,6 +369,9 @@ class EvaluationScore(StrictEvaluationModel):
     trial_id: uuid.UUID
     query_run_id: uuid.UUID | None = None
     route_correct: float | None = Field(default=None, ge=0, le=1)
+    # Unanswerable cases only: whether the run refused instead of citing. Kept apart from the
+    # recall metrics so a refusal is never averaged into a ratio over target spans.
+    refusal_correct: float | None = Field(default=None, ge=0, le=1)
     document_recall: float | None = Field(default=None, ge=0, le=1)
     support_recall: float | None = Field(default=None, ge=0, le=1)
     answer_claim_recall: float | None = Field(default=None, ge=0, le=1)
@@ -188,6 +382,38 @@ class EvaluationScore(StrictEvaluationModel):
     retry_count: int = Field(default=0, ge=0)
     failure_code: str | None = Field(default=None, max_length=80)
     included: bool = True
+
+
+class ClaimJudgeItem(StrictEvaluationModel):
+    trial_id: uuid.UUID
+    item_id: uuid.UUID
+    claims: list[str] = Field(min_length=1)
+    answer: str
+
+    @property
+    def answer_sha256(self) -> str:
+        return hashlib.sha256(self.answer.encode()).hexdigest()
+
+
+class ClaimJudgment(StrictEvaluationModel):
+    trial_id: uuid.UUID
+    item_id: uuid.UUID
+    claims: list[str] = Field(min_length=1)
+    answer_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    supported: list[bool] = Field(min_length=1)
+    reviewer: str = Field(min_length=1, max_length=128)
+    method: Literal["human", "automated"]
+    reviewed_at: datetime
+
+    @model_validator(mode="after")
+    def one_decision_per_claim(self) -> ClaimJudgment:
+        if len(self.supported) != len(self.claims):
+            raise ValueError("claim judgments require one decision per claim")
+        return self
+
+    @property
+    def recall(self) -> float:
+        return sum(self.supported) / len(self.supported)
 
 
 def stable_item_id(
@@ -229,10 +455,10 @@ def build_trials(
     cases: list[EvaluationCase],
     *,
     seed: int,
-    repetitions: int = 3,
+    repetitions: int = 1,
 ) -> list[EvaluationTrial]:
-    if repetitions != 3:
-        raise ValueError("the frozen evaluation protocol requires exactly three repetitions")
+    if not 1 <= repetitions <= 3:
+        raise ValueError("evaluation repetitions must be between one and three")
     values: list[tuple[EvaluationCase, str, int, int]] = []
     for repetition in range(1, repetitions + 1):
         for budget in EVIDENCE_BUDGETS:
@@ -317,18 +543,14 @@ def validate_suite(
     manifest = {document.arxiv_id: document for document in corpus.documents}
     split_targets: defaultdict[str, set[str]] = defaultdict(set)
     for case in cases:
-        if require_reviewed and case.review.status not in {"approved", "edited"}:
+        if require_reviewed and case.review.status not in USABLE_REVIEW_STATUSES:
             raise ValueError(f"case has no completed review: {case.item_id}")
         raw = case.model_dump(mode="json")
         if case.review.source_hash != case_source_hash(raw):
             raise ValueError(f"case review source hash is stale: {case.item_id}")
         target_ids = {target.arxiv_id for target in case.target_documents}
         split_targets[case.split].update(target_ids)
-        if case.stratum in {
-            "unconstrained_discovery",
-            "metadata_constrained_discovery",
-            "cross_document",
-        }:
+        if case.stratum in DISCOVERY_STRATA:
             normalized_prompt = case.prompt.casefold()
             if any(target_id.casefold() in normalized_prompt for target_id in target_ids):
                 raise ValueError(f"discovery prompt leaks a target ID: {case.item_id}")

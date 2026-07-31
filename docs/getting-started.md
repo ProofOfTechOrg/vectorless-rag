@@ -37,7 +37,7 @@ Open `.env` and assign your provider key:
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 ```
 
-Keep `DEEPSEEK_MODEL=deepseek-v4-pro` and `PAGEINDEX_MODEL=deepseek/deepseek-v4-pro`. Confirm current availability and cost in the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/).
+Keep `DEEPSEEK_MODEL=deepseek-v4-flash` for serving and `PAGEINDEX_MODEL=deepseek/deepseek-v4-pro` for indexing. The two are priced separately, by `DEEPSEEK_*_COST_PER_MILLION_USD` and `PAGEINDEX_*_COST_PER_MILLION_USD`, because cost reports resolve each recorded call against the rates of the model that produced it. Confirm current availability and cost in the [official DeepSeek model and pricing reference](https://api-docs.deepseek.com/quick_start/pricing/).
 
 Do not commit `.env` or copy its values into logs, issues, shell history, or browser storage.
 
@@ -80,7 +80,7 @@ The worker sends document content to DeepSeek during PageIndex construction. Sto
 
 Open **Chat** and ask a question whose answer appears in the uploaded document. A successful response streams to completion and includes a citation with the document and page number.
 
-Open the citation to verify that its page and quoted evidence support the answer. The console links to document detail because v0.2.0 does not include an embedded PDF viewer.
+Open the citation to verify that its page and quoted evidence support the answer. The console links to document detail because the current release does not include an embedded PDF viewer.
 
 ## Stop without deleting data
 

@@ -4,12 +4,15 @@ import math
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
 import fitz
 
+from vectorless_rag.config import Settings
 from vectorless_rag.graph import is_static_capability_request
 from vectorless_rag.models import (
     ArtifactAction,
@@ -49,9 +52,94 @@ ATOMIC_TOKEN_FIELDS = (
 
 @dataclass(frozen=True)
 class Pricing:
+    """Rates for one model, optionally overridden per model name.
+
+    Indexing and query serving run on different models at different rates, and every call
+    records which model produced it, so a report that applies one rate to both silently
+    misstates whichever model it did not describe.
+    """
+
     cache_miss_input_per_million_usd: float | None
     cache_hit_input_per_million_usd: float | None
     output_per_million_usd: float | None
+    environment_prefix: str = "DEEPSEEK"
+    # The model these base rates describe. None means they describe whatever they are
+    # applied to, which is only correct when the caller knows there is one model.
+    model: str | None = None
+    overrides: Mapping[str, Pricing] = dataclass_field(
+        default_factory=lambda: cast(dict[str, "Pricing"], {})
+    )
+
+    def for_model(self, model: str) -> Pricing | None:
+        """Rates for a recorded model name, or None when none are configured for it.
+
+        Returning the base rates for an unrecognised model would price it confidently and
+        wrongly: a call recorded under a model the configuration has since moved off would
+        silently take the current model's rate. A caller that leaves `model` unset keeps the
+        single-rate behaviour, since then the base rates describe every call by definition.
+        """
+        override = self.overrides.get(model)
+        if override is not None:
+            return override
+        return self if self.model is None or self.model == model else None
+
+    def missing(self) -> list[str]:
+        return [
+            f"{self.environment_prefix}_{name}_COST_PER_MILLION_USD"
+            for name, value in (
+                ("INPUT", self.cache_miss_input_per_million_usd),
+                ("CACHE_HIT_INPUT", self.cache_hit_input_per_million_usd),
+                ("OUTPUT", self.output_per_million_usd),
+            )
+            if value is None
+        ]
+
+
+def _indexing_rates(settings: Settings) -> Pricing:
+    return Pricing(
+        settings.pageindex_input_cost_per_million_usd,
+        settings.pageindex_cache_hit_input_cost_per_million_usd,
+        settings.pageindex_output_cost_per_million_usd,
+        environment_prefix="PAGEINDEX",
+    )
+
+
+def _indexing_model_names(settings: Settings) -> tuple[str, ...]:
+    # Ingestion records the model with any litellm/ prefix already stripped, so that is the
+    # form calls are keyed by; the configured spelling is kept too for a report run against
+    # rows written before the stripping.
+    return tuple({settings.pageindex_model, settings.pageindex_model.removeprefix("litellm/")})
+
+
+def _serving_rates(settings: Settings) -> Pricing:
+    return Pricing(
+        settings.deepseek_input_cost_per_million_usd,
+        settings.deepseek_cache_hit_input_cost_per_million_usd,
+        settings.deepseek_output_cost_per_million_usd,
+        model=settings.deepseek_model,
+    )
+
+
+def query_pricing(settings: Settings) -> Pricing:
+    """Rates for serving, with indexing calls priced correctly if any appear."""
+    indexing = _indexing_rates(settings)
+    serving = _serving_rates(settings)
+    return dataclass_replace(
+        serving, overrides={name: indexing for name in _indexing_model_names(settings)}
+    )
+
+
+def indexing_pricing(settings: Settings) -> Pricing:
+    """Rates for ingestion, with serving calls priced correctly if any appear."""
+    indexing = _indexing_rates(settings)
+    return dataclass_replace(
+        indexing,
+        model=settings.pageindex_model,
+        overrides={
+            **{name: indexing for name in _indexing_model_names(settings)},
+            settings.deepseek_model: _serving_rates(settings),
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -161,31 +249,50 @@ def _payload_int(payload: Mapping[str, object], key: str) -> int:
     return value
 
 
+def _rate_cost(vector: Mapping[str, int], rates: Pricing) -> float:
+    assert rates.cache_miss_input_per_million_usd is not None
+    assert rates.cache_hit_input_per_million_usd is not None
+    assert rates.output_per_million_usd is not None
+    return (
+        vector["cache_hit_input_tokens"] * rates.cache_hit_input_per_million_usd
+        + (vector["cache_miss_input_tokens"] + vector["unattributed_input_tokens"])
+        * rates.cache_miss_input_per_million_usd
+        + vector["output_tokens"] * rates.output_per_million_usd
+    ) / 1_000_000
+
+
 def _price_usage(
     payload: Mapping[str, object],
     vector: dict[str, int],
     pricing: Pricing,
+    calls: Sequence[ModelCall] = (),
 ) -> dict[str, object]:
-    missing: list[str] = []
-    if pricing.cache_miss_input_per_million_usd is None:
-        missing.append("DEEPSEEK_INPUT_COST_PER_MILLION_USD")
-    if pricing.cache_hit_input_per_million_usd is None:
-        missing.append("DEEPSEEK_CACHE_HIT_INPUT_COST_PER_MILLION_USD")
-    if pricing.output_per_million_usd is None:
-        missing.append("DEEPSEEK_OUTPUT_COST_PER_MILLION_USD")
+    # Price each model's calls at its own rates; without overrides this is one group and
+    # reduces exactly to the single-rate behaviour.
+    grouped: defaultdict[str, list[ModelCall]] = defaultdict(list)
+    for call in calls:
+        grouped[call.model].append(call)
+    resolved = {model: pricing.for_model(model) for model in grouped}
+    rates_used = [rates for rates in resolved.values() if rates is not None] or [pricing]
+    # A model with no configured rate is named in the report rather than absorbed into
+    # whichever rate happened to be the base, which would be a confident wrong number.
+    missing = sorted(
+        {name for rates in rates_used for name in rates.missing()}
+        | {f"PRICE_FOR_MODEL:{model}" for model, rates in resolved.items() if rates is None}
+    )
+
     cost: float | None = None
     if all(payload.get(field) == 0 for field in TOKEN_FIELDS):
         cost = 0.0
     elif not missing and payload["usage_available_calls"]:
-        assert pricing.cache_miss_input_per_million_usd is not None
-        assert pricing.cache_hit_input_per_million_usd is not None
-        assert pricing.output_per_million_usd is not None
-        cost = (
-            vector["cache_hit_input_tokens"] * pricing.cache_hit_input_per_million_usd
-            + (vector["cache_miss_input_tokens"] + vector["unattributed_input_tokens"])
-            * pricing.cache_miss_input_per_million_usd
-            + vector["output_tokens"] * pricing.output_per_million_usd
-        ) / 1_000_000
+        if grouped:
+            cost = sum(
+                _rate_cost(_usage_summary(group)[1], rates)
+                for model, group in grouped.items()
+                if (rates := resolved[model]) is not None
+            )
+        else:
+            cost = _rate_cost(vector, pricing)
     return {
         "known_cost_usd": round(cost, 6) if cost is not None else None,
         "missing_price_configuration": missing,
@@ -200,7 +307,7 @@ def _price_usage(
 
 def _usage_and_cost(calls: Sequence[ModelCall], pricing: Pricing) -> dict[str, object]:
     payload, vector = _usage_summary(calls)
-    return {**payload, "cost": _price_usage(payload, vector, pricing)}
+    return {**payload, "cost": _price_usage(payload, vector, pricing, calls)}
 
 
 def _percentile(values: Sequence[int], fraction: float) -> float:
@@ -580,7 +687,7 @@ def build_pilot_report(
             "selection": "latest_telemetry_complete_created_or_rebuilt_attempt_per_document",
             "usage": {
                 **sample_usage_payload,
-                "cost": _price_usage(sample_usage_payload, sample_vector, pricing),
+                "cost": _price_usage(sample_usage_payload, sample_vector, pricing, sample_calls),
             },
         },
         "corpus": {
@@ -595,7 +702,7 @@ def build_pilot_report(
             "linear_regression_sensitivity": regression,
             "observed_retry_overhead": {
                 **retry_payload,
-                "cost": _price_usage(retry_payload, retry_vector, pricing),
+                "cost": _price_usage(retry_payload, retry_vector, pricing, retry_calls),
             },
             "retry_adjusted": retry_adjusted,
             "missing_page_bands": missing_bands,
@@ -663,7 +770,7 @@ def build_query_cost_report(
             incomplete = run_is_incomplete(run)
             if not incomplete:
                 run_payload, run_vector = _usage_summary(run_calls, empty_is_zero=True)
-                priced = _price_usage(run_payload, run_vector, pricing)
+                priced = _price_usage(run_payload, run_vector, pricing, run_calls)
                 known = priced["known_cost_usd"]
                 if isinstance(known, float):
                     fully_known_run_costs.append(known)
@@ -676,7 +783,7 @@ def build_query_cost_report(
                 "incomplete_runs": incomplete_runs,
                 "incomplete_calls": sum(_call_is_incomplete(call) for call in group_calls),
                 "usage": usage_payload,
-                "known_cost": _price_usage(usage_payload, usage_vector, pricing),
+                "known_cost": _price_usage(usage_payload, usage_vector, pricing, group_calls),
                 "average_known_cost_per_run_usd": (
                     round(sum(fully_known_run_costs) / len(fully_known_run_costs), 6)
                     if fully_known_run_costs

@@ -5,6 +5,8 @@
 
 > **Dated design record, July 2026:** This provisional comparison predates hierarchical PageIndex v2, complete-catalog retrieval, frozen full-corpus indexes, and a sealed post-freeze evaluation dataset. Keep the vr3 measurements as historical evidence, but do not use them as a final architecture verdict.
 
+The later [PageIndex v2 evaluation](pageindex-evaluation-handoff.md) measured routing and PageIndex retrieval but did not add a vector arm. It therefore does not change this record’s central conclusion: a final architecture verdict still requires a sealed vector-versus-PageIndex comparison.
+
 This analysis compares conventional embedding and vector-search retrieval-augmented generation (RAG) with this repository’s PageIndex-based vectorless RAG implementation. It covers the implemented retrieval path, indexing lifecycle, retrieval quality, citations, latency, provider cost, scaling, failure modes, and the evidence required for a final product decision.
 
 ## Analysis baseline

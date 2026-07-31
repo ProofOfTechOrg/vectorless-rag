@@ -9,6 +9,8 @@ from pathlib import Path
 
 import yaml
 
+from vectorless_rag import __version__
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -41,6 +43,16 @@ def test_operator_make_targets_pass_explicit_runtime_contracts() -> None:
     assert makefile.index('mkdir "$$output_dir"') < makefile.index(
         "$(COMPOSE) exec -T api python scripts/run_pageindex_pilot.py"
     )
+    assert 'RELEASE="$$release_sha" $(UV) run --project $(API_DIR) \\' in makefile
+    assert "python $(API_DIR)/scripts/run_evaluation.py \\" in makefile
+    assert (
+        'RELEASE="$$release_sha" $(COMPOSE) up -d --build --force-recreate api worker' in makefile
+    )
+    dockerfile = (ROOT / "apps/api/Dockerfile").read_text()
+    compose = (ROOT / "compose.yaml").read_text()
+    assert "ARG RELEASE=dev" in dockerfile
+    assert "RUN printf '%s\\n' \"$RELEASE\" > /app/.release" in dockerfile
+    assert "args:\n        RELEASE: ${RELEASE}" in compose
 
     dockerignore = (ROOT / "apps/api/.dockerignore").read_text().splitlines()
     assert "evaluation/run/" in dockerignore
@@ -129,6 +141,9 @@ def test_license_and_release_metadata_are_consistent() -> None:
     chart = yaml.safe_load(
         (ROOT / "infra/helm/vectorless-rag/Chart.yaml").read_text(encoding="utf-8")
     )
+    chart_values = yaml.safe_load(
+        (ROOT / "infra/helm/vectorless-rag/values.yaml").read_text(encoding="utf-8")
+    )
     uv_lock = (ROOT / "apps/api/uv.lock").read_text(encoding="utf-8")
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
 
@@ -138,10 +153,44 @@ def test_license_and_release_metadata_are_consistent() -> None:
         web_package["version"],
         chart["version"],
         chart["appVersion"],
-    } == {"0.2.0"}
+        chart_values["image"]["tag"],
+        chart_values["webImage"]["tag"],
+        __version__,
+    } == {"0.3.0"}
     assert pyproject["project"]["license"] == "MIT"
     assert root_package["license"] == "MIT"
     assert web_package["license"] == "MIT"
     assert chart["annotations"]["artifacthub.io/license"] == "MIT"
-    assert 'name = "vectorless-rag"\nversion = "0.2.0"' in uv_lock
+    assert 'name = "vectorless-rag"\nversion = "0.3.0"' in uv_lock
     assert "Copyright (c) 2026 ProofOfTechOrg" in license_text
+
+
+def test_provider_price_and_retry_settings_reach_deployments() -> None:
+    environment = (ROOT / ".env.example").read_text(encoding="utf-8")
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    values = yaml.safe_load(
+        (ROOT / "infra/helm/vectorless-rag/values.yaml").read_text(encoding="utf-8")
+    )
+    template = (ROOT / "infra/helm/vectorless-rag/templates/app.yaml").read_text(encoding="utf-8")
+    prices = {
+        "PAGEINDEX_INPUT_COST_PER_MILLION_USD": "pageindexInputCostPerMillionUsd",
+        "PAGEINDEX_CACHE_HIT_INPUT_COST_PER_MILLION_USD": (
+            "pageindexCacheHitInputCostPerMillionUsd"
+        ),
+        "PAGEINDEX_OUTPUT_COST_PER_MILLION_USD": "pageindexOutputCostPerMillionUsd",
+    }
+
+    for environment_name, helm_name in prices.items():
+        assert f"{environment_name}=" in environment
+        assert f"{environment_name}: ${{{environment_name}}}" in compose
+        assert helm_name in values
+        assert (
+            f"- {{name: {environment_name}, value: {{{{ .Values.{helm_name} | quote }}}}}}"
+        ) in template
+
+    assert "PAGEINDEX_LLM_MAX_ATTEMPTS=3" in environment
+    assert "PAGEINDEX_LLM_MAX_ATTEMPTS: ${PAGEINDEX_LLM_MAX_ATTEMPTS:-3}" in compose
+    assert values["pageindexLlmMaxAttempts"] == 3
+    assert (
+        "- {name: PAGEINDEX_LLM_MAX_ATTEMPTS, value: {{ .Values.pageindexLlmMaxAttempts | quote }}}"
+    ) in template

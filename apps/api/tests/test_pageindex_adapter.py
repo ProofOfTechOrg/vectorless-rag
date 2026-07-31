@@ -120,6 +120,13 @@ def test_index_version_changes_for_every_material_input() -> None:
     assert base != artifact_version_key("sha", "pageindex-2", "prompt", "model")
     assert base != artifact_version_key("sha", "pageindex", "prompt-2", "model")
     assert base != artifact_version_key("sha", "pageindex", "prompt", "model-2")
+    assert base != artifact_version_key(
+        "sha",
+        "pageindex",
+        "prompt",
+        "model",
+        artifact_builder_version="pageindex-artifact-v2.2",
+    )
 
 
 def test_child_failure_report_maps_codes_to_fixed_safe_diagnostics() -> None:

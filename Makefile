@@ -30,14 +30,14 @@ PILOT_OUTPUT ?= apps/api/pilots/run/result.json
 
 export UV_CACHE_DIR
 
-.PHONY: help env init install api-install web-install format api-format web-format lint api-lint web-lint \
+.PHONY: help env env-sync env-check init install api-install web-install format api-format web-format lint api-lint web-lint \
 	typecheck api-typecheck web-typecheck test api-test web-test test-unit test-integration \
 	test-integration-stack docs-check \
 	api-build web-build web-production-smoke playwright-install playwright playwright-live react-doctor react-doctor-diff astryx-doctor workflow-check migration-check \
 	compose-check helm-lint helm-template helm-check docker-build docker-build-api docker-build-web \
 	check api-check web-check deploy-check ci up rebuild dev dev-build dev-health down stop restart restart-app restart-web \
 	restart-langfuse restart-observability ps logs health web-dev migrate bootstrap-key \
-	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-seed evaluation-run evaluation-report \
+	download-corpus sync-corpus upload-document pilot-check pilot-run pilot-report query-cost-report artifact-verify artifact-gc pageindex-patch-test evaluation-build evaluation-check evaluation-review-pack evaluation-review evaluation-review-status evaluation-seed evaluation-restart evaluation-run evaluation-freeze evaluation-execute evaluation-judge evaluation-judge-status evaluation-report \
 	secret-api-pepper secret-session secrets-langfuse
 
 help: ## Show all supported project commands.
@@ -50,6 +50,11 @@ env: ## Create .env from .env.example if absent and restrict its permissions.
 init: ## Create a mode-600 .env with generated local secrets without overwriting.
 	$(PYTHON) scripts/init_env.py
 
+env-sync: ## Add keys .env is missing from .env.example (ADOPT=KEY,KEY to take example values).
+	$(PYTHON) scripts/sync_env.py $(if $(ADOPT),--adopt "$(ADOPT)",)
+env-check: ## Report .env drift against .env.example without writing.
+	$(PYTHON) scripts/sync_env.py --check
+
 install: api-install web-install ## Install all frozen development dependencies.
 api-install: ## Install the frozen Python environment under apps/api.
 	$(UV) sync --project $(API_DIR) --frozen
@@ -58,15 +63,15 @@ web-install: ## Install the frozen root pnpm workspace.
 
 format: api-format web-format ## Format API and web sources.
 api-format: ## Format and autofix Python sources.
-	$(UV) run --project $(API_DIR) ruff format $(API_DIR)
-	$(UV) run --project $(API_DIR) ruff check --fix $(API_DIR)
+	$(UV) run --project $(API_DIR) ruff format $(API_DIR) scripts
+	$(UV) run --project $(API_DIR) ruff check --fix $(API_DIR) scripts
 web-format: ## Autofix lint findings in web sources.
 	$(PNPM) --filter @vectorless-rag/web exec eslint . --fix
 
 lint: api-lint web-lint ## Lint API and web sources.
 api-lint: ## Lint and check formatting for Python sources.
-	$(UV) run --project $(API_DIR) ruff check $(API_DIR)
-	$(UV) run --project $(API_DIR) ruff format --check $(API_DIR)
+	$(UV) run --project $(API_DIR) ruff check $(API_DIR) scripts
+	$(UV) run --project $(API_DIR) ruff format --check $(API_DIR) scripts
 web-lint: ## Lint web sources.
 	$(PNPM) --filter @vectorless-rag/web lint
 
@@ -85,6 +90,7 @@ test-unit: ## Run Python tests that require no external infrastructure.
 	cd $(API_DIR) && $(UV) run pytest tests -m 'not integration'
 test-integration: ## Run PostgreSQL integration tests with TEST_*_DATABASE_URL.
 	@test -n "$${TEST_OWNER_DATABASE_URL:-}" || { echo "TEST_OWNER_DATABASE_URL is required" >&2; exit 2; }
+	@test -n "$${TEST_APP_DATABASE_URL:-}" || { echo "TEST_APP_DATABASE_URL is required" >&2; exit 2; }
 	@test -n "$${TEST_DATABASE_URL:-}" || { echo "TEST_DATABASE_URL is required" >&2; exit 2; }
 	cd $(API_DIR) && $(UV) run pytest tests -m integration
 test-integration-stack: ## Run integration tests against an isolated disposable PostgreSQL project.
@@ -237,14 +243,39 @@ evaluation-check: ## Validate the tracked 120-case PageIndex suite without PDFs 
 	cd $(API_DIR) && $(UV) run python scripts/check_evaluation_suite.py
 evaluation-review-pack: ## Rebuild the local PageIndex evaluation review pack.
 	cd $(API_DIR) && $(UV) run python scripts/build_evaluation_review_pack.py
+evaluation-review: ## Review PageIndex cases interactively (REVIEWER=name, optional STRATUM=).
+	@test -n "$(REVIEWER)" || { echo "set REVIEWER=<your identity>" >&2; exit 2; }
+	cd $(API_DIR) && $(UV) run python scripts/review_evaluation.py \
+		--reviewer "$(REVIEWER)" $(if $(STRATUM),--stratum "$(STRATUM)",)
+evaluation-review-status: ## Show PageIndex review progress.
+	cd $(API_DIR) && $(UV) run python scripts/review_evaluation.py --status
 evaluation-seed: ## Seed the reviewed PageIndex evaluation suite into Langfuse.
 	@test -f "$(DATASET)" || { echo "DATASET does not exist: $(DATASET)" >&2; exit 2; }
 	$(COMPOSE) exec -T api python scripts/seed_evaluation.py /dev/stdin \
 		--suite pageindex-v2 --corpus evaluation/pageindex-v2-corpus.json \
 		--name "$(DATASET_NAME)" < "$(DATASET)"
-evaluation-run: ## Run a frozen PageIndex evaluation experiment from a reviewed suite.
+evaluation-restart: ## Rebuild API and worker with the clean HEAD as the runtime release.
+	@test -z "$$(git status --porcelain)" || { echo "evaluation rebuild requires a clean worktree" >&2; exit 2; }
+	@release_sha="$$(git rev-parse HEAD)"; \
+		RELEASE="$$release_sha" $(COMPOSE) up -d --build --force-recreate api worker
+evaluation-run: ## Prepare a frozen PageIndex experiment (INDEX_HASH=…, MAX_COST=…).
 	@test -n "$(INDEX_HASH)" || { echo "INDEX_HASH=<sha256> is required" >&2; exit 2; }
-	cd $(API_DIR) && $(UV) run python scripts/run_evaluation.py --index-hash "$(INDEX_HASH)"
+	@test -n "$(MAX_COST)" || { echo "MAX_COST=<usd> is required; it becomes the run's ceiling" >&2; exit 2; }
+	@release_sha="$$(git rev-parse HEAD)"; \
+		RELEASE="$$release_sha" $(UV) run --project $(API_DIR) \
+		python $(API_DIR)/scripts/run_evaluation.py \
+			--index-hash "$(INDEX_HASH)" --max-cost-usd "$(MAX_COST)" $(if $(CONCURRENCY),--concurrency $(CONCURRENCY),)
+evaluation-freeze: ## Print the index digest for evaluation-run INDEX_HASH.
+	$(COMPOSE) exec -T api python scripts/freeze_index.py
+evaluation-execute: ## Execute prepared trials against DeepSeek (LIMIT=n, DRY_RUN=1).
+	$(COMPOSE) exec -T --user "$$(id -u):$$(id -g)" api python scripts/execute_evaluation.py \
+		$(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY_RUN),--dry-run,) $(if $(CONCURRENCY),--concurrency $(CONCURRENCY),)
+evaluation-judge: ## Judge queued answer claims (REVIEWER=name, optional METHOD=human|automated).
+	@test -n "$(REVIEWER)" || { echo "set REVIEWER=<your identity>" >&2; exit 2; }
+	cd $(API_DIR) && $(UV) run python scripts/judge_evaluation.py \
+		--reviewer "$(REVIEWER)" $(if $(METHOD),--method "$(METHOD)",)
+evaluation-judge-status: ## Show answer-claim judgment progress.
+	cd $(API_DIR) && $(UV) run python scripts/judge_evaluation.py --status
 evaluation-report: ## Build the local report for the latest frozen evaluation experiment.
 	cd $(API_DIR) && $(UV) run python scripts/report_evaluation.py
 

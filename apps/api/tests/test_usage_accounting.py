@@ -22,9 +22,13 @@ from vectorless_rag.models import (
 from vectorless_rag.operational_logging import emit_event, event_json
 from vectorless_rag.reporting import Pricing, build_query_cost_report
 from vectorless_rag.usage import (
+    PROVIDER_REQUEST_BYTE_OVERHEAD,
+    ExperimentBudgetExceeded,
+    ModelCallLedger,
     UsageOwner,
     current_usage_owner,
     normalize_token_usage,
+    provider_input_token_limit,
     usage_context,
 )
 
@@ -33,6 +37,51 @@ class _FailingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         del record
         raise RuntimeError("handler failed")
+
+
+class _AsyncCursor:
+    def __init__(self, row: tuple[object, ...] | None = None) -> None:
+        self.row = row
+
+    async def fetchone(self) -> tuple[object, ...] | None:
+        return self.row
+
+
+class _ReservationlessAsyncConnection:
+    def __init__(self, reservation: tuple[object, ...] | None = None) -> None:
+        self.executions = 0
+        self.reservation = reservation
+
+    async def execute(self, query: str, parameters: dict[str, object]) -> _AsyncCursor:
+        del query, parameters
+        self.executions += 1
+        return _AsyncCursor(self.reservation if self.executions == 1 else None)
+
+
+class _AsyncConnectionContext:
+    def __init__(self, connection: _ReservationlessAsyncConnection) -> None:
+        self.connection = connection
+
+    async def __aenter__(self) -> _ReservationlessAsyncConnection:
+        return self.connection
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object,
+    ) -> None:
+        del exc_type, exc, traceback
+
+
+class _OpenReservationlessAsyncPool:
+    closed = False
+
+    def __init__(self, connection: _ReservationlessAsyncConnection) -> None:
+        self._connection = connection
+
+    def connection(self) -> _AsyncConnectionContext:
+        return _AsyncConnectionContext(self._connection)
 
 
 def _query_run(
@@ -178,6 +227,14 @@ def test_invalid_cache_and_reasoning_details_cannot_break_partitions() -> None:
     assert usage.total_tokens == 7
 
 
+def test_provider_input_reservation_is_bounded_by_request_bytes() -> None:
+    payload = "😀" * 100
+
+    assert provider_input_token_limit(payload) == len(payload.encode()) + (
+        PROVIDER_REQUEST_BYTE_OVERHEAD
+    )
+
+
 async def test_concurrent_usage_contexts_keep_attempt_and_trace_ownership() -> None:
     async def observe(attempt_id: uuid.UUID, trace_id: str) -> UsageOwner | None:
         with usage_context(UsageOwner(trace_id=trace_id, ingestion_attempt_id=attempt_id)):
@@ -196,6 +253,94 @@ async def test_concurrent_usage_contexts_keep_attempt_and_trace_ownership() -> N
     assert first == UsageOwner(trace_id=first_trace, ingestion_attempt_id=first_id)
     assert second == UsageOwner(trace_id=second_trace, ingestion_attempt_id=second_id)
     assert current_usage_owner() is None
+
+
+async def test_required_cost_reservation_stops_before_model_call_insert() -> None:
+    connection = _ReservationlessAsyncConnection((None, None, None, None, None))
+    ledger = object.__new__(ModelCallLedger)
+    cast(Any, ledger)._async_pool = _OpenReservationlessAsyncPool(connection)
+    cast(Any, ledger)._async_open_lock = asyncio.Lock()
+    cast(Any, ledger).maximum_provider_attempts = 3
+    owner = UsageOwner(
+        trace_id=uuid.uuid4().hex,
+        query_run_id=uuid.uuid4(),
+        require_cost_reservation=True,
+    )
+
+    with usage_context(owner):
+        with pytest.raises(ExperimentBudgetExceeded):
+            await ledger.astart(
+                ModelCallStage.query_route,
+                "provider/model",
+                1,
+                prompt="question",
+                input_token_limit=5_000,
+                output_token_limit=1_000,
+            )
+
+    assert connection.executions == 1
+
+
+async def test_attached_experiment_rejection_stops_without_owner_flag() -> None:
+    connection = _ReservationlessAsyncConnection((None, None, None, None, None))
+    ledger = object.__new__(ModelCallLedger)
+    cast(Any, ledger)._async_pool = _OpenReservationlessAsyncPool(connection)
+    cast(Any, ledger)._async_open_lock = asyncio.Lock()
+    cast(Any, ledger).maximum_provider_attempts = 3
+    owner = UsageOwner(
+        trace_id=uuid.uuid4().hex,
+        ingestion_attempt_id=uuid.uuid4(),
+    )
+
+    with usage_context(owner):
+        with pytest.raises(ExperimentBudgetExceeded):
+            await ledger.astart(
+                ModelCallStage.pageindex_generation,
+                "provider/model",
+                1,
+                prompt="question",
+                input_token_limit=5_000,
+                output_token_limit=1_000,
+            )
+
+    assert connection.executions == 1
+
+
+async def test_unissued_call_cleanup_survives_repeated_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ledger = object.__new__(ModelCallLedger)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def persist(
+        call_id: uuid.UUID,
+        owner: UsageOwner,
+        logical_call_id: uuid.UUID,
+    ) -> None:
+        del call_id, owner, logical_call_id
+        entered.set()
+        await release.wait()
+        completed.set()
+
+    monkeypatch.setattr(ledger, "_persist_unissued_cancellation", persist)
+    owner = UsageOwner(trace_id=uuid.uuid4().hex, query_run_id=uuid.uuid4())
+    cleanup = asyncio.create_task(
+        ledger._cancel_unissued_call(  # pyright: ignore[reportPrivateUsage]
+            uuid.uuid4(),
+            owner,
+            uuid.uuid4(),
+        )
+    )
+    await entered.wait()
+    cleanup.cancel()
+    await asyncio.sleep(0)
+    cleanup.cancel()
+    release.set()
+    await asyncio.wait_for(cleanup, timeout=1)
+
+    assert completed.is_set()
 
 
 def test_operational_events_are_one_line_allowlisted_json(
@@ -406,3 +551,115 @@ def test_active_run_with_completed_partial_calls_stays_running_and_incomplete() 
     assert group["incomplete_calls"] == 0
     assert report["totals"]["incomplete_runs"] == 1
     assert report["totals"]["incomplete_calls"] == 0
+
+
+def _priced_call(model: str, run_id: uuid.UUID, trace_id: str) -> ModelCall:
+    return ModelCall(
+        id=uuid.uuid4(),
+        query_run_id=run_id,
+        trace_id=trace_id,
+        stage=ModelCallStage.query_synthesis,
+        model=model,
+        provider_attempt=1,
+        outcome=ModelCallOutcome.completed,
+        input_tokens=1_000_000,
+        cache_hit_input_tokens=0,
+        cache_miss_input_tokens=1_000_000,
+        cache_write_input_tokens=0,
+        unattributed_input_tokens=0,
+        output_tokens=0,
+        reasoning_output_tokens=0,
+        total_tokens=1_000_000,
+        usage_available=True,
+        cache_attribution_complete=True,
+    )
+
+
+def test_each_model_is_priced_at_its_own_rate() -> None:
+    """Indexing and serving run on different models, so one rate cannot cover both."""
+    run_id, trace_id = uuid.uuid4(), uuid.uuid4().hex
+    run = QueryRun(
+        id=run_id,
+        trace_id=trace_id,
+        thread_id="thread",
+        route=RunRoute.documents,
+        question="q",
+        answer="a",
+    )
+    pricing = Pricing(
+        1.0,
+        1.0,
+        1.0,
+        overrides={"indexing-model": Pricing(10.0, 10.0, 10.0, environment_prefix="PAGEINDEX")},
+    )
+    calls = [
+        _priced_call("serving-model", run_id, trace_id),
+        _priced_call("indexing-model", run_id, trace_id),
+    ]
+
+    report = cast(
+        dict[str, Any],
+        build_query_cost_report([run], calls, pricing, days=30),
+    )
+
+    # One million cache-miss tokens at $1 plus one million at $10.
+    assert report["groups"][0]["known_cost"]["known_cost_usd"] == 11.0
+
+
+def test_a_missing_override_price_is_reported_against_its_own_variable() -> None:
+    run_id, trace_id = uuid.uuid4(), uuid.uuid4().hex
+    run = QueryRun(
+        id=run_id,
+        trace_id=trace_id,
+        thread_id="thread",
+        route=RunRoute.documents,
+        question="q",
+        answer="a",
+    )
+    pricing = Pricing(
+        1.0,
+        1.0,
+        1.0,
+        overrides={"indexing-model": Pricing(None, None, None, environment_prefix="PAGEINDEX")},
+    )
+
+    report = cast(
+        dict[str, Any],
+        build_query_cost_report(
+            [run], [_priced_call("indexing-model", run_id, trace_id)], pricing, days=30
+        ),
+    )
+
+    cost = report["groups"][0]["known_cost"]
+    assert cost["known_cost_usd"] is None
+    assert cost["missing_price_configuration"] == [
+        "PAGEINDEX_CACHE_HIT_INPUT_COST_PER_MILLION_USD",
+        "PAGEINDEX_INPUT_COST_PER_MILLION_USD",
+        "PAGEINDEX_OUTPUT_COST_PER_MILLION_USD",
+    ]
+
+
+def test_a_model_with_no_configured_rate_is_named_instead_of_priced() -> None:
+    run_id, trace_id = uuid.uuid4(), uuid.uuid4().hex
+    run = QueryRun(
+        id=run_id,
+        trace_id=trace_id,
+        thread_id="thread",
+        route=RunRoute.documents,
+        question="q",
+        answer="a",
+    )
+    # Rates that describe one model only. A call recorded under a model the configuration has
+    # since moved off must not silently take these rates.
+    pricing = Pricing(1.0, 1.0, 1.0, model="current-serving-model")
+
+    report = cast(
+        dict[str, Any],
+        build_query_cost_report(
+            [run], [_priced_call("retired-serving-model", run_id, trace_id)], pricing, days=30
+        ),
+    )
+
+    cost = report["groups"][0]["known_cost"]
+    assert cost["known_cost_usd"] is None
+    assert cost["missing_price_configuration"] == ["PRICE_FOR_MODEL:retired-serving-model"]

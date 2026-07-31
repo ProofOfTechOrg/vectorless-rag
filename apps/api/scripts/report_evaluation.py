@@ -17,6 +17,7 @@ from vectorless_rag.evaluation_suite import (
 
 METRICS = (
     "route_correct",
+    "refusal_correct",
     "document_recall",
     "support_recall",
     "answer_claim_recall",
@@ -78,7 +79,11 @@ def main() -> None:
         )
         aggregates[key] = row
 
-    failures = Counter(score.failure_code or "none" for score in scores if score.included)
+    # Failure codes only ever appear on excluded trials, so filtering on included made this
+    # counter report "none" for every run no matter how many trials failed.
+    failures = Counter(
+        score.failure_code or "unclassified" for score in scores if not score.included
+    )
     summary = {
         "schema_version": 1,
         "experiment_id": str(manifest.experiment_id),

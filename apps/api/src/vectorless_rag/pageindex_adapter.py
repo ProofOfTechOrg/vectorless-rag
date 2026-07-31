@@ -18,6 +18,7 @@ import fitz
 
 from vectorless_rag.config import Settings
 from vectorless_rag.pageindex_artifact import (
+    ARTIFACT_BUILDER_VERSION,
     PageIndexBuildV2,
     build_manifest_v2,
 )
@@ -107,6 +108,11 @@ class PageIndexAdapter:
 
     def _child_environment(self) -> dict[str, str]:
         environment = {
+            # PageIndex is vendored at this path rather than installed into the environment,
+            # so the child resolves it only through PYTHONPATH. The child environment is
+            # rebuilt rather than inherited, so this is set explicitly from configuration
+            # instead of passed through, keeping the child's import path deterministic.
+            "PYTHONPATH": str(self.settings.pageindex_source_dir),
             "DATABASE_URL": self.settings.database_url,
             "DEEPSEEK_MODEL": self.settings.deepseek_model,
             "PAGEINDEX_MODEL": self.settings.pageindex_model,
@@ -184,7 +190,9 @@ class PageIndexAdapter:
                 document_id=document_id,
                 document_sha256=document_sha256,
                 metadata=metadata,
-                generator_commit=self.settings.pageindex_version.split("+", 1)[0],
+                # Full version (commit + patch revision) so a +vrN bump alone still
+                # shifts configuration_hash and recipe identity.
+                generator_commit=self.settings.pageindex_version,
                 patch_sha256=patch_sha256,
                 model=self.settings.pageindex_model,
                 prompt_profile="pageindex-v2-untrusted-document-v1",
@@ -428,7 +436,20 @@ class PageIndexAdapter:
 
 
 def artifact_version_key(
-    pdf_sha256: str, pageindex_version: str, prompt_version: str, model_name: str
+    pdf_sha256: str,
+    pageindex_version: str,
+    prompt_version: str,
+    model_name: str,
+    *,
+    artifact_builder_version: str = ARTIFACT_BUILDER_VERSION,
 ) -> str:
-    value = "\0".join((pdf_sha256, pageindex_version, prompt_version, model_name))
+    value = "\0".join(
+        (
+            pdf_sha256,
+            pageindex_version,
+            prompt_version,
+            model_name,
+            artifact_builder_version,
+        )
+    )
     return hashlib.sha256(value.encode()).hexdigest()

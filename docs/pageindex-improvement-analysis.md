@@ -5,6 +5,8 @@
 
 > **Dated design record, July 2026:** This document preserves the decisions and evidence from its recorded repository baseline. Do not recalculate its historical conclusions with current dependencies or pricing.
 
+The implementation and PageIndex-only evaluation described as future work in this record are now complete. Read the [PageIndex v2 evaluation results and handoff](pageindex-evaluation-handoff.md) for the current result, post-experiment route corrections, and remaining limits. The historical baselines and execution record below remain unchanged.
+
 This record defines the PageIndex v2 implementation baseline, architecture, rollout, and verification evidence. It is the durable handoff for the work that starts at commit `cfbea604c64d51c20ca1cea413b2bfa35be94471`.
 
 ## Baseline
@@ -308,7 +310,7 @@ Execute the rollout in this order:
 3. Run migration preflight checks for inconsistent active pointers, duplicate active jobs or attempts, and ready-state mismatches.
 4. Apply `0004_pageindex_artifact_v2`.
 5. Apply `0005_measurement_experiments`.
-6. Deploy the API and worker with PageIndex patch `+vr4`.
+6. Deploy the API and worker with PageIndex patch `+vr5`.
 7. Run provider-free patch, API, web, deployment, and integration tests.
 8. Dry-run the seven historical measurement classifications.
 9. Apply the exact classification manifest in one serializable admin transaction.
@@ -352,6 +354,7 @@ Run integration tests against the migrated local database:
 
 ```bash
 TEST_OWNER_DATABASE_URL=postgresql+psycopg://rag_owner:rag-owner-change-me@127.0.0.1:55432/rag \
+TEST_APP_DATABASE_URL=postgresql+psycopg://rag_app:rag-app-change-me@127.0.0.1:55432/rag \
 TEST_DATABASE_URL=postgresql+psycopg://rag_reader:rag-reader-change-me@127.0.0.1:55432/rag \
 make test-integration
 ```

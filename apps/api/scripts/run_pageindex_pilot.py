@@ -17,9 +17,10 @@ from pathlib import Path
 from PyPDF2 import PdfReader
 from sqlalchemy import func, select, text
 
-from vectorless_rag.config import get_settings
+from vectorless_rag.config import Settings, get_settings
 from vectorless_rag.db import Database
 from vectorless_rag.ingestion import configuration_digest, register_pdf
+from vectorless_rag.llm import MAX_PROVIDER_ATTEMPTS
 from vectorless_rag.models import (
     Experiment,
     ExperimentIndexVersion,
@@ -29,7 +30,11 @@ from vectorless_rag.models import (
     ModelCallCostReservation,
 )
 from vectorless_rag.pilot_suite import PilotDocument, load_pilot_manifest
-from vectorless_rag.provider import ProviderGate, provider_configuration_hash
+from vectorless_rag.provider import (
+    DEEPSEEK_MAX_INPUT_TOKENS,
+    ProviderGate,
+    provider_configuration_hash,
+)
 from vectorless_rag.storage import S3ObjectStore
 
 TERMINAL = {
@@ -40,10 +45,27 @@ TERMINAL = {
     JobStatus.cancelled,
 }
 RELEASE_SHA = re.compile(r"^[0-9a-f]{40}$")
+MEASUREMENT_SCHEMA_REVISION = "0009_atomic_model_call_start"
 
 
 def report_cost(value: Decimal | float | int) -> float:
     return float(round(value, 6))
+
+
+def pilot_price_snapshot(settings: Settings) -> dict[str, float | int | None]:
+    return {
+        "input_per_million_usd": settings.pageindex_input_cost_per_million_usd,
+        "cache_hit_input_per_million_usd": (
+            settings.pageindex_cache_hit_input_cost_per_million_usd
+        ),
+        "output_per_million_usd": settings.pageindex_output_cost_per_million_usd,
+        "max_input_tokens": DEEPSEEK_MAX_INPUT_TOKENS,
+        "max_output_tokens": settings.pageindex_max_output_tokens,
+        "max_attempts": max(
+            settings.pageindex_llm_max_attempts,
+            MAX_PROVIDER_ATTEMPTS,
+        ),
+    }
 
 
 def validate_pdf(path: Path, expected: PilotDocument) -> None:
@@ -87,7 +109,7 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
     try:
         async with database.session() as session:
             schema_revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-            if schema_revision != "0005_measurement_experiments":
+            if schema_revision != MEASUREMENT_SCHEMA_REVISION:
                 raise RuntimeError("database is not at the frozen measurement schema head")
             active_jobs = (
                 await session.scalar(
@@ -100,15 +122,9 @@ async def run(args: argparse.Namespace) -> dict[str, object]:
             if active_jobs:
                 raise RuntimeError("pilot requires no pre-existing active ingestion jobs")
             availability = await provider.require_available(session)
-            prices = {
-                "input_per_million_usd": settings.deepseek_input_cost_per_million_usd,
-                "cache_hit_input_per_million_usd": (
-                    settings.deepseek_cache_hit_input_cost_per_million_usd
-                ),
-                "output_per_million_usd": settings.deepseek_output_cost_per_million_usd,
-                "max_output_tokens": settings.pageindex_max_output_tokens,
-                "max_attempts": settings.pageindex_llm_max_attempts,
-            }
+            # The pilot measures ingestion, which runs on PAGEINDEX_MODEL, so its snapshot
+            # records that model's rates rather than the query model's.
+            prices = pilot_price_snapshot(settings)
             if any(value is None for value in prices.values()):
                 raise RuntimeError("pilot requires a complete provider price snapshot")
             configuration_hash = configuration_digest(

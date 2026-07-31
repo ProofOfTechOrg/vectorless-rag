@@ -8,12 +8,14 @@ from typing import Any, Protocol
 
 import sqlglot
 from sqlalchemy import text
+from sqlalchemy.exc import DataError, DBAPIError, OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlglot import exp
 from sqlglot.errors import SqlglotError
 from sqlglot.optimizer.scope import build_scope
 
 from vectorless_rag.config import Settings
+from vectorless_rag.schemas import MetadataConstraints
 
 APPROVED_RELATIONS = frozenset({"agent.paper_catalog_v1", "agent.ingestion_summary_v1"})
 DANGEROUS_FUNCTIONS = frozenset(
@@ -68,6 +70,8 @@ FUNCTION_NAME_ALIASES = {
     "timestamptrunc": "date_trunc",
 }
 SHORT_REGEX_TERM = re.compile(r"(?<![A-Za-z\\])([A-Za-z]{2,3})(?![A-Za-z])")
+POSTGRES_REGEX_OPTION_PREFIX = re.compile(r"^(?:\*\*\*:)?\(\?([bceimnpqstwx]+)\)")
+POSTGRES_NON_ARE_REGEX_OPTIONS = frozenset({"b", "e", "q"})
 # Numeric / code-point escapes -- \xHH (hex), \ooo (octal), \uHHHH, \UHHHHHHHH -- that decode
 # to a character the AST text never shows. TWO independent decoders reach them: PostgreSQL's
 # E-string escape processor (any E'...' literal, verifiable=False), and -- separately -- the
@@ -85,6 +89,8 @@ SIMILAR_TO_METACHARS = frozenset("%_|*+()[]?{}")
 # sqlglot text diverges from what PostgreSQL runs and can hide a short term (E'%r\ag%' is
 # %r<0x07>g% to the guard but runs as %rag%). Catalog LIKE patterns never contain one.
 CONTROL_CHAR = re.compile(r"[\x00-\x1f\x7f]")
+INFRASTRUCTURE_PROGRAMMING_SQLSTATES = frozenset({"3F000", "42501", "42P01"})
+QUERY_TIMEOUT_SQLSTATE = "57014"
 
 
 class SQLRejected(ValueError):
@@ -108,6 +114,17 @@ class SQLResult:
 
 class DatabaseAdapter(Protocol):
     async def execute(self, query: ValidatedSQL) -> SQLResult: ...
+
+
+def _is_generated_query_rejection(error: DBAPIError) -> bool:
+    if error.connection_invalidated:
+        return False
+    if isinstance(error, DataError):
+        return True
+    sqlstate = getattr(error.orig, "sqlstate", None)
+    if isinstance(error, ProgrammingError):
+        return sqlstate not in INFRASTRUCTURE_PROGRAMMING_SQLSTATES
+    return isinstance(error, OperationalError) and sqlstate == QUERY_TIMEOUT_SQLSTATE
 
 
 def _relation_name(table: exp.Table) -> str:
@@ -145,7 +162,92 @@ def _scope_relations(statement: exp.Query) -> set[str]:
     return relations
 
 
-def _match_pattern_text(node: exp.Condition | None) -> tuple[str, bool] | None:
+def _catalog_constraint_predicate(constraints: MetadataConstraints) -> exp.Condition | None:
+    predicates: list[exp.Condition] = []
+    if constraints.arxiv_ids:
+        predicates.append(
+            exp.column("arxiv_id").isin(
+                *[exp.Literal.string(value) for value in constraints.arxiv_ids]
+            )
+        )
+    if constraints.authors:
+        predicates.append(
+            exp.ArrayOverlaps(
+                this=exp.column("authors"),
+                expression=exp.Array(
+                    expressions=[exp.Literal.string(value) for value in constraints.authors]
+                ),
+            )
+        )
+    if constraints.topics:
+        predicates.append(
+            exp.ArrayOverlaps(
+                this=exp.column("topics"),
+                expression=exp.Array(
+                    expressions=[exp.Literal.string(value) for value in constraints.topics]
+                ),
+            )
+        )
+    if constraints.date_from is not None:
+        predicates.append(
+            exp.GTE(
+                this=exp.column("submitted_date"),
+                expression=exp.cast(
+                    exp.Literal.string(constraints.date_from.isoformat()),
+                    "date",
+                ),
+            )
+        )
+    if constraints.date_to is not None:
+        predicates.append(
+            exp.LTE(
+                this=exp.column("submitted_date"),
+                expression=exp.cast(
+                    exp.Literal.string(constraints.date_to.isoformat()),
+                    "date",
+                ),
+            )
+        )
+    return exp.and_(*predicates) if predicates else None
+
+
+def _apply_catalog_constraints(
+    statement: exp.Query,
+    relations: set[str],
+    constraints: MetadataConstraints,
+) -> None:
+    predicate = _catalog_constraint_predicate(constraints)
+    if predicate is None:
+        return
+    relation = "agent.paper_catalog_v1"
+    if "agent.ingestion_summary_v1" in relations:
+        raise SQLRejected(
+            "structured document constraints cannot be applied to agent.ingestion_summary_v1"
+        )
+    if relation not in relations:
+        raise SQLRejected(
+            "structured document constraints require a query over agent.paper_catalog_v1"
+        )
+    for table in list(statement.find_all(exp.Table)):
+        if _relation_name(table) != relation:
+            continue
+        if not table.alias:
+            for column in statement.find_all(exp.Column):
+                if (
+                    column.table == table.name
+                    and column.db == table.db
+                    and column.catalog == table.catalog
+                ):
+                    column.set("db", None)
+                    column.set("catalog", None)
+        inner_table = table.copy()
+        inner_table.set("alias", None)
+        filtered = exp.select("*").from_(inner_table).where(predicate.copy())
+        alias = table.args.get("alias") or exp.TableAlias(this=exp.to_identifier(table.name))
+        table.replace(exp.Subquery(this=filtered, alias=alias.copy()))
+
+
+def match_pattern_text(node: exp.Expr | None) -> tuple[str, bool] | None:
     # (text, verifiable). standard_conforming_strings=on, so the three text-string literal
     # forms that PostgreSQL does NOT escape-process store their exact executed text and are
     # verifiable=True: a plain Literal, a dollar-quoted RawString, and a National string
@@ -171,13 +273,22 @@ def _match_pattern_text(node: exp.Condition | None) -> tuple[str, bool] | None:
     return None
 
 
+def postgres_regex_supports_word_boundaries(value: str) -> bool:
+    if value.startswith("***="):
+        return False
+    option_prefix = POSTGRES_REGEX_OPTION_PREFIX.match(value)
+    return option_prefix is None or POSTGRES_NON_ARE_REGEX_OPTIONS.isdisjoint(
+        option_prefix.group(1)
+    )
+
+
 def _escaped_short_term(content: str) -> str | None:
     # An escape-processed string cannot be trusted to bound a short term: regex
     # word-boundary escapes (\m, \M, \y) dissolve into bare letters, hiding an interior
     # short token from a direct scan (E'\yrag\y' executes as yragy). Probe the raw text and
     # the text with those boundary escapes removed, and treat any short standalone token
     # found either way as unverifiable.
-    for candidate in (content, re.sub(r"\\[mMy]", "", content)):
+    for candidate in (content, re.sub(r"\\+[mMy]", "", content)):
         match = SHORT_REGEX_TERM.search(candidate)
         if match is not None:
             return match.group(1)
@@ -233,7 +344,7 @@ def _reject_codepoint_escape(value: str) -> None:
 def _reject_computed_match_pattern(operand: exp.Condition | None) -> None:
     # Reject a match predicate whose RIGHT-HAND pattern operand is a function call or a ||
     # concatenation. Such an operand is computed at run time, never a static string literal,
-    # so _match_pattern_text returns None and every short-term scan above is skipped:
+    # so match_pattern_text returns None and every short-term scan above is skipped:
     # lower('RAG'), concat('r','a','g'), array_to_string(ARRAY[...], '') and '%' || 'rag' || '%'
     # each rebuild a short term the guard can no longer see. RHS-only by construction -- a
     # computed LHS with a literal RHS (lower(title) ~* '\mrag\M') keeps a literal here and stays
@@ -263,7 +374,7 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
     # control-character check for the unverifiable (E-string) branch, whose decoded text is the
     # only place a sqlglot-vs-PostgreSQL escape divergence can appear.
     for predicate in statement.find_all(exp.Like, exp.ILike):
-        extracted = _match_pattern_text(predicate.expression)
+        extracted = match_pattern_text(predicate.expression)
         if extracted is None:
             _reject_computed_match_pattern(predicate.expression)
             continue
@@ -288,7 +399,7 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
     # anchored exact match and is safe ('rag' -> pass). Its regex engine also decodes
     # code-point escapes, so reject those up-front (before verifiability, for both classes).
     for predicate in statement.find_all(exp.SimilarTo):
-        extracted = _match_pattern_text(predicate.expression)
+        extracted = match_pattern_text(predicate.expression)
         if extracted is None:
             _reject_computed_match_pattern(predicate.expression)
             continue
@@ -331,7 +442,7 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
     # letters), so an ILIKE '%ραγ%' short term is still rejected; only this word-boundary path is
     # ASCII-scoped. (A test pins the current pass so a future closure visibly flips.)
     for predicate in statement.find_all(exp.RegexpLike, exp.RegexpILike):
-        extracted = _match_pattern_text(predicate.expression)
+        extracted = match_pattern_text(predicate.expression)
         if extracted is None:
             _reject_computed_match_pattern(predicate.expression)
             continue
@@ -340,7 +451,22 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
         if not verifiable:
             _reject_unverifiable_pattern(value)
             continue
+        option_prefix = POSTGRES_REGEX_OPTION_PREFIX.match(value)
+        if not postgres_regex_supports_word_boundaries(value):
+            pattern_body = (
+                value[option_prefix.end() :]
+                if option_prefix is not None
+                else value.removeprefix("***=")
+            )
+            unsafe = _escaped_short_term(pattern_body)
+            if unsafe is not None:
+                raise SQLRejected(
+                    f"short term {unsafe!r} cannot use ARE word boundaries in this regex mode"
+                )
+            continue
         for match in SHORT_REGEX_TERM.finditer(value):
+            if option_prefix is not None and match.start() < option_prefix.end():
+                continue
             prefix = value[: match.start()]
             suffix = value[match.end() :]
             left_bounded = r"\m" in prefix or r"\y" in prefix
@@ -351,7 +477,11 @@ def _reject_unsafe_short_term_matches(statement: exp.Query) -> None:
                 )
 
 
-def validate_sql(sql: str, maximum_limit: int = 200) -> ValidatedSQL:
+def validate_sql(
+    sql: str,
+    maximum_limit: int = 200,
+    constraints: MetadataConstraints | None = None,
+) -> ValidatedSQL:
     stripped = sql.strip()
     if not stripped:
         raise SQLRejected("empty SQL")
@@ -421,6 +551,11 @@ def validate_sql(sql: str, maximum_limit: int = 200) -> ValidatedSQL:
         if name not in APPROVED_FUNCTIONS:
             raise SQLRejected(f"function is not approved: {name}")
     _reject_unsafe_short_term_matches(statement)
+    _apply_catalog_constraints(
+        statement,
+        relations,
+        constraints or MetadataConstraints(),
+    )
     limit = statement.args.get("limit")
     if limit is None:
         statement = statement.limit(maximum_limit)
@@ -452,24 +587,35 @@ class PostgreSQLAdapter:
                     text("SELECT set_config('lock_timeout', :timeout, true)"),
                     {"timeout": f"{self.settings.sql_lock_timeout_ms}ms"},
                 )
-                explain = await connection.execute(
-                    text("EXPLAIN (FORMAT JSON) " + query.normalized)
-                )
-                explain_value = explain.scalar_one()
-                if isinstance(explain_value, str):
-                    explain_value = json.loads(explain_value)
-                cost = float(explain_value[0]["Plan"]["Total Cost"])
-                if cost > self.settings.sql_explain_cost_ceiling:
-                    raise SQLRejected(
-                        f"query cost {cost:.2f} exceeds ceiling "
-                        f"{self.settings.sql_explain_cost_ceiling:.2f}"
+                # exec_driver_sql bypasses SQLAlchemy's :name parsing; no_parameters
+                # prevents Psycopg from parsing literal percent signs as placeholders.
+                await connection.execution_options(no_parameters=True)
+                try:
+                    explain = await connection.exec_driver_sql(
+                        "EXPLAIN (FORMAT JSON) " + query.normalized
                     )
-                cursor = await connection.execute(text(query.normalized))
-                columns = list(cursor.keys())
-                rows = [
-                    dict(row._mapping)  # pyright: ignore[reportPrivateUsage]
-                    for row in cursor.fetchall()
-                ]
+                    explain_value = explain.scalar_one()
+                    if isinstance(explain_value, str):
+                        explain_value = json.loads(explain_value)
+                    cost = float(explain_value[0]["Plan"]["Total Cost"])
+                    if cost > self.settings.sql_explain_cost_ceiling:
+                        raise SQLRejected(
+                            f"query cost {cost:.2f} exceeds ceiling "
+                            f"{self.settings.sql_explain_cost_ceiling:.2f}"
+                        )
+                    cursor = await connection.exec_driver_sql(query.normalized)
+                    columns = list(cursor.keys())
+                    rows = [
+                        dict(row._mapping)  # pyright: ignore[reportPrivateUsage]
+                        for row in cursor.fetchall()
+                    ]
+                except DBAPIError as error:
+                    if not _is_generated_query_rejection(error):
+                        raise
+                    raise SQLRejected(
+                        "query uses an expression or value that PostgreSQL cannot execute "
+                        "against the approved schema"
+                    ) from error
                 serialized = json.dumps(rows, default=str, separators=(",", ":")).encode()
                 if len(serialized) > self.settings.sql_payload_limit_bytes:
                     raise SQLRejected("SQL result payload exceeds configured limit")

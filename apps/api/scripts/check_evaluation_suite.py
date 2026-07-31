@@ -28,7 +28,7 @@ def main() -> None:
     repeated = build_trials(cases, seed=20_260_725)
     if trials != repeated:
         raise ValueError("evaluation trial ordering is not reproducible")
-    expected = len(cases) * len(EXPERIMENT_KINDS) * len(EVIDENCE_BUDGETS) * 3
+    expected = len(cases) * len(EXPERIMENT_KINDS) * len(EVIDENCE_BUDGETS)
     if len(trials) != expected or len({trial.trial_id for trial in trials}) != expected:
         raise ValueError("evaluation trial plan is incomplete or contains duplicate IDs")
     interval = bootstrap_mean_interval([0.0, 0.5, 1.0], seed=20_260_725, draws=1_000)

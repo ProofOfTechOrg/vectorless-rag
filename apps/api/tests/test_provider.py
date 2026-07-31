@@ -5,6 +5,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
+import httpx
+import openai
 from pydantic import SecretStr
 from pytest import MonkeyPatch
 from sqlalchemy.dialects import postgresql
@@ -21,8 +23,37 @@ from vectorless_rag.models import (
 from vectorless_rag.provider import (
     STATUS_CACHE_WINDOW,
     ProviderGate,
+    classify_provider_failure,
     provider_configuration_hash,
 )
+
+
+def test_http_200_response_validation_failure_is_retryable() -> None:
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+    response = httpx.Response(200, request=request)
+    error = openai.APIResponseValidationError(response=response, body={"invalid": True})
+
+    failure = classify_provider_failure(error)
+
+    assert failure.code == "upstream_invalid_response"
+    assert failure.retryable
+    assert failure.http_status == 200
+    assert not failure.blocks_provider
+
+
+def test_openai_connection_failures_are_retryable_network_errors() -> None:
+    request = httpx.Request("POST", "https://api.deepseek.com/chat/completions")
+
+    for error in (
+        openai.APIConnectionError(request=request),
+        openai.APITimeoutError(request),
+    ):
+        failure = classify_provider_failure(error)
+
+        assert failure.code == "network_error"
+        assert failure.retryable
+        assert failure.http_status is None
+        assert not failure.blocks_provider
 
 
 class _Rows:

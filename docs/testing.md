@@ -23,7 +23,7 @@ Use these tiers during development:
 | --- | --- | --- | --- |
 | Documentation | `make docs-check` | None after install | Community files, links, anchors, declarations, fences, and index pass |
 | API | `make api-check` | None | Lint, type checks, tests, and offline migrations pass |
-| PostgreSQL | `make test-integration-stack` | Docker | All integration tests run against owner and reader roles, then the isolated volume is removed |
+| PostgreSQL | `make test-integration-stack` | Docker | All integration tests run against owner, application, and reader roles, then the isolated volume is removed |
 | Web | `make web-check` | None | Lint, type checks, unit tests, React Doctor, production smoke, and ASTRYX Doctor pass |
 | Browser | `make playwright-install && make playwright` | Chromium installation | Deterministic browser tests pass against the mock upstream |
 | Deployment | `make deploy-check ENV_FILE=.env.example` | Docker and Helm 4.2.3 | Workflow, Compose, and Helm validation pass |

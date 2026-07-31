@@ -29,6 +29,7 @@ echo "starting disposable PostgreSQL project on port $postgres_port"
 POSTGRES_PORT="$postgres_port" "$docker_bin" "${compose_args[@]}" up -d --wait postgres
 
 owner_url="postgresql+psycopg://rag_owner:rag-owner-change-me@127.0.0.1:$postgres_port/rag"
+app_url="postgresql+psycopg://rag_app:rag-app-change-me@127.0.0.1:$postgres_port/rag"
 reader_url="postgresql+psycopg://rag_reader:rag-reader-change-me@127.0.0.1:$postgres_port/rag"
 
 (
@@ -37,6 +38,8 @@ reader_url="postgresql+psycopg://rag_reader:rag-reader-change-me@127.0.0.1:$post
 )
 (
   cd "$root_dir"
-  TEST_OWNER_DATABASE_URL="$owner_url" TEST_DATABASE_URL="$reader_url" \
+  TEST_DATABASE_DISPOSABLE=1 \
+    TEST_OWNER_DATABASE_URL="$owner_url" TEST_APP_DATABASE_URL="$app_url" \
+    TEST_DATABASE_URL="$reader_url" \
     "$make_bin" test-integration
 )

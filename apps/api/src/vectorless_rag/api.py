@@ -30,7 +30,7 @@ from vectorless_rag.auth import (
     get_db_session,
 )
 from vectorless_rag.config import Settings, get_settings
-from vectorless_rag.db import Database, make_engine
+from vectorless_rag.db import Database, driver_free_url, make_engine
 from vectorless_rag.graph import GraphRunner
 from vectorless_rag.ingestion import (
     IngestionRetryConflict,
@@ -59,7 +59,12 @@ from vectorless_rag.models import (
 from vectorless_rag.observability import Observability
 from vectorless_rag.operational_logging import emit_event
 from vectorless_rag.provider import ProviderGate
-from vectorless_rag.retrieval import CorpusRouter, PageIndexRetriever, VectorlessRetriever
+from vectorless_rag.retrieval import (
+    CatalogRoutingLimiter,
+    CorpusRouter,
+    PageIndexRetriever,
+    VectorlessRetriever,
+)
 from vectorless_rag.schemas import (
     ChatRequest,
     ChatResponse,
@@ -104,10 +109,7 @@ class Runtime:
     provider_gate: ProviderGate
     observability: Observability
     checkpointer: Any
-
-
-def _checkpoint_url(url: str) -> str:
-    return url.replace("postgresql+psycopg://", "postgresql://", 1)
+    catalog_routing_limiter: CatalogRoutingLimiter
 
 
 @asynccontextmanager
@@ -125,7 +127,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     )
     async with AsyncExitStack() as stack:
         checkpointer_context = AsyncPostgresSaver.from_conn_string(
-            _checkpoint_url(settings.database_url)
+            driver_free_url(settings.database_url)
         )
         checkpointer = await stack.enter_async_context(checkpointer_context)
         await checkpointer.setup()
@@ -139,6 +141,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
             provider_gate,
             observability,
             checkpointer,
+            CatalogRoutingLimiter(settings.catalog_routing_concurrency),
         )
         yield
         observability.flush()
@@ -203,7 +206,11 @@ async def provider_status(
 def _runner(runtime: Runtime) -> GraphRunner:
     if runtime.llm is None:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "DeepSeek is not configured")
-    router = CorpusRouter(runtime.settings, runtime.llm)
+    router = CorpusRouter(
+        runtime.settings,
+        runtime.llm,
+        catalog_routing_limiter=runtime.catalog_routing_limiter,
+    )
     pageindex = PageIndexRetriever(runtime.settings, runtime.store, runtime.llm)
     retriever = VectorlessRetriever(runtime.settings, router, pageindex)
     return GraphRunner(

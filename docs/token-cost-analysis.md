@@ -5,11 +5,13 @@
 
 > **Dated design record, July 2026:** This document preserves measurements, pricing, and projections from its recorded baselines. Check current provider prices before authorizing spend.
 
-This quantitative appendix calculates provider cost for PageIndex-based and embedding-based retrieval-augmented generation (RAG) over 537 Portable Document Format (PDF) files. It records corpus measurements, token formulas, live ingestion accounting, historical query traces, sensitivity analysis, and volume projections. Read [Compare vector RAG with the PageIndex system](vector-rag-vs-pageindex-analysis.md) for retrieval quality, latency, scaling, security, and the product decision.
+The later [PageIndex v2 evaluation](pageindex-evaluation-handoff.md) recorded `$5.389689` of conservative accounting exposure for its 1,080-trial experiment. That result is evaluation workload accounting, not a replacement for the historical ingestion and query-cost baselines below.
+
+This quantitative appendix calculates provider cost for PageIndex-based and embedding-based retrieval-augmented generation (RAG) over 537 PDFs. It records corpus measurements, token formulas, live ingestion accounting, historical query traces, sensitivity analysis, and volume projections. Read [Compare vector RAG with the PageIndex system](vector-rag-vs-pageindex-analysis.md) for retrieval quality, latency, scaling, security, and the product decision.
 
 ## Measurement baselines
 
-The appendix preserves `vr3` measurements and historical `vr2` traces without mixing incompatible telemetry. PageIndex v2 (`+vr4`) has no paid measurements yet; its 25-document run is separately frozen under a $10 measured-or-reserved ceiling.
+The appendix preserves `vr3` measurements and historical `vr2` traces without mixing incompatible telemetry. PageIndex v2 (`+vr5`) has no paid measurements yet; its 25-document run is separately frozen under a $10 measured-or-reserved ceiling.
 
 | Item | Current live baseline | Historical trace baseline |
 | --- | --- | --- |

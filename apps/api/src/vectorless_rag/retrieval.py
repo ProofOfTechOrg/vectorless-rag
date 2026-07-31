@@ -1,22 +1,31 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
 import tiktoken
-from sqlalchemy import and_, case, func, literal, or_, select
+from sqlalchemy import Date, Text, and_, case, func, literal, or_, select, tuple_
+from sqlalchemy import cast as sql_cast
+from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vectorless_rag.config import Settings
 from vectorless_rag.llm import UNTRUSTED_DOCUMENT_SYSTEM, StructuredLLM, wrap_untrusted_document
-from vectorless_rag.models import Document, DocumentStatus, IndexVersion, ModelCallStage
+from vectorless_rag.models import (
+    Document,
+    DocumentMetadataVersion,
+    DocumentStatus,
+    IndexVersion,
+    ModelCallStage,
+)
 from vectorless_rag.pageindex_artifact import (
     DerivedNode,
     derive_nodes,
@@ -24,6 +33,7 @@ from vectorless_rag.pageindex_artifact import (
 )
 from vectorless_rag.schemas import (
     CandidateSelection,
+    DocumentMetadata,
     Evidence,
     MetadataConstraints,
     NodeChoice,
@@ -37,6 +47,74 @@ FALLBACK_SEARCH_EXCLUDED_TOKENS = frozenset({"or", "and", "not"})
 MODEL_TEXT_TOKEN_LIMIT = 2_048
 COMPARISON_TEXT_TOKEN_FLOOR = 8
 COMPARISON_TEXT_TOKEN_LIMIT = 256
+CATALOG_MAP_DETAIL_LIMIT = 256
+CATALOG_MAP_OUTLINE_LIMIT = 16
+
+
+@dataclass(frozen=True)
+class CatalogRoutingLimiter:
+    maximum_concurrency: int
+    semaphore: asyncio.Semaphore = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.maximum_concurrency < 1:
+            raise ValueError("catalog routing concurrency must be positive")
+        object.__setattr__(
+            self,
+            "semaphore",
+            asyncio.Semaphore(self.maximum_concurrency),
+        )
+
+
+async def _gather_or_cancel[ResultT](
+    operations: Sequence[Callable[[], Awaitable[ResultT]]],
+    limiter: CatalogRoutingLimiter,
+) -> list[ResultT]:
+    missing = object()
+    results: list[ResultT | object] = [missing] * len(operations)
+    next_index = 0
+    failure: BaseException | None = None
+    stopped = asyncio.Event()
+    workers: list[asyncio.Task[None]] = []
+
+    async def work() -> None:
+        nonlocal failure, next_index
+        while not stopped.is_set() and next_index < len(operations):
+            index = next_index
+            next_index += 1
+            async with limiter.semaphore:
+                if stopped.is_set():
+                    return
+                try:
+                    results[index] = await operations[index]()
+                except BaseException as error:
+                    if failure is None:
+                        failure = error
+                        stopped.set()
+                        current = asyncio.current_task()
+                        for worker in workers:
+                            if worker is not current:
+                                worker.cancel()
+                    raise
+
+    workers.extend(
+        asyncio.create_task(work())
+        for _ in range(min(limiter.maximum_concurrency, len(operations)))
+    )
+    joined = asyncio.gather(*workers, return_exceptions=True)
+    try:
+        await asyncio.shield(joined)
+    except BaseException:
+        stopped.set()
+        for worker in workers:
+            worker.cancel()
+        await joined
+        raise
+    if failure is not None:
+        raise failure
+    if any(result is missing for result in results):
+        raise AssertionError("catalog routing operation did not produce a result")
+    return [cast(ResultT, result) for result in results]
 
 
 def _canonical_json(value: object) -> str:
@@ -45,12 +123,15 @@ def _canonical_json(value: object) -> str:
 
 def _token_count(encoding: tiktoken.Encoding, value: object) -> int:
     text = value if isinstance(value, str) else _canonical_json(value)
-    return len(encoding.encode(text))
+    # disallowed_special=() throughout this module: these count and slice untrusted
+    # document text, and tiktoken otherwise raises on a page that merely contains the
+    # literal "<|endoftext|>". Special sequences are characters here, never controls.
+    return len(encoding.encode(text, disallowed_special=()))
 
 
 def _wrapped_token_count(encoding: tiktoken.Encoding, value: object) -> int:
     text = value if isinstance(value, str) else _canonical_json(value)
-    return len(encoding.encode(wrap_untrusted_document(text)))
+    return len(encoding.encode(wrap_untrusted_document(text), disallowed_special=()))
 
 
 def _truncate_text(
@@ -65,7 +146,7 @@ def _truncate_text(
     if tokens is None:
         character_limit = min(len(value), MODEL_TEXT_TOKEN_LIMIT * 16)
         while True:
-            tokens = encoding.encode(value[:character_limit])
+            tokens = encoding.encode(value[:character_limit], disallowed_special=())
             if len(tokens) >= MODEL_TEXT_TOKEN_LIMIT or character_limit == len(value):
                 break
             character_limit = min(len(value), character_limit * 2)
@@ -154,14 +235,24 @@ class Retriever(Protocol):
         restrict_ids: list[uuid.UUID] | None = None,
         *,
         evidence_token_budget: int | None = None,
+        index_version_ids: Mapping[uuid.UUID, uuid.UUID] | None = None,
     ) -> RetrievalResult: ...
 
 
 class CorpusRouter:
-    def __init__(self, settings: Settings, llm: StructuredLLM) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        llm: StructuredLLM,
+        *,
+        catalog_routing_limiter: CatalogRoutingLimiter | None = None,
+    ) -> None:
         self.settings = settings
         self.llm = llm
         self.encoding = tiktoken.get_encoding("cl100k_base")
+        self.catalog_routing_limiter = catalog_routing_limiter or CatalogRoutingLimiter(
+            settings.catalog_routing_concurrency
+        )
 
     async def candidates(
         self,
@@ -169,21 +260,72 @@ class CorpusRouter:
         question: str,
         constraints: MetadataConstraints,
         restrict_ids: list[uuid.UUID] | None = None,
+        *,
+        index_version_ids: Mapping[uuid.UUID, uuid.UUID] | None = None,
     ) -> list[CandidateDocument]:
-        filters: list[Any] = [
-            Document.status == DocumentStatus.ready,
-            Document.active_index_version_id.is_not(None),
-        ]
+        filters: list[Any] = []
+        if index_version_ids is None:
+            filters.extend(
+                [
+                    Document.status == DocumentStatus.ready,
+                    Document.active_index_version_id.is_not(None),
+                ]
+            )
+            index_join = and_(
+                IndexVersion.id == Document.active_index_version_id,
+                IndexVersion.document_id == Document.id,
+            )
+            title = Document.title
+            abstract = Document.abstract
+            description = Document.description
+            topics = Document.topics
+            submitted_date = Document.submitted_date
+            search_vector = Document.search_vector
+            metadata_payload = literal(None)
+            metadata_page_count = literal(None)
+        else:
+            filters.append(
+                tuple_(Document.id, IndexVersion.id).in_(tuple(index_version_ids.items()))
+            )
+            index_join = IndexVersion.document_id == Document.id
+            metadata_payload = DocumentMetadataVersion.metadata_payload
+            metadata_page_count = DocumentMetadataVersion.page_count
+            title = metadata_payload["title"].astext
+            abstract = metadata_payload["abstract"].astext
+            description = metadata_payload["description"].astext
+            topics = metadata_payload["topics"]
+            submitted_date = sql_cast(
+                func.nullif(metadata_payload["submitted_date"].astext, ""),
+                Date,
+            )
+            search_vector = func.to_tsvector(
+                "english",
+                func.concat_ws(
+                    " ",
+                    title,
+                    abstract,
+                    description,
+                    sql_cast(topics, Text),
+                ),
+            )
         if constraints.arxiv_ids:
             filters.append(Document.arxiv_id.in_(constraints.arxiv_ids))
         if constraints.authors:
-            filters.append(Document.authors.overlap(constraints.authors))
+            filters.append(
+                Document.authors.overlap(constraints.authors)
+                if index_version_ids is None
+                else metadata_payload["authors"].op("?|")(array(constraints.authors))
+            )
         if constraints.topics:
-            filters.append(Document.topics.overlap(constraints.topics))
+            filters.append(
+                Document.topics.overlap(constraints.topics)
+                if index_version_ids is None
+                else topics.op("?|")(array(constraints.topics))
+            )
         if constraints.date_from:
-            filters.append(Document.submitted_date >= constraints.date_from)
+            filters.append(submitted_date >= constraints.date_from)
         if constraints.date_to:
-            filters.append(Document.submitted_date <= constraints.date_to)
+            filters.append(submitted_date <= constraints.date_to)
         if restrict_ids is not None:
             filters.append(Document.id.in_(restrict_ids))
 
@@ -193,63 +335,86 @@ class CorpusRouter:
         signal_query = (
             func.websearch_to_tsquery("english", " or ".join(tokens)) if tokens else strict_query
         )
-        rank = func.ts_rank_cd(Document.search_vector, signal_query)
-        strict_match = Document.search_vector.op("@@")(strict_query)
+        rank = func.ts_rank_cd(search_vector, signal_query)
+        strict_match = search_vector.op("@@")(strict_query)
         normalized_question = search_text.strip().casefold()
         exact = or_(
             func.lower(Document.arxiv_id) == normalized_question,
-            func.lower(Document.title) == normalized_question,
+            func.lower(title) == normalized_question,
         )
-        statement = (
-            select(
-                Document,
-                IndexVersion.pageindex_description,
-                IndexVersion.top_level_outline,
-                IndexVersion.manifest_sha256,
-                IndexVersion.artifact_sha256,
-                IndexVersion.configuration_hash,
-                rank.label("lexical_rank"),
-                strict_match.label("strict_match"),
-                exact.label("exact_match"),
-            )
-            .join(
-                IndexVersion,
+        statement = select(
+            Document,
+            IndexVersion.id,
+            IndexVersion.pageindex_description,
+            IndexVersion.top_level_outline,
+            IndexVersion.manifest_sha256,
+            IndexVersion.artifact_sha256,
+            IndexVersion.configuration_hash,
+            metadata_payload,
+            metadata_page_count,
+            rank.label("lexical_rank"),
+            strict_match.label("strict_match"),
+            exact.label("exact_match"),
+        ).join(IndexVersion, index_join)
+        if index_version_ids is not None:
+            statement = statement.join(
+                DocumentMetadataVersion,
                 and_(
-                    IndexVersion.id == Document.active_index_version_id,
-                    IndexVersion.document_id == Document.id,
+                    DocumentMetadataVersion.id == IndexVersion.metadata_version_id,
+                    DocumentMetadataVersion.document_id == Document.id,
                 ),
             )
-            .where(and_(*filters))
-            .order_by(
-                case((exact, 0), else_=1),
-                case((strict_match, 0), else_=1),
-                rank.desc(),
-                func.coalesce(Document.arxiv_id, literal("")),
-                Document.id,
-            )
+        statement = statement.where(and_(*filters)).order_by(
+            case((exact, 0), else_=1),
+            case((strict_match, 0), else_=1),
+            rank.desc(),
+            func.coalesce(Document.arxiv_id, literal("")),
+            Document.id,
         )
         rows = (await session.execute(statement)).all()
         result: list[CandidateDocument] = []
         for (
             document,
+            index_version_id,
             pageindex_description,
             top_level_outline,
             manifest_sha256,
             artifact_sha256,
             configuration_hash,
+            raw_metadata,
+            raw_metadata_page_count,
             raw_rank,
             raw_strict,
             raw_exact,
         ) in rows:
+            selected_document = document
+            if raw_metadata is not None:
+                frozen_metadata = DocumentMetadata.model_validate(raw_metadata)
+                selected_document = Document(
+                    id=document.id,
+                    sha256=document.sha256,
+                    arxiv_id=document.arxiv_id,
+                    original_filename=document.original_filename,
+                    pdf_object_key=document.pdf_object_key,
+                    title=frozen_metadata.title,
+                    authors=frozen_metadata.authors,
+                    abstract=frozen_metadata.abstract,
+                    description=frozen_metadata.description,
+                    topics=frozen_metadata.topics,
+                    submitted_date=frozen_metadata.submitted_date,
+                    status=DocumentStatus.ready,
+                    page_count=int(raw_metadata_page_count),
+                    active_index_version_id=index_version_id,
+                )
             result.append(
                 CandidateDocument(
-                    document=document,
+                    document=selected_document,
                     fts_match=bool(raw_strict),
                     lexical_rank=float(raw_rank or 0),
                     exact_match=bool(raw_exact),
                     description=pageindex_description
-                    or document.description
-                    or document.abstract
+                    or selected_document.description
+                    or selected_document.abstract
                     or "",
                     outline=list(top_level_outline or []),
                     index_digest=manifest_sha256 or artifact_sha256,
@@ -309,87 +474,80 @@ class CorpusRouter:
             "lexical_rank": round(candidate.lexical_rank, 8),
         }
 
-    def _bounded_payload(self, candidate: CandidateDocument) -> dict[str, object]:
-        limit = self.settings.catalog_batch_token_limit
-        cache: dict[str, list[int]] = {}
-
-        title_floor = 1 if candidate.document.title else 0
-
-        def payload(
-            text_limit: int,
-            outline_limit: int,
-            *,
-            preserve_title: bool = True,
-        ) -> dict[str, object]:
-            return self._payload(
-                candidate,
-                text_token_limit=text_limit,
-                title_token_limit=max(title_floor, text_limit) if preserve_title else text_limit,
-                outline_limit=outline_limit,
-                cache=cache,
-            )
-
-        outline_limit = min(len(candidate.outline), 64)
-        structural = payload(0, outline_limit)
-        if _wrapped_token_count(self.encoding, [structural]) > limit:
-            low = 0
-            high = outline_limit
-            while low < high:
-                middle = (low + high + 1) // 2
-                if _wrapped_token_count(self.encoding, [payload(0, middle)]) <= limit:
-                    low = middle
-                else:
-                    high = middle - 1
-            outline_limit = low
-            structural = payload(0, outline_limit)
-        if _wrapped_token_count(self.encoding, [structural]) > limit:
-            structural = payload(0, 0, preserve_title=False)
-            if _wrapped_token_count(self.encoding, [structural]) > limit:
-                raise ValueError("catalog batch token limit cannot fit a minimal candidate")
-            outline_limit = 0
-            title_floor = 0
-
-        low = 0
-        high = MODEL_TEXT_TOKEN_LIMIT
-        while low < high:
-            middle = (low + high + 1) // 2
-            if (
-                _wrapped_token_count(
-                    self.encoding,
-                    [payload(middle, outline_limit)],
-                )
-                <= limit
-            ):
-                low = middle
-            else:
-                high = middle - 1
-        return payload(low, outline_limit)
+    def _map_payload(
+        self,
+        candidate: CandidateDocument,
+        *,
+        detail: int,
+        cache: dict[str, list[int]],
+    ) -> dict[str, object]:
+        return self._payload(
+            candidate,
+            text_token_limit=detail,
+            title_token_limit=max(int(bool(candidate.document.title)), detail),
+            outline_limit=min(
+                len(candidate.outline),
+                CATALOG_MAP_OUTLINE_LIMIT,
+                detail // CATALOG_MAP_OUTLINE_LIMIT,
+            ),
+            cache=cache,
+        )
 
     def _batches(
         self,
         candidates: Sequence[CandidateDocument],
     ) -> list[_CatalogBatch]:
         limit = self.settings.catalog_batch_token_limit
+        maximum_batch_size = self.settings.document_limit * 4
         batches: list[_CatalogBatch] = []
-        current: list[CandidateDocument] = []
-        current_payload: list[dict[str, object]] = []
-        for candidate in candidates:
-            payload = self._bounded_payload(candidate)
-            if (
-                current
-                and _wrapped_token_count(
-                    self.encoding,
-                    [*current_payload, payload],
+        offset = 0
+        while offset < len(candidates):
+            maximum_size = min(maximum_batch_size, len(candidates) - offset)
+            batch_window = tuple(candidates[offset : offset + maximum_size])
+            token_cache: dict[str, list[int]] = {}
+
+            def payloads(
+                size: int,
+                detail: int,
+                window: tuple[CandidateDocument, ...] = batch_window,
+                cache: dict[str, list[int]] = token_cache,
+            ) -> list[dict[str, object]]:
+                return [
+                    self._map_payload(candidate, detail=detail, cache=cache)
+                    for candidate in window[:size]
+                ]
+
+            low = 1
+            high = maximum_size
+            fitting_size = 0
+            while low <= high:
+                middle = (low + high) // 2
+                if _wrapped_token_count(self.encoding, payloads(middle, 0)) <= limit:
+                    fitting_size = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if fitting_size == 0:
+                raise ValueError("catalog batch token limit cannot fit a minimal candidate")
+
+            low = 0
+            high = CATALOG_MAP_DETAIL_LIMIT
+            detail = 0
+            while low <= high:
+                middle = (low + high) // 2
+                if _wrapped_token_count(self.encoding, payloads(fitting_size, middle)) <= limit:
+                    detail = middle
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            batch_candidates = tuple(batch_window[:fitting_size])
+            batches.append(
+                _CatalogBatch(
+                    batch_candidates,
+                    tuple(payloads(fitting_size, detail)),
                 )
-                > limit
-            ):
-                batches.append(_CatalogBatch(tuple(current), tuple(current_payload)))
-                current = []
-                current_payload = []
-            current.append(candidate)
-            current_payload.append(payload)
-        if current:
-            batches.append(_CatalogBatch(tuple(current), tuple(current_payload)))
+            )
+            offset += fitting_size
         return batches
 
     def _comparison_payload(
@@ -579,34 +737,46 @@ class CorpusRouter:
                 )
                 for index, candidate in enumerate(candidates, 1)
             ]
-        mapped: list[tuple[CandidateDocument, str]] = []
-        for batch in self._batches(candidates):
-            mapped.extend(
-                await self._select_batch(
-                    question,
-                    batch,
-                    phase="map",
-                    selection_limit=self.settings.document_limit,
-                )
+        mapped = [
+            item
+            for batch_result in await _gather_or_cancel(
+                [
+                    lambda batch=batch: self._select_batch(
+                        question,
+                        batch,
+                        phase="map",
+                        selection_limit=self.settings.document_limit,
+                    )
+                    for batch in self._batches(candidates)
+                ],
+                self.catalog_routing_limiter,
             )
+            for item in batch_result
+        ]
         deduplicated: dict[uuid.UUID, tuple[CandidateDocument, str]] = {}
         for candidate, reason in mapped:
             deduplicated.setdefault(candidate.document.id, (candidate, reason))
         pool = list(deduplicated.values())
         while len(pool) > self.settings.document_limit:
-            reduced: list[tuple[CandidateDocument, str]] = []
-            for batch in self._comparison_batches(pool):
-                reduced.extend(
-                    await self._select_batch(
-                        question,
-                        batch,
-                        phase="reduce",
-                        selection_limit=min(
-                            self.settings.document_limit,
-                            len(batch.candidates) - 1,
-                        ),
-                    )
+            reduced = [
+                item
+                for batch_result in await _gather_or_cancel(
+                    [
+                        lambda batch=batch: self._select_batch(
+                            question,
+                            batch,
+                            phase="reduce",
+                            selection_limit=min(
+                                self.settings.document_limit,
+                                len(batch.candidates) - 1,
+                            ),
+                        )
+                        for batch in self._comparison_batches(pool)
+                    ],
+                    self.catalog_routing_limiter,
                 )
+                for item in batch_result
+            ]
             next_pool: dict[uuid.UUID, tuple[CandidateDocument, str]] = {}
             for candidate, reason in reduced:
                 next_pool.setdefault(candidate.document.id, (candidate, reason))
@@ -680,12 +850,22 @@ class PageIndexRetriever:
             children=tuple(child.node_id for child in node.children),
         )
 
-    async def _artifact(self, session: AsyncSession, document: Document) -> _ArtifactView:
-        if document.active_index_version_id is None:
+    async def _artifact(
+        self,
+        session: AsyncSession,
+        document: Document,
+        index_version_id: uuid.UUID | None = None,
+    ) -> _ArtifactView:
+        selected_version_id = index_version_id or document.active_index_version_id
+        if selected_version_id is None:
             raise ValueError(f"document {document.id} has no active index")
-        version = await session.get(IndexVersion, document.active_index_version_id)
+        version = await session.get(IndexVersion, selected_version_id)
         if version is None:
-            raise ValueError(f"active index {document.active_index_version_id} is missing")
+            raise ValueError(f"index {selected_version_id} is missing")
+        if version.document_id != document.id:
+            raise ValueError(
+                f"index {selected_version_id} does not belong to document {document.id}"
+            )
         if version.artifact_schema_version == 2:
             if version.manifest_object_key is None or version.manifest_sha256 is None:
                 raise ValueError("PageIndex v2 version has no manifest")
@@ -1078,10 +1258,18 @@ class PageIndexRetriever:
         documents: list[Document],
         *,
         evidence_token_budget: int | None = None,
+        index_version_ids: Mapping[uuid.UUID, uuid.UUID] | None = None,
     ) -> tuple[list[Evidence], bool, int, dict[str, object]]:
+        async def load(document: Document) -> _ArtifactView | dict[str, object]:
+            if index_version_ids is None:
+                return await self._artifact(session, document)
+            index_version_id = index_version_ids.get(document.id)
+            if index_version_id is None:
+                raise ValueError(f"document {document.id} has no pinned index")
+            return await self._artifact(session, document, index_version_id)
+
         artifacts = {
-            document.id: self._coerce_artifact(await self._artifact(session, document))
-            for document in documents
+            document.id: self._coerce_artifact(await load(document)) for document in documents
         }
         selected_nodes: list[_SelectedNode] = []
         used_nodes: defaultdict[uuid.UUID, set[str]] = defaultdict(set)
@@ -1268,7 +1456,7 @@ class PageIndexRetriever:
                     proposed_tokens = _token_count(self.encoding, proposed_content)
                     available_tokens = token_budget - tokens_used
                     if proposed_tokens > available_tokens:
-                        encoded_text = self.encoding.encode(text)
+                        encoded_text = self.encoding.encode(text, disallowed_special=())
                         low = 1
                         high = len(encoded_text)
                         best_content = ""
@@ -1374,9 +1562,16 @@ class VectorlessRetriever:
         restrict_ids: list[uuid.UUID] | None = None,
         *,
         evidence_token_budget: int | None = None,
+        index_version_ids: Mapping[uuid.UUID, uuid.UUID] | None = None,
     ) -> RetrievalResult:
         started = time.monotonic()
-        candidates = await self.router.candidates(session, question, constraints, restrict_ids)
+        candidates = await self.router.candidates(
+            session,
+            question,
+            constraints,
+            restrict_ids,
+            index_version_ids=index_version_ids,
+        )
         selected = await self.router.select_ranked(question, candidates)
         selection_ms = round((time.monotonic() - started) * 1000)
         if not selected:
@@ -1395,6 +1590,7 @@ class VectorlessRetriever:
             question,
             documents,
             evidence_token_budget=evidence_token_budget,
+            index_version_ids=index_version_ids,
         )
         retrieval_ms = round((time.monotonic() - retrieval_started) * 1000)
         configuration_hashes = sorted(

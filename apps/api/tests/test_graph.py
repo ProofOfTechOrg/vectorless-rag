@@ -3,17 +3,18 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import nullcontext
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy.exc import ProgrammingError
 
 from vectorless_rag.config import Settings
 from vectorless_rag.graph import (
     CAPABILITY_HELP_ANSWER,
+    ROUTE_SYSTEM_PROMPT,
     GraphRunner,
     _normalize_regex_boundary_escapes,  # pyright: ignore[reportPrivateUsage]
+    _normalize_short_regex_terms,  # pyright: ignore[reportPrivateUsage]
     _strip_sql_comments,  # pyright: ignore[reportPrivateUsage]
     bounded_history,
     format_inline_citations,
@@ -21,7 +22,14 @@ from vectorless_rag.graph import (
 )
 from vectorless_rag.models import ModelCallStage, QueryRun, RunRoute, SqlAudit
 from vectorless_rag.retrieval import RetrievalResult
-from vectorless_rag.schemas import ChatRequest, Evidence, RouteDecision, SQLPlan, SynthesisResult
+from vectorless_rag.schemas import (
+    ChatRequest,
+    Evidence,
+    MetadataConstraints,
+    RouteDecision,
+    SQLPlan,
+    SynthesisResult,
+)
 from vectorless_rag.sql_guard import SQLRejected, SQLResult, ValidatedSQL, validate_sql
 
 FALLBACK_ANSWER = "I could not find sufficient evidence in the indexed corpus to answer safely."
@@ -269,14 +277,62 @@ async def test_runner_routes_with_scoped_completed_history() -> None:
     assert route_input == {
         "history": [{"question": "what documents do you have", "answer": "Which documents?"}],
         "current_request": "the titles",
+        "structured_constraints": {},
     }
-    assert "unfiltered or filtered lists" in llm.system
-    assert "exact or quoted phrases" in llm.system
-    assert "are sql requests over titles, abstracts, and topics" in llm.system
     assert result["insufficient"] is False
     statement = str(session.statement)
     assert "query_runs.api_key_id" in statement
     assert "query_runs.error IS NULL" in statement
+
+
+def test_route_policy_covers_observed_evaluation_failure_classes() -> None:
+    route_policy = " ".join(ROUTE_SYSTEM_PROMPT.split())
+
+    assert "unknown or nonexistent term" in route_policy
+    assert "questions about whether the corpus reports a claim" in route_policy
+    assert "document retrieval and guarded catalog SQL apply directly" in route_policy
+    assert "do not by themselves justify hybrid" in route_policy
+    assert "no preliminary catalog metadata selection is needed" in route_policy
+    assert "Hybrid is the exception to the documents rule" in route_policy
+    assert 'Do not use hybrid merely because the request asks "which paper"' in route_policy
+    assert "catalog metadata alone answers the request" in route_policy
+
+
+async def test_runner_gives_router_every_active_structured_constraint() -> None:
+    current = _current("Summarize the result.", "thread-route-constraints")
+    llm = _LLM()
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
+        _Observability(),  # pyright: ignore[reportArgumentType]
+    )
+    constraints = MetadataConstraints(
+        arxiv_ids=["2401.01234"],
+        authors=["Ada Lovelace"],
+        topics=["retrieval"],
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 12, 31),
+    )
+
+    await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(
+            message=current.question,
+            thread_id=current.thread_id,
+            constraints=constraints,
+        ),
+        current,
+    )
+
+    assert json.loads(llm.user)["structured_constraints"] == {
+        "arxiv_ids": ["2401.01234"],
+        "authors": ["Ada Lovelace"],
+        "topics": ["retrieval"],
+        "date_from": "2024-01-01",
+        "date_to": "2024-12-31",
+    }
 
 
 class _SQLLLM:
@@ -358,7 +414,10 @@ class _SQLAdapter:
         if self.failure is not None:
             raise self.failure
         if self.fail_first and self.calls == 1:
-            raise ProgrammingError("SELECT missing", {}, Exception("undefined column"))
+            raise SQLRejected(
+                "query uses an expression or value that PostgreSQL cannot execute "
+                "against the approved schema"
+            )
         return SQLResult(
             columns=["document_id", "title"],
             rows=(
@@ -446,7 +505,7 @@ async def test_sql_synthesis_keeps_audit_provenance_internal() -> None:
     assert any("do not split abstract text into words" in value for value in llm.system_prompts)
     assert any("do not assemble display text" in value for value in llm.system_prompts)
     assert any("PostgreSQL regex word boundaries" in value for value in llm.system_prompts)
-    assert any("authors and topics are text[]" in value for value in llm.system_prompts)
+    assert any("PostgreSQL cannot execute" in value for value in llm.system_prompts)
     assert any(
         "When the SQL filtered or counted rows by text or pattern matching" in value
         for value in llm.system_prompts
@@ -459,6 +518,49 @@ async def test_sql_synthesis_keeps_audit_provenance_internal() -> None:
     ]
     assert len(sql_provenance_lines) == 1
     assert "LIMIT 200" in sql_provenance_lines[0]
+
+
+async def test_sql_route_enforces_structured_constraints() -> None:
+    current = _current("Count the matching papers.", "thread-sql-constraints")
+    llm = _SQLLLM(sql="SELECT count(*) FROM agent.paper_catalog_v1")
+    adapter = _SQLAdapter()
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
+        adapter,  # pyright: ignore[reportArgumentType]
+        _Observability(),  # pyright: ignore[reportArgumentType]
+    )
+    constraints = MetadataConstraints(
+        arxiv_ids=["2401.01234"],
+        authors=["Ada Lovelace"],
+        topics=["retrieval"],
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 12, 31),
+    )
+
+    await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(
+            message=current.question,
+            thread_id=current.thread_id,
+            constraints=constraints,
+        ),
+        current,
+    )
+
+    normalized = adapter.queries[0].normalized
+    assert "arxiv_id IN ('2401.01234')" in normalized
+    assert "authors && ARRAY['Ada Lovelace']" in normalized
+    assert "topics && ARRAY['retrieval']" in normalized
+    assert "submitted_date >= CAST('2024-01-01' AS DATE)" in normalized
+    assert "submitted_date <= CAST('2024-12-31' AS DATE)" in normalized
+    sql_request = json.loads(llm.user_prompts[1])
+    assert sql_request["structured_constraints"] == constraints.model_dump(
+        mode="json",
+        exclude_defaults=True,
+    )
+    assert "enforced automatically" in llm.system_prompts[1]
 
 
 async def test_empty_sql_result_is_sufficient_without_a_user_citation() -> None:
@@ -624,6 +726,7 @@ async def test_run_sql_recursion_error_degrades_to_rejection_after_repair(
             session,  # pyright: ignore[reportArgumentType]
             current,
             current.question,
+            MetadataConstraints(),
         )
 
     assert llm.schemas.count(SQLPlan) == 2
@@ -768,6 +871,84 @@ def test_normalize_regex_boundary_escapes_enables_guarded_short_term_match() -> 
     assert r"\yrag\y" in validated.normalized
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* 'text[-\s]+to[-\s]+image|AI'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* $$text[-\s]+to[-\s]+image|AI$$",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* N'text[-\s]+to[-\s]+image|AI'",
+    ],
+)
+def test_normalize_short_regex_terms_adds_postgres_word_boundaries(sql: str) -> None:
+    normalized = _normalize_short_regex_terms(sql)
+
+    assert r"text[-\s]+\mto\M[-\s]+image|\mAI\M" in normalized
+    validate_sql(normalized)
+
+
+def test_normalize_short_regex_terms_is_idempotent() -> None:
+    sql = (
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* 'text[-\s]+to[-\s]+image|AI'"
+    )
+
+    once = _normalize_short_regex_terms(sql)
+    twice = _normalize_short_regex_terms(once)
+
+    assert once == twice
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        (
+            r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?im)^ai$'",
+            r"(?im)^\mai\M$",
+        ),
+        (
+            r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '***:(?im)^ai$'",
+            r"***:(?im)^\mai\M$",
+        ),
+    ],
+)
+def test_normalize_short_regex_terms_preserves_postgres_option_prefix(
+    sql: str, expected: str
+) -> None:
+    normalized = _normalize_short_regex_terms(sql)
+
+    assert expected in normalized
+    validate_sql(normalized)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?b)ai'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?e)ai'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?q)ai'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '***=ai'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?b)\\mai\\M'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?e)\\mai\\M'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '(?q)\\mai\\M'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '***=\\mai\\M'",
+        r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '***:(?q)\\mai\\M'",
+    ],
+)
+def test_normalize_short_regex_terms_leaves_non_are_modes_for_rejection(sql: str) -> None:
+    assert _normalize_short_regex_terms(sql) == sql
+    with pytest.raises(SQLRejected, match="short term 'ai'"):
+        validate_sql(sql)
+
+
+def test_normalize_short_regex_terms_leaves_character_classes_unchanged() -> None:
+    sql = r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '[RAG]'"
+
+    assert _normalize_short_regex_terms(sql) == sql
+
+
 async def test_sql_route_normalizes_doubled_regex_boundaries_before_execution() -> None:
     doubled_sql = r"SELECT COUNT(*) FROM agent.paper_catalog_v1 WHERE title ~* '\\mdistillation\\M'"
     current = _current("how many papers deal with distillation", "thread-sql-regex")
@@ -804,7 +985,40 @@ async def test_sql_route_normalizes_doubled_regex_boundaries_before_execution() 
     assert all(score[1] != "sql-comment-stripped" for score in observability.scores)
 
 
-async def test_hybrid_non_empty_sql_rows_bypass_document_insufficiency() -> None:
+async def test_sql_route_bounds_short_regex_terms_before_validation() -> None:
+    generated_sql = (
+        r"SELECT document_id, title FROM agent.paper_catalog_v1 "
+        r"WHERE title ~* 'text[-\s]+to[-\s]+image|AI'"
+    )
+    current = _current("list text-to-image or AI papers", "thread-sql-short-regex")
+    llm = _SQLLLM(sql=generated_sql)
+    adapter = _SQLAdapter()
+    session = _Session([])
+    observability = _Observability()
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
+        object(),  # pyright: ignore[reportArgumentType]
+        adapter,  # pyright: ignore[reportArgumentType]
+        observability,  # pyright: ignore[reportArgumentType]
+    )
+
+    await runner.run(
+        session,  # pyright: ignore[reportArgumentType]
+        ChatRequest(message=current.question, thread_id=current.thread_id),
+        current,
+    )
+
+    assert adapter.calls == 1
+    assert r"text[-\s]+\mto\M[-\s]+image|\mAI\M" in adapter.queries[0].normalized
+    audits = [item for item in session.added if isinstance(item, SqlAudit)]
+    assert len(audits) == 1
+    assert audits[0].generated_sql == generated_sql
+    assert audits[0].normalized_sql == adapter.queries[0].normalized
+    assert (current.trace_id, "sql-regex-normalized", 1.0, None) in observability.scores
+
+
+async def test_hybrid_catalog_rows_cannot_bypass_document_insufficiency() -> None:
     current = _current("Which catalog paper answers this?", "thread-hybrid-sql")
     llm = _SQLLLM(
         route=RunRoute.hybrid,
@@ -812,10 +1026,65 @@ async def test_hybrid_non_empty_sql_rows_bypass_document_insufficiency() -> None
         synthesis_insufficient=True,
     )
     retriever = _Retriever(RetrievalResult([], [], [], False, 2))
+    adapter = _SQLAdapter()
     runner = GraphRunner(
         Settings(),
         llm,  # pyright: ignore[reportArgumentType]
         retriever,  # pyright: ignore[reportArgumentType]
+        adapter,  # pyright: ignore[reportArgumentType]
+        _Observability(),  # pyright: ignore[reportArgumentType]
+    )
+
+    result = await runner.run(
+        _Session([]),  # pyright: ignore[reportArgumentType]
+        ChatRequest(
+            message=current.question,
+            thread_id=current.thread_id,
+            constraints=MetadataConstraints(authors=["Ada Lovelace"]),
+        ),
+        current,
+    )
+
+    assert result["answer"] == FALLBACK_ANSWER
+    assert result["insufficient"] is True
+    assert result["citations"] == []
+    assert SynthesisResult not in llm.schemas
+    assert retriever.restrict_ids is not None and len(retriever.restrict_ids) == 1
+    assert "authors && ARRAY['Ada Lovelace']" in adapter.queries[0].normalized
+    sql_request = json.loads(llm.user_prompts[1])
+    assert sql_request["structured_constraints"] == {"authors": ["Ada Lovelace"]}
+
+
+async def test_hybrid_synthesis_repairs_sql_only_citation_with_document_evidence() -> None:
+    current = _current("Which authored paper supports this claim?", "thread-hybrid-citation")
+    document_id = uuid.uuid4()
+    evidence = Evidence(
+        source_type="document",
+        source_id=str(document_id),
+        title="Selected paper",
+        node_id="node-1",
+        page_start=3,
+        page_end=3,
+        content="The selected paper reports the measured effect.",
+        retrieval_reason="Relevant passage",
+    )
+    llm = _SQLLLM(
+        route=RunRoute.hybrid,
+        synthesis_answer="The catalog identifies the paper [E1].",
+        repair_answer="The paper reports the measured effect [E2].",
+    )
+    runner = GraphRunner(
+        Settings(),
+        llm,  # pyright: ignore[reportArgumentType]
+        _Retriever(
+            RetrievalResult(
+                [evidence],
+                [document_id],
+                [document_id],
+                True,
+                1,
+            )
+        ),  # pyright: ignore[reportArgumentType]
         _SQLAdapter(),  # pyright: ignore[reportArgumentType]
         _Observability(),  # pyright: ignore[reportArgumentType]
     )
@@ -826,23 +1095,20 @@ async def test_hybrid_non_empty_sql_rows_bypass_document_insufficiency() -> None
         current,
     )
 
-    assert result["answer"] == "The catalog row provides the answer [E1]."
-    assert result["answer"] != FALLBACK_ANSWER
-    assert result["insufficient"] is True
-    assert result["citations"][0]["source_type"] == "sql"
-    assert result.get("sql_audit_id") is not None
-    assert result["citations"][0]["sql_audit_id"] == result.get("sql_audit_id")
-    assert retriever.restrict_ids is not None and len(retriever.restrict_ids) == 1
-    assert any("SQL used (catalog metadata only):" in value for value in llm.user_prompts)
+    assert result["answer"] == "The paper reports the measured effect [1]."
+    assert result["insufficient"] is False
+    assert [citation["source_id"] for citation in result["citations"]] == [str(document_id)]
+    assert llm.synthesis_calls == 2
 
 
 async def test_hybrid_empty_sql_rows_preserve_document_insufficiency_fallback() -> None:
     current = _current("Which catalog paper answers this?", "thread-hybrid-empty")
     llm = _SQLLLM(route=RunRoute.hybrid)
+    retriever = _Retriever(RetrievalResult([], [], [], False, 2))
     runner = GraphRunner(
         Settings(),
         llm,  # pyright: ignore[reportArgumentType]
-        _Retriever(RetrievalResult([], [], [], False, 2)),  # pyright: ignore[reportArgumentType]
+        retriever,  # pyright: ignore[reportArgumentType]
         _SQLAdapter(empty=True),  # pyright: ignore[reportArgumentType]
         _Observability(),  # pyright: ignore[reportArgumentType]
     )
@@ -856,6 +1122,7 @@ async def test_hybrid_empty_sql_rows_preserve_document_insufficiency_fallback() 
     assert result["answer"] == FALLBACK_ANSWER
     assert result["insufficient"] is True
     assert SynthesisResult not in llm.schemas
+    assert retriever.restrict_ids == []
 
 
 async def test_documents_empty_retrieval_remains_insufficient() -> None:

@@ -1,11 +1,124 @@
-import pytest
+from datetime import date
 
-from vectorless_rag.sql_guard import SQLRejected, validate_sql
+import pytest
+from sqlalchemy.exc import DataError, OperationalError, ProgrammingError
+
+from vectorless_rag.schemas import MetadataConstraints
+from vectorless_rag.sql_guard import (
+    SQLRejected,
+    _is_generated_query_rejection,  # pyright: ignore[reportPrivateUsage]
+    validate_sql,
+)
+
+
+class _SqlstateError(Exception):
+    def __init__(self, sqlstate: str) -> None:
+        self.sqlstate = sqlstate
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DataError("SELECT", {}, Exception("invalid value")),
+        ProgrammingError("SELECT", {}, Exception("invalid expression")),
+        OperationalError("SELECT", {}, _SqlstateError("57014")),
+    ],
+)
+def test_generated_query_database_rejections_are_contained(
+    error: DataError | ProgrammingError | OperationalError,
+) -> None:
+    assert _is_generated_query_rejection(error)
+
+
+def test_database_infrastructure_failures_are_not_contained_as_generated_sql() -> None:
+    disconnected = OperationalError("SELECT", {}, _SqlstateError("08006"))
+    lock_contention = OperationalError("SELECT", {}, _SqlstateError("55P03"))
+    invalidated = DataError(
+        "SELECT",
+        {},
+        Exception("connection invalidated"),
+        connection_invalidated=True,
+    )
+
+    assert not _is_generated_query_rejection(disconnected)
+    assert not _is_generated_query_rejection(lock_contention)
+    assert not _is_generated_query_rejection(invalidated)
+
+
+@pytest.mark.parametrize("sqlstate", ["3F000", "42501", "42P01"])
+def test_approved_schema_infrastructure_failures_are_not_generated_sql(
+    sqlstate: str,
+) -> None:
+    error = ProgrammingError("SELECT", {}, _SqlstateError(sqlstate))
+
+    assert not _is_generated_query_rejection(error)
 
 
 def test_approved_select_gets_bounded_limit() -> None:
     validated = validate_sql("SELECT document_id, title FROM agent.paper_catalog_v1")
     assert "LIMIT 200" in validated.normalized
+
+
+def test_structured_constraints_wrap_catalog_source_with_enforced_filters() -> None:
+    constraints = MetadataConstraints(
+        arxiv_ids=["2401.01234"],
+        authors=["O'Neil"],
+        topics=["retrieval"],
+        date_from=date(2024, 1, 1),
+        date_to=date(2024, 12, 31),
+    )
+
+    validated = validate_sql(
+        "SELECT count(*) FROM agent.paper_catalog_v1",
+        constraints=constraints,
+    )
+
+    assert "arxiv_id IN ('2401.01234')" in validated.normalized
+    assert "authors && ARRAY['O''Neil']" in validated.normalized
+    assert "topics && ARRAY['retrieval']" in validated.normalized
+    assert "submitted_date >= CAST('2024-01-01' AS DATE)" in validated.normalized
+    assert "submitted_date <= CAST('2024-12-31' AS DATE)" in validated.normalized
+
+
+def test_structured_constraints_apply_to_every_catalog_reference() -> None:
+    validated = validate_sql(
+        "SELECT left_paper.title FROM agent.paper_catalog_v1 AS left_paper "
+        "JOIN agent.paper_catalog_v1 AS right_paper "
+        "ON left_paper.document_id = right_paper.document_id",
+        constraints=MetadataConstraints(topics=["retrieval"]),
+    )
+
+    assert validated.normalized.count("topics && ARRAY['retrieval']") == 2
+    assert ") AS left_paper" in validated.normalized
+    assert ") AS right_paper" in validated.normalized
+
+
+def test_structured_constraints_preserve_schema_qualified_columns() -> None:
+    validated = validate_sql(
+        "SELECT agent.paper_catalog_v1.document_id FROM agent.paper_catalog_v1",
+        constraints=MetadataConstraints(authors=["Ada Lovelace"]),
+    )
+
+    assert "SELECT paper_catalog_v1.document_id" in validated.normalized
+    assert "authors && ARRAY['Ada Lovelace']" in validated.normalized
+
+
+def test_structured_constraints_reject_unfilterable_summary_view() -> None:
+    with pytest.raises(SQLRejected, match="cannot be applied to"):
+        validate_sql(
+            "SELECT status, document_count FROM agent.ingestion_summary_v1",
+            constraints=MetadataConstraints(authors=["Ada Lovelace"]),
+        )
+
+
+def test_structured_constraints_reject_mixed_summary_view_query() -> None:
+    with pytest.raises(SQLRejected, match="cannot be applied to"):
+        validate_sql(
+            "SELECT paper.title, summary.document_count "
+            "FROM agent.paper_catalog_v1 AS paper "
+            "CROSS JOIN agent.ingestion_summary_v1 AS summary",
+            constraints=MetadataConstraints(authors=["Ada Lovelace"]),
+        )
 
 
 def test_large_limit_is_reduced() -> None:
@@ -212,6 +325,52 @@ def test_short_regex_terms_require_explicit_word_boundaries() -> None:
             "SELECT count(*) FROM agent.paper_catalog_v1 "
             "WHERE abstract ~* 'rag|Retrieval-Augmented Generation'"
         )
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        (
+            r"SELECT count(*) FROM agent.paper_catalog_v1 "
+            r"WHERE abstract ~* '(?im)^\mai\M$'",
+            r"(?im)^\mai\M$",
+        ),
+        (
+            r"SELECT count(*) FROM agent.paper_catalog_v1 "
+            r"WHERE abstract ~* '***:(?im)^\mai\M$'",
+            r"***:(?im)^\mai\M$",
+        ),
+    ],
+)
+def test_regex_option_prefix_is_not_treated_as_a_search_term(sql: str, expected: str) -> None:
+    validated = validate_sql(sql)
+
+    assert expected in validated.normalized
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?im)^ai$'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***:(?im)^ai$'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?b)ai'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?e)ai'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?q)ai'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***=ai'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?b)\mai\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?e)\mai\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?q)\mai\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***=\mai\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?b)\\mai\\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?e)\\mai\\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '(?q)\\mai\\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***=\\mai\\M'",
+        r"SELECT count(*) FROM agent.paper_catalog_v1 WHERE abstract ~* '***:(?q)\\mai\\M'",
+    ],
+)
+def test_regex_mode_prefix_does_not_hide_an_unbounded_search_term(sql: str) -> None:
+    with pytest.raises(SQLRejected, match="short term 'ai'"):
+        validate_sql(sql)
 
 
 @pytest.mark.parametrize(
@@ -457,7 +616,7 @@ def test_like_similar_to_escape_clause_is_rejected(sql: str) -> None:
     "sql",
     [
         # FINDING B -- a computed / non-literal RIGHT-HAND pattern operand skips every short-term
-        # scan (_match_pattern_text returns None), so a function call or || concatenation rebuilds
+        # scan (match_pattern_text returns None), so a function call or || concatenation rebuilds
         # a short term the guard never sees. Each executed as an over-broad match on the reader DB
         # ('storage' ~* lower('RAG') -> rag -> TRUE) before this guard.
         "SELECT 1 FROM agent.paper_catalog_v1 WHERE title ~* lower('RAG')",

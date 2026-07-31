@@ -12,8 +12,8 @@ body:
     id: version
     attributes:
       label: Version or commit
-      description: Provide the v0.2.x version or full commit SHA.
-      placeholder: v0.2.0
+      description: Provide a supported release version or full commit SHA.
+      placeholder: v0.3.0
     validations:
       required: true
   - type: dropdown

@@ -7,7 +7,7 @@ This page lists every public Make target and the variables that alter operator c
 
 | Area | Commands |
 | --- | --- |
-| Discovery and environment | `make help`, `make env`, `make init` |
+| Discovery and environment | `make help`, `make env`, `make init`, `make env-check`, `make env-sync` |
 | Dependencies | `make install`, `make api-install`, `make web-install` |
 | Formatting | `make format`, `make api-format`, `make web-format` |
 | Linting | `make lint`, `make api-lint`, `make web-lint` |
@@ -21,19 +21,25 @@ This page lists every public Make target and the variables that alter operator c
 | Validation suites | `make api-check`, `make web-check`, `make deploy-check`, `make check ENV_FILE=.env.example`, `make ci` |
 | Lifecycle | `make up`, `make rebuild`, `make dev`, `make dev-build`, `make dev-health`, `make down`, `make stop`, `make restart`, `make restart-app`, `make restart-web`, `make restart-langfuse`, `make restart-observability`, `make ps`, `make logs SERVICE=worker`, `make health`, `make web-dev` |
 | Corpus | `make download-corpus`, `make download-corpus ARXIV_PDF_HOST_DIR=/srv/vectorless/arxiv-pdfs` |
-| Operator | `make migrate`, `make bootstrap-key NAME=operator`, `make sync-corpus`, `make upload-document PDF=/path/file.pdf`, `make pilot-check`, `make pilot-run`, `make pilot-report`, `make artifact-verify`, `make artifact-gc` |
-| Evaluation | `make evaluation-build`, `make evaluation-check`, `make evaluation-review-pack`, `make evaluation-seed`, `make evaluation-run INDEX_HASH=…`, `make evaluation-report` |
+| Operator | `make migrate`, `make bootstrap-key NAME=operator`, `make sync-corpus`, `make upload-document PDF=/path/file.pdf`, `make pilot-check`, `make pilot-run`, `make pilot-report`, `make query-cost-report DAYS=30`, `make artifact-verify`, `make artifact-gc`, `make pageindex-patch-test` |
+| Evaluation | `make evaluation-build`, `make evaluation-check`, `make evaluation-review-pack`, `make evaluation-review REVIEWER=…`, `make evaluation-review-status`, `make evaluation-seed`, `make evaluation-restart`, `make evaluation-freeze`, `make evaluation-run INDEX_HASH=… MAX_COST=…`, `make evaluation-execute DRY_RUN=1`, `make evaluation-execute LIMIT=10`, `make evaluation-judge REVIEWER=…`, `make evaluation-judge-status`, `make evaluation-report` |
 | Secret generation | `make secret-api-pepper`, `make secret-session`, `make secrets-langfuse` |
 
 `make pilot-run` writes its immutable result to `apps/api/pilots/run/result.json`. Set `PILOT_OUTPUT=path/to/result.json` to select another new output directory. The target fails before provider work when that directory already exists.
 
 `make init` atomically creates a mode-600 `.env` with generated local infrastructure and session secrets. It leaves `DEEPSEEK_API_KEY` blank and refuses to overwrite an existing file.
 
+`make env-check` reports which keys `.env` is missing relative to `.env.example`, which it carries that the example does not, and which values differ. It writes nothing and exits non-zero on structural drift, so it works as a gate. `make env-sync` adds the missing keys with their example defaults, rewriting `.env` in the example's order and comments while keeping every value already configured. Secret-looking values are reported as `<set>` or `<empty>` and never printed. An existing value is replaced only when `ADOPT` names its key, as in `make env-sync ADOPT=DEEPSEEK_MODEL`. Keys absent from the example are preserved in a trailing section rather than removed. The previous file is copied to `.env.bak` at the same permissions before anything is written.
+
 `make test-integration-stack` uses port `55432` and a unique disposable Compose project. Set `TEST_POSTGRES_PORT` to another unused port. The cleanup trap removes only that project and its volumes.
 
 `make docs-check` validates required community files, local Markdown targets and anchors, content declarations, language-tagged fences, and this documentation index.
 
 `make evaluation-seed` streams the reviewed PageIndex suite into the API container with an explicit suite selector and corpus manifest. Direct script callers must pass `--suite pageindex-v2` when the dataset arrives through `/dev/stdin`.
+
+`make evaluation-restart` requires a clean committed worktree. It rebuilds API and worker so the running `RELEASE` matches `HEAD`; it does not prepare or execute an experiment.
+
+`make evaluation-execute DRY_RUN=1` resolves the entire frozen trial plan against the ready index without provider calls. `LIMIT` bounds provider-backed execution for one invocation. `make evaluation-judge` records claim-level judgments after execution; set `METHOD=automated` only when that provenance is accurate.
 
 `make playwright-live` exits with status 2 unless both `PLAYWRIGHT_BASE_URL` and the process-only `PLAYWRIGHT_API_KEY` are set. Use the [disposable live-stack procedure](operator-guide.md#verify-a-disposable-live-stack) to create both values without saving the key.
 

@@ -1,4 +1,6 @@
 .env
+.env.bak
+.env.*.bak
 .venv/
 __pycache__/
 .pytest_cache/
@@ -17,6 +19,7 @@ apps/web/dist/
 apps/web/test-results/
 apps/web/playwright-report/
 apps/api/evaluation/run/
+apps/api/evaluation/pageindex-v2-authoring-queue.json
 apps/api/pilots/run/
 
 arxiv-pdfs/

@@ -1,11 +1,11 @@
 image:
   repository: vectorless-rag
-  tag: "0.1.0"
+  tag: "0.3.0"
   pullPolicy: IfNotPresent
 
 webImage:
   repository: vectorless-rag-web
-  tag: "0.2.0"
+  tag: "0.3.0"
   pullPolicy: IfNotPresent
 
 replicaCount: 2
@@ -13,11 +13,14 @@ workerReplicaCount: 2
 frontendReplicaCount: 2
 existingSecret: vectorless-rag-secrets
 release: dev
-deepseekModel: deepseek-v4-pro
+deepseekModel: deepseek-v4-flash
 deepseekInputCostPerMillionUsd: ""
 deepseekCacheHitInputCostPerMillionUsd: ""
 deepseekOutputCostPerMillionUsd: ""
 pageindexModel: deepseek/deepseek-v4-pro
+pageindexInputCostPerMillionUsd: ""
+pageindexCacheHitInputCostPerMillionUsd: ""
+pageindexOutputCostPerMillionUsd: ""
 pageindexLlmMaxAttempts: 3
 pageindexAsyncConcurrency: 8
 pageindexMaxOutputTokens: 8192
@@ -29,6 +32,7 @@ ingestionLeaseSeconds: 120
 ingestionHeartbeatSeconds: 30
 ingestionStaleGraceSeconds: 300
 catalogBatchTokenLimit: 24000
+catalogRoutingConcurrency: 4
 documentLimit: 8
 evidenceTokenLimit: 40000
 requestDeadlineSeconds: 180

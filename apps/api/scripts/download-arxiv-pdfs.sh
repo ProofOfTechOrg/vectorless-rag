@@ -6,7 +6,7 @@ repository_root="$(cd -- "${script_dir}/../../.." && pwd)"
 manifest="${script_dir}/arxiv-pdf-ids.txt"
 destination="${1:-${repository_root}/arxiv-pdfs}"
 base_url="https://export.arxiv.org/pdf"
-user_agent="vectorless-rag/0.1 (+https://github.com/gcharang/rag-agent-vectorless)"
+user_agent="vectorless-rag (+https://github.com/ProofOfTechOrg/vectorless-rag)"
 current_temporary_file=""
 
 cleanup() {
