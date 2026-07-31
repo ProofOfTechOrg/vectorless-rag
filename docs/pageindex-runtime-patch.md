@@ -3,7 +3,7 @@
 
 # PageIndex runtime patch
 
-Reference for `apps/api/patches/pageindex-runtime.patch`: every change it makes to the vendored PageIndex source, and whether each one fixes an upstream bug or adds something the ingestion pipeline needs. The patch applies to [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) at pinned revision `190f8b378be58199ca993566a9214dba72089c54` and touches two files: `pageindex/page_index.py` and `pageindex/utils.py`. The current patch revision is `+vr6`.
+Reference for `apps/api/patches/pageindex-runtime.patch`: every change it makes to the vendored PageIndex source, and whether each one fixes an upstream bug or adds something the ingestion pipeline needs. The patch applies to [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) at pinned revision `190f8b378be58199ca993566a9214dba72089c54` and touches `pageindex/client.py`, `pageindex/page_index.py`, `pageindex/retrieve.py`, `pageindex/utils.py`, and `requirements.txt`. The current patch revision is `+vr7`.
 
 ## How the patch is applied and versioned
 
@@ -11,7 +11,7 @@ Reference for `apps/api/patches/pageindex-runtime.patch`: every change it makes 
 
 Three identity surfaces track the patch:
 
-- **`pageindex_version`**: pinned as the literal `190f8b378be58199ca993566a9214dba72089c54+vr6` in `config.py`. Bump the `+vrN` suffix whenever patch behavior changes.
+- **`pageindex_version`**: pinned as the literal `190f8b378be58199ca993566a9214dba72089c54+vr7` in `config.py`. Bump the `+vrN` suffix whenever patch behavior changes.
 - **`patch_sha256`**: computed from the patch file at ingestion time in `pageindex_adapter.py`, so any byte change to the patch shifts artifact identity even without a version bump.
 - **`configuration_hash` and `recipe_hash`**: both digest the full version string and the patch digest, so a rebuilt document under a new patch never reuses an old artifact.
 
@@ -34,7 +34,7 @@ Each change is either a fix for a defect in upstream PageIndex or a feature the 
 | `process_none_page_numbers` robustness | `page_index.py` | Crash fixes |
 | Large-node recursion repair | `page_index.py` | Bug fixes |
 | Bottom-up direct and subtree summaries | `utils.py` | Missing feature |
-| PyPDF2 empty-page guards | `utils.py` | Crash fix |
+| `pypdf` migration and empty-page guards | `client.py`, `retrieve.py`, `utils.py`, `requirements.txt` | Security and crash fix |
 | litellm cost-map environment default | `utils.py` | Integration nit |
 
 ## Model-call plumbing (`utils.py`)
@@ -128,9 +128,9 @@ The v2 artifact distinguishes a node's own content from its subtree. Upstream su
 
 The patched `generate_summaries_for_structure` walks each tree bottom-up: it summarizes children first, then produces both a `direct_summary` (the node alone) and a `subtree_summary` (the node with its children's summaries folded into the prompt), storing the subtree summary as `summary` for compatibility. `generate_node_summary` accepts the child summaries and tolerates missing text. Kind: missing feature; the artifact schema's `direct_summary` and `subtree_summary` fields depend on it.
 
-## PyPDF2 empty-page guards (`utils.py`)
+## `pypdf` migration and empty-page guards (`utils.py`)
 
-`PyPDF2`'s `extract_text()` returns `None` for pages without extractable text, and upstream concatenated that `None` into a string in three places (`extract_text_from_pdf`, `get_text_of_pages`, `get_page_tokens`). Each site now appends `page.extract_text() or ""`. Kind: crash fix.
+The patch replaces unmaintained `PyPDF2` with maintained `pypdf` in `client.py`, `retrieve.py`, `utils.py`, and `requirements.txt`. Multi-page artifacts generated through PageIndex record `pypdf` and its installed version in artifact identity; the single-page shortcut records the PyMuPDF parser it actually uses. The parser’s `extract_text()` can return `None` for pages without extractable text, and upstream concatenated that `None` into a string in three places (`extract_text_from_pdf`, `get_text_of_pages`, `get_page_tokens`). Each site now appends `page.extract_text() or ""`. Kind: security and crash fix.
 
 ## litellm cost-map default (`utils.py`)
 

@@ -1,4 +1,5 @@
 import asyncio
+import importlib.metadata
 import json
 import uuid
 from pathlib import Path
@@ -230,6 +231,61 @@ async def test_single_page_builds_deterministic_artifact_without_pageindex(
         }
     ]
     assert artifact["pages"] == [{"page": 1, "text": "unique one-page evidence"}]
+
+
+@pytest.mark.parametrize(
+    ("preliminary_pages", "expected_parser", "distribution"),
+    [
+        (["unique one-page evidence"], "pymupdf", "PyMuPDF"),
+        (["one", "two"], "pypdf", "pypdf"),
+    ],
+)
+async def test_v2_artifact_records_actual_parser(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    preliminary_pages: list[str],
+    expected_parser: str,
+    distribution: str,
+) -> None:
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-test")
+    sentinel = object()
+    captured: dict[str, Any] = {}
+
+    async def inline_to_thread(function: Any, *args: Any, **kwargs: Any) -> Any:
+        return function(*args, **kwargs)
+
+    def extracted_pages(path: Path) -> list[str]:
+        del path
+        return preliminary_pages
+
+    async def run_child(*args: object, **kwargs: object) -> tuple[object, list[str]]:
+        del args, kwargs
+        return {"doc_description": "summary", "structure": []}, preliminary_pages
+
+    def capture_build(*args: object, **kwargs: Any) -> Any:
+        del args
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr("vectorless_rag.pageindex_adapter.asyncio.to_thread", inline_to_thread)
+    monkeypatch.setattr("vectorless_rag.pageindex_adapter.extract_pdf_pages", extracted_pages)
+    monkeypatch.setattr("vectorless_rag.pageindex_adapter.build_manifest_v2", capture_build)
+    monkeypatch.setattr(PageIndexAdapter, "_run_v2_child", run_child)
+    adapter = PageIndexAdapter(Settings(pageindex_work_dir=tmp_path / "work"))
+
+    result = await adapter.build_v2(
+        source,
+        "document-id",
+        "0" * 64,
+        {"title": "One page"},
+        ingestion_attempt_id=_ATTEMPT_ID,
+        trace_id=_TRACE_ID,
+    )
+
+    assert result is sentinel
+    assert captured["parser"] == expected_parser
+    assert captured["parser_version"] == importlib.metadata.version(distribution)
 
 
 async def test_subprocess_success_reads_only_the_artifact(

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 API_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = API_ROOT.parents[1]
 sys.path.insert(0, str(API_ROOT))
 
 from scripts import (  # noqa: E402
@@ -96,6 +98,43 @@ def test_pilot_schema_guard_matches_alembic_head() -> None:
     assert run_pageindex_pilot.MEASUREMENT_SCHEMA_REVISION == (
         ScriptDirectory.from_config(config).get_current_head()
     )
+
+
+def test_pageindex_installer_resolves_patch_from_relative_script_path(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        """#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+arguments = sys.argv[1:]
+if arguments[0] == "clone":
+    Path(arguments[-1]).mkdir(parents=True)
+elif arguments[0] == "-C" and "apply" in arguments:
+    patch = Path(arguments[-1])
+    if not patch.is_absolute() or not patch.is_file():
+        raise SystemExit(42)
+""",
+        encoding="utf-8",
+    )
+    fake_git.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    script = API_ROOT / "scripts/install-pageindex.sh"
+    shell = shutil.which("sh")
+    assert shell is not None
+    environment = {**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"}
+
+    result = subprocess.run(  # noqa: S603
+        [shell, str(script.relative_to(REPOSITORY_ROOT)), str(tmp_path / "pageindex")],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 async def _add_indexed_document(

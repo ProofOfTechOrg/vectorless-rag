@@ -7,7 +7,11 @@ This changelog records user-visible changes. Vectorless RAG follows semantic ver
 
 ## Unreleased
 
-No changes have been recorded after v0.3.0.
+### Fixed
+
+- Replaced unmaintained `PyPDF2` with maintained `pypdf` across the API and vendored PageIndex runtime
+- Updated the vulnerable transitive `brace-expansion` package to its quarantined patched release
+- Made the PageIndex installer resolve its patch path correctly when invoked through a relative path
 
 ## 0.3.0, 2026-07-31
 

@@ -1,3 +1,25 @@
+diff --git a/pageindex/client.py b/pageindex/client.py
+index 894dab1..ec5ec3b 100644
+--- a/pageindex/client.py
++++ b/pageindex/client.py
+@@ -5,7 +5,7 @@ import asyncio
+ import concurrent.futures
+ from pathlib import Path
+ 
+-import PyPDF2
++import pypdf
+ 
+ from .page_index import page_index
+ from .page_index_md import md_to_tree
+@@ -79,7 +79,7 @@ class PageIndexClient:
+             # Extract per-page text so queries don't need the original PDF
+             pages = []
+             with open(file_path, 'rb') as f:
+-                pdf_reader = PyPDF2.PdfReader(f)
++                pdf_reader = pypdf.PdfReader(f)
+                 for i, page in enumerate(pdf_reader.pages, 1):
+                     pages.append({'page': i, 'content': page.extract_text() or ''})
+ 
 diff --git a/pageindex/page_index.py b/pageindex/page_index.py
 index 083b26e..905ed25 100644
 --- a/pageindex/page_index.py
@@ -398,11 +420,31 @@ index 083b26e..905ed25 100644
      else:
          toc_with_page_number = await meta_processor(
              page_list, 
+diff --git a/pageindex/retrieve.py b/pageindex/retrieve.py
+index 55c3850..b6667a8 100644
+--- a/pageindex/retrieve.py
++++ b/pageindex/retrieve.py
+@@ -1,5 +1,5 @@
+ import json
+-import PyPDF2
++import pypdf
+ 
+ try:
+     from .utils import get_number_of_pages, remove_fields
+@@ -44,7 +44,7 @@ def _get_pdf_page_content(doc_info: dict, page_nums: list[int]) -> list[dict]:
+         ]
+     path = doc_info['path']
+     with open(path, 'rb') as f:
+-        pdf_reader = PyPDF2.PdfReader(f)
++        pdf_reader = pypdf.PdfReader(f)
+         total = len(pdf_reader.pages)
+         valid_pages = [p for p in page_nums if 1 <= p <= total]
+         return [
 diff --git a/pageindex/utils.py b/pageindex/utils.py
-index 235dd09..39b0fb8 100644
+index 235dd09..bb35cb0 100644
 --- a/pageindex/utils.py
 +++ b/pageindex/utils.py
-@@ -1,6 +1,8 @@
+@@ -1,11 +1,13 @@
 +import os
 +os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
  import litellm
@@ -412,6 +454,12 @@ index 235dd09..39b0fb8 100644
  import textwrap
  from datetime import datetime
  import time
+ import json
+-import PyPDF2
++import pypdf
+ import copy
+ import asyncio
+ import pymupdf
 @@ -30,59 +32,6 @@ def count_tokens(text, model=None):
      return litellm.token_counter(model=model, text=text)
  
@@ -512,7 +560,13 @@ index 235dd09..39b0fb8 100644
  def write_node_id(data, node_id=0):
      if isinstance(data, dict):
          data['node_id'] = str(node_id).zfill(4)
-@@ -225,7 +141,7 @@ def extract_text_from_pdf(pdf_path):
+@@ -220,26 +136,26 @@ def get_last_node(structure):
+ 
+ 
+ def extract_text_from_pdf(pdf_path):
+-    pdf_reader = PyPDF2.PdfReader(pdf_path)
++    pdf_reader = pypdf.PdfReader(pdf_path)
+     ###return text not list 
      text=""
      for page_num in range(len(pdf_reader.pages)):
          page = pdf_reader.pages[page_num]
@@ -521,7 +575,15 @@ index 235dd09..39b0fb8 100644
      return text
  
  def get_pdf_title(pdf_path):
-@@ -239,7 +155,7 @@ def get_text_of_pages(pdf_path, start_page, end_page, tag=True):
+-    pdf_reader = PyPDF2.PdfReader(pdf_path)
++    pdf_reader = pypdf.PdfReader(pdf_path)
+     meta = pdf_reader.metadata
+     title = meta.title if meta and meta.title else 'Untitled'
+     return title
+ 
+ def get_text_of_pages(pdf_path, start_page, end_page, tag=True):
+-    pdf_reader = PyPDF2.PdfReader(pdf_path)
++    pdf_reader = pypdf.PdfReader(pdf_path)
      text = ""
      for page_num in range(start_page-1, end_page):
          page = pdf_reader.pages[page_num]
@@ -530,7 +592,25 @@ index 235dd09..39b0fb8 100644
          if tag:
              text += f"<start_index_{page_num+1}>\n{page_text}\n<end_index_{page_num+1}>\n"
          else:
-@@ -391,7 +307,7 @@ def get_page_tokens(pdf_path, model=None, pdf_parser="PyPDF2"):
+@@ -274,7 +190,7 @@ def get_pdf_name(pdf_path):
+     if isinstance(pdf_path, str):
+         pdf_name = os.path.basename(pdf_path)
+     elif isinstance(pdf_path, BytesIO):
+-        pdf_reader = PyPDF2.PdfReader(pdf_path)
++        pdf_reader = pypdf.PdfReader(pdf_path)
+         meta = pdf_reader.metadata
+         pdf_name = meta.title if meta and meta.title else 'Untitled'
+         pdf_name = sanitize_filename(pdf_name)
+@@ -385,13 +301,13 @@ def add_preface_if_needed(data):
+ 
+ 
+ 
+-def get_page_tokens(pdf_path, model=None, pdf_parser="PyPDF2"):
+-    if pdf_parser == "PyPDF2":
+-        pdf_reader = PyPDF2.PdfReader(pdf_path)
++def get_page_tokens(pdf_path, model=None, pdf_parser="pypdf"):
++    if pdf_parser == "pypdf":
++        pdf_reader = pypdf.PdfReader(pdf_path)
          page_list = []
          for page_num in range(len(pdf_reader.pages)):
              page = pdf_reader.pages[page_num]
@@ -539,6 +619,15 @@ index 235dd09..39b0fb8 100644
              token_length = litellm.token_counter(model=model, text=page_text)
              page_list.append((page_text, token_length))
          return page_list
+@@ -425,7 +341,7 @@ def get_text_of_pdf_pages_with_labels(pdf_pages, start_page, end_page):
+     return text
+ 
+ def get_number_of_pages(pdf_path):
+-    pdf_reader = PyPDF2.PdfReader(pdf_path)
++    pdf_reader = pypdf.PdfReader(pdf_path)
+     num = len(pdf_reader.pages)
+     return num
+ 
 @@ -576,10 +492,12 @@ def add_node_text_with_labels(node, pdf_pages):
      return
  
@@ -590,3 +679,15 @@ index 235dd09..39b0fb8 100644
      for line in text.splitlines():
          print(textwrap.fill(line, width=width))
 -
+diff --git a/requirements.txt b/requirements.txt
+index ae92bc4..e7f6dd7 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,6 +1,6 @@
+ litellm==1.84.0
+ # openai-agents  # optional: required for examples/agentic_vectorless_rag_demo.py
+ pymupdf==1.26.4
+-PyPDF2==3.0.1
++pypdf==6.14.2
+ python-dotenv==1.2.2
+ pyyaml==6.0.2

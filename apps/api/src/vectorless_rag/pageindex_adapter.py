@@ -158,6 +158,8 @@ class PageIndexAdapter:
             await asyncio.to_thread(shutil.copyfile, pdf_path, local_pdf)
             preliminary_pages = await asyncio.to_thread(extract_pdf_pages, local_pdf)
             if len(preliminary_pages) == 1:
+                parser = "pymupdf"
+                parser_version = importlib.metadata.version("PyMuPDF")
                 title = str(metadata.get("title") or "Document").strip() or "Document"
                 summary = str(
                     metadata.get("description") or metadata.get("abstract") or title
@@ -176,6 +178,8 @@ class PageIndexAdapter:
                 }
                 pages = preliminary_pages
             else:
+                parser = "pypdf"
+                parser_version = importlib.metadata.version("pypdf")
                 raw_tree, pages = await self._run_v2_child(
                     workspace,
                     local_pdf,
@@ -202,8 +206,8 @@ class PageIndexAdapter:
                     "add_doc_description": True,
                     "add_node_text": False,
                 },
-                parser="PyPDF2",
-                parser_version=importlib.metadata.version("PyPDF2"),
+                parser=parser,
+                parser_version=parser_version,
             )
 
     async def _run_v2_child(

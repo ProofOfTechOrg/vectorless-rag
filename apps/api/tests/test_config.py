@@ -30,7 +30,7 @@ def test_ingestion_operational_defaults_are_bounded_and_patch_versioned() -> Non
     assert settings.pageindex_timeout_seconds == 3_600
     assert settings.ingestion_max_attempts == 3
     assert settings.ingestion_stale_grace_seconds == 300
-    assert settings.pageindex_version.endswith("+vr6")
+    assert settings.pageindex_version.endswith("+vr7")
     assert settings.query_node_selection_max_output_tokens == 4_096
     assert settings.request_deadline_seconds == 180
     assert settings.catalog_routing_concurrency == 4

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from sqlalchemy import func, select, text
 
 from vectorless_rag.config import Settings, get_settings

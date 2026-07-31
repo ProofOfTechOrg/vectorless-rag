@@ -165,6 +165,31 @@ def test_license_and_release_metadata_are_consistent() -> None:
     assert "Copyright (c) 2026 ProofOfTechOrg" in license_text
 
 
+def test_vulnerable_pdf_and_glob_dependencies_are_absent() -> None:
+    pyproject = tomllib.loads((ROOT / "apps/api/pyproject.toml").read_text(encoding="utf-8"))
+    uv_lock = (ROOT / "apps/api/uv.lock").read_text(encoding="utf-8").casefold()
+    pnpm_lock = (ROOT / "pnpm-lock.yaml").read_text(encoding="utf-8")
+    workspace = yaml.safe_load((ROOT / "pnpm-workspace.yaml").read_text(encoding="utf-8"))
+
+    dependencies = [value.casefold() for value in pyproject["project"]["dependencies"]]
+    assert any(value.startswith("pypdf==") for value in dependencies)
+    assert all(not value.startswith("pypdf2") for value in dependencies)
+    assert '\nname = "pypdf2"\n' not in uv_lock
+
+    brace_versions = [
+        tuple(int(part) for part in version.split("."))
+        for version in re.findall(
+            r"^  brace-expansion@(\d+\.\d+\.\d+):$", pnpm_lock, flags=re.MULTILINE
+        )
+    ]
+    override = tuple(
+        int(part) for part in str(workspace["overrides"]["brace-expansion"]).split(".")
+    )
+    assert brace_versions
+    assert all(version >= (5, 0, 8) for version in brace_versions)
+    assert override >= (5, 0, 8)
+
+
 def test_provider_price_and_retry_settings_reach_deployments() -> None:
     environment = (ROOT / ".env.example").read_text(encoding="utf-8")
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
