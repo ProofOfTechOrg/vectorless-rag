@@ -80,7 +80,7 @@ The worker sends document content to DeepSeek during PageIndex construction. Sto
 
 Open **Chat** and ask a question whose answer appears in the uploaded document. A successful response streams to completion and includes a citation with the document and page number.
 
-Open the citation to verify that its page and quoted evidence support the answer. The console links to document detail because v0.2.0 does not include an embedded PDF viewer.
+Open the citation to verify that its page and quoted evidence support the answer. The console links to document detail because the current release does not include an embedded PDF viewer.
 
 ## Stop without deleting data
 

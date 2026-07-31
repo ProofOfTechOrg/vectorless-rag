@@ -101,6 +101,9 @@ spec:
 - {name: DEEPSEEK_CACHE_HIT_INPUT_COST_PER_MILLION_USD, value: {{ .Values.deepseekCacheHitInputCostPerMillionUsd | quote }}}
 - {name: DEEPSEEK_OUTPUT_COST_PER_MILLION_USD, value: {{ .Values.deepseekOutputCostPerMillionUsd | quote }}}
 - {name: PAGEINDEX_MODEL, value: {{ .Values.pageindexModel | quote }}}
+- {name: PAGEINDEX_INPUT_COST_PER_MILLION_USD, value: {{ .Values.pageindexInputCostPerMillionUsd | quote }}}
+- {name: PAGEINDEX_CACHE_HIT_INPUT_COST_PER_MILLION_USD, value: {{ .Values.pageindexCacheHitInputCostPerMillionUsd | quote }}}
+- {name: PAGEINDEX_OUTPUT_COST_PER_MILLION_USD, value: {{ .Values.pageindexOutputCostPerMillionUsd | quote }}}
 - {name: PAGEINDEX_LLM_MAX_ATTEMPTS, value: {{ .Values.pageindexLlmMaxAttempts | quote }}}
 - {name: PAGEINDEX_ASYNC_CONCURRENCY, value: {{ .Values.pageindexAsyncConcurrency | quote }}}
 - {name: PAGEINDEX_MAX_OUTPUT_TOKENS, value: {{ .Values.pageindexMaxOutputTokens | quote }}}

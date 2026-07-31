@@ -7,14 +7,35 @@ This changelog records user-visible changes. Vectorless RAG follows semantic ver
 
 ## Unreleased
 
+No changes have been recorded after v0.3.0.
+
+## 0.3.0, 2026-07-31
+
+Version 0.3.0 completes the first bounded PageIndex v2 evaluation and hardens the retrieval, accounting, and operator workflows it exercised.
+
+### Added
+
+- Reviewed 120-case PageIndex v2 suite with source-bound authored prompts, interactive review, deterministic validation, and a generated review pack
+- Frozen-index experiment preparation, provider-free preflight, resumable concurrent execution, claim-level judging, and deterministic aggregate reporting
+- Database-enforced experiment ownership, immutable call reservations, cost ceilings, atomic call admission, and interrupted-owner recovery
+- `make env-check` and `make env-sync` for safe reconciliation of local configuration with `.env.example`
+- Operator commands for index freezing, evaluation restart and execution, claim-review status, query-cost reporting, and provider-free PageIndex patch checks
+
 ### Changed
 
 - Completed the reviewed 120-case PageIndex v2 evaluation as a 1,080-trial experiment and recorded its metrics, accounting evidence, exclusions, and immutable artifact identities
 - Kept the evidence budget unchanged because the completed experiment found no consistent quality gain from larger windows
-- Reduced new evaluation plans from 1,440 to 1,080 trials by removing a duplicate execution path and made bounded concurrent execution resumable
+- Reduced evaluation plans from 1,440 to 1,080 trials by removing a duplicate execution path
+- Changed the default serving model to `deepseek-v4-flash` while retaining `deepseek/deepseek-v4-pro` for PageIndex construction, with separate price configuration
+- Upgraded the vendored PageIndex patch to `+vr6`, including complete-corpus indexing support and stricter artifact validation
+- Expanded provider-free verification across evaluation execution, accounting, PageIndex parsing, retrieval limits, and PostgreSQL role boundaries
 
 ### Fixed
 
+- Preserved valid PageIndex trees containing control characters, pageless tables of contents, continuation entries, large nodes, and sparse terminal sections
+- Prevented environment leakage into the PageIndex child process and test suite
+- Started the web development container directly through Vite, removing its startup dependency on `pnpm`
+- Made evaluation ledgers resumable after interrupted writes and prevented concurrent writers from erasing each other’s results
 - Routed content-based discovery, quoted passage lookup, and corpus claim checks through document evidence while reserving clarification for incomplete intent
 - Applied structured metadata constraints consistently to routing, guarded catalog SQL, and document retrieval
 - Preserved an empty hybrid catalog selection as an empty document restriction and required successful hybrid answers to cite document evidence

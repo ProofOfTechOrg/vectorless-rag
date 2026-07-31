@@ -60,7 +60,7 @@ Restarting healthy services does not bypass provider cooldown or account state.
 
 ## A PDF is unsupported or ingestion fails
 
-Version 0.2.0 supports born-digital PDFs. It does not perform optical character recognition (OCR).
+The current release supports born-digital PDFs. It does not perform optical character recognition (OCR).
 
 Open the PDF locally and confirm that you can select its text. Use one small file for diagnosis. Inspect sanitized worker logs without copying document text or provider response bodies:
 

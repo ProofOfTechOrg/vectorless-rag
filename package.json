@@ -1,6 +1,6 @@
 {
   "name": "vectorless-rag",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Self-hosted vectorless RAG for grounded question answering over local PDFs",
   "private": true,
   "license": "MIT",

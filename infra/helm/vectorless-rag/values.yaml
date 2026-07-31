@@ -1,11 +1,11 @@
 image:
   repository: vectorless-rag
-  tag: "0.1.0"
+  tag: "0.3.0"
   pullPolicy: IfNotPresent
 
 webImage:
   repository: vectorless-rag-web
-  tag: "0.2.0"
+  tag: "0.3.0"
   pullPolicy: IfNotPresent
 
 replicaCount: 2
@@ -18,6 +18,9 @@ deepseekInputCostPerMillionUsd: ""
 deepseekCacheHitInputCostPerMillionUsd: ""
 deepseekOutputCostPerMillionUsd: ""
 pageindexModel: deepseek/deepseek-v4-pro
+pageindexInputCostPerMillionUsd: ""
+pageindexCacheHitInputCostPerMillionUsd: ""
+pageindexOutputCostPerMillionUsd: ""
 pageindexLlmMaxAttempts: 3
 pageindexAsyncConcurrency: 8
 pageindexMaxOutputTokens: 8192

@@ -12,6 +12,7 @@ Security fixes target these versions:
 | Version | Supported |
 | --- | --- |
 | Current `master` | Yes |
+| 0.3.x research previews | Yes |
 | 0.2.x research previews | Yes |
 | Earlier versions | No |
 

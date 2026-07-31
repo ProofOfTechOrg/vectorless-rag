@@ -9,7 +9,7 @@
 
 Vectorless RAG is a self-hosted research preview for grounded question answering across local PDFs. It builds PageIndex hierarchies without embeddings or a vector database and returns inline citations tied to document pages.
 
-Version 0.2.0 is a prerelease. It supports evaluation and bounded pilots, not production stability or unattended full-corpus ingestion.
+Version 0.3.0 is a prerelease. It supports evaluation and bounded pilots, not production stability or unattended full-corpus ingestion.
 
 ## Current research status
 
@@ -40,7 +40,7 @@ Current limitations include:
 
 - Born-digital PDFs only, with no OCR
 - No API-key lifecycle interface or embedded PDF viewer
-- The v0.2.0 GitHub release provides source archives but no prebuilt artifacts
+- Releases provide source archives but no prebuilt artifacts
 - A pilot gate instead of a production-scale claim
 - No final vector-versus-PageIndex quality verdict
 

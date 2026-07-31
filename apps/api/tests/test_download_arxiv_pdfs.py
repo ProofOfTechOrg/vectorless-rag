@@ -135,6 +135,14 @@ def test_script_has_valid_bash_syntax() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_user_agent_identifies_current_repository() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert (
+        'user_agent="vectorless-rag (+https://github.com/ProofOfTechOrg/vectorless-rag)"' in script
+    )
+
+
 def test_downloads_missing_pdf_and_rerun_skips_everything(tmp_path: Path) -> None:
     values = identifiers()
     missing = values[-1]
