@@ -1,35 +1,35 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 
 [options]
-exclude-newer = "2026-07-24T06:37:14.540488537Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-opentelemetry-exporter-otlp-proto-common = false
-opentelemetry-api = false
-types-boto3 = false
-types-boto3-s3 = false
-opentelemetry-exporter-otlp-proto-http = false
-litellm = false
 boto3 = false
+botocore = false
+coverage = false
+fastapi = false
+filelock = false
+hf-xet = false
+huggingface-hub = false
+langchain = false
+langsmith = false
+litellm = false
+openai = false
+opentelemetry-api = false
+opentelemetry-exporter-otlp-proto-common = false
+opentelemetry-exporter-otlp-proto-http = false
+opentelemetry-proto = false
+opentelemetry-sdk = false
 opentelemetry-semantic-conventions = false
 regex = false
-huggingface-hub = false
-hf-xet = false
-opentelemetry-sdk = false
-langsmith = false
-tqdm = false
-fastapi = false
-openai = false
 ruff = false
-opentelemetry-proto = false
-botocore = false
-filelock = false
+tqdm = false
 typer = false
-langchain = false
-coverage = false
+types-boto3 = false
+types-boto3-s3 = false
 
 [[package]]
 name = "aiohappyeyeballs"
@@ -326,11 +326,11 @@ wheels = [
 
 [[package]]
 name = "filelock"
-version = "3.31.0"
+version = "4.2.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4a/9f/994e80905542b748eb5b9f36d71458f0aea51a7be0fcb52ad959787dc1b7/filelock-3.31.0.tar.gz", hash = "sha256:c188cbc4307c18894c5424fa73f97ea7fa127ddf62192487546da3a214d0a381", size = 180931, upload-time = "2026-07-18T05:53:29.262Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d5/98/771d8ca889f220d7d7e352addf500666368f0fd081c6080a83767580c6e4/filelock-4.2.1.tar.gz", hash = "sha256:c4c937ccac2a813cee448e662a56366cfb374c0f8702e75f295c412cc1c5d5a3", size = 650997, upload-time = "2026-10-17T16:48:14.435Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/4a/e213905d3b8ad3d35d14fc056b36134a274e7f6a1050e94428b5be10a94c/filelock-3.31.0-py3-none-any.whl", hash = "sha256:739b73e580fe88bb78d830aeddbc492519ece3d97ac8368de13a2032c61010c1", size = 96080, upload-time = "2026-07-18T05:53:27.732Z" },
+    { url = "https://files.pythonhosted.org/packages/28/00/db89d339bc4ecdc8087fa7b8607ba22ffc27bf96286f340c9620bea428b3/filelock-4.2.1-py3-none-any.whl", hash = "sha256:7be2662e9e826b9bba28afc0f843a123280d799a2ea44bb5d35ccec67905ae44", size = 162455, upload-time = "2026-10-17T16:48:12.937Z" },
 ]
 
 [[package]]
